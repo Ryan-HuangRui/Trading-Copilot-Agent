@@ -1,0 +1,28 @@
+# Secrets & local env
+.env
+.env.*
+!.env.example
+
+# Python env/cache
+.venv/
+__pycache__/
+*.pyc
+
+# OS/editor
+.DS_Store
+
+# Local OpenClaw runtime state
+.openclaw/
+
+# Generated runtime data
+raw_data/
+report/
+config/rate_limit_state.json
+
+# Local assistant persona/context files (not project source)
+AGENTS.md
+SOUL.md
+USER.md
+IDENTITY.md
+HEARTBEAT.md
+TOOLS.md
