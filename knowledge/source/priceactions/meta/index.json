@@ -1,0 +1,1253 @@
+[
+  {
+    "path": "knowledge/source/priceactions/docs/01-terminology/index.md",
+    "title": "布鲁克斯交易课程：核心术语与基本概念",
+    "chars_raw": 2183,
+    "chars_cleaned": 2140,
+    "requires_chart": false,
+    "sha1_cleaned": "1578a7ba6ef5680c4367c441e1d601152ca888d5",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/02-chart-basics/02a.md",
+    "title": "图表与市场基础",
+    "chars_raw": 2126,
+    "chars_cleaned": 2105,
+    "requires_chart": false,
+    "sha1_cleaned": "77174de188b24dc11727f4b2c995c5203ce643f4",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/02-chart-basics/02b.md",
+    "title": "成交量与新闻分析",
+    "chars_raw": 2258,
+    "chars_cleaned": 2259,
+    "requires_chart": false,
+    "sha1_cleaned": "7c96365776176785d2366b658d222fd344be9294",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/02-chart-basics/02c.md",
+    "title": "价格行为基础与痛苦交易",
+    "chars_raw": 1833,
+    "chars_cleaned": 1812,
+    "requires_chart": false,
+    "sha1_cleaned": "f8179e78e778f2d82675891ffd3ff81825c002ad",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/02-chart-basics/02d.md",
+    "title": "交易的真相：告别形态与指标",
+    "chars_raw": 1764,
+    "chars_cleaned": 1765,
+    "requires_chart": false,
+    "sha1_cleaned": "ec457e11b314e29787d4c2f5ff645b06fe38aede",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/03-forex-basics/03a.md",
+    "title": "外汇交易基础",
+    "chars_raw": 1649,
+    "chars_cleaned": 1650,
+    "requires_chart": false,
+    "sha1_cleaned": "ce90fc9a0afc4b0c5eaa1566d26fbcf20d30c33e",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/03-forex-basics/03b.md",
+    "title": "外汇交易基础（第二部分）",
+    "chars_raw": 1354,
+    "chars_cleaned": 1355,
+    "requires_chart": false,
+    "sha1_cleaned": "4f59df7e1166afdbccaf74742c8bdc12ac8242a9",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/03-forex-basics/03c.md",
+    "title": "外汇基础：点值、平台与市场比较",
+    "chars_raw": 1433,
+    "chars_cleaned": 1434,
+    "requires_chart": false,
+    "sha1_cleaned": "ba89d40199afe563e378cebfb758e8984f3badd8",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/03-forex-basics/03d.md",
+    "title": "外汇基础（第四部分）：K线图与交易风格",
+    "chars_raw": 1526,
+    "chars_cleaned": 1527,
+    "requires_chart": false,
+    "sha1_cleaned": "3722d22223613d809d5dbc8bddc5c4aa4b67022b",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/03-forex-basics/03e.md",
+    "title": "外汇保证金与盈亏计算",
+    "chars_raw": 1267,
+    "chars_cleaned": 1268,
+    "requires_chart": false,
+    "sha1_cleaned": "a0c65fd144e6b3da72b826f7bdd6b5d4d225985d",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/04-my-setup/index.md",
+    "title": "Al Brooks 的个人图表设置",
+    "chars_raw": 1546,
+    "chars_cleaned": 1547,
+    "requires_chart": false,
+    "sha1_cleaned": "c89cd961a9639e135c2f86337aab4cfaaceda422",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/05-program-trading/index.md",
+    "title": "程序化交易 (Program Trading)",
+    "chars_raw": 1604,
+    "chars_cleaned": 1605,
+    "requires_chart": false,
+    "sha1_cleaned": "7111fa23135b7f1055e0444d05c1f13cdbf7cd7a",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/06-personality-traits/index.md",
+    "title": "成功交易员的性格特征",
+    "chars_raw": 1762,
+    "chars_cleaned": 1763,
+    "requires_chart": false,
+    "sha1_cleaned": "e9f8ba4530f25474ef9380dffbbd2428a6654ba5",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/07-starting-out/07a.md",
+    "title": "步入交易生涯（第一部分）",
+    "chars_raw": 2028,
+    "chars_cleaned": 2029,
+    "requires_chart": false,
+    "sha1_cleaned": "bc382924784bc1c2860e78b9e896b32259afc881",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/07-starting-out/07b.md",
+    "title": "开启交易生涯（第二部分）：情绪管理与交易进阶",
+    "chars_raw": 1458,
+    "chars_cleaned": 1448,
+    "requires_chart": false,
+    "sha1_cleaned": "38c46404967033754054689979f2bcf12a92f597",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/08-candles-setups/08a.md",
+    "title": "K 线、交易机会与信号 K 线（第一部分）",
+    "chars_raw": 1999,
+    "chars_cleaned": 1978,
+    "requires_chart": false,
+    "sha1_cleaned": "00e84ec3155ed46c618d6937f567dd1f555c1a1e",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/08-candles-setups/08b.md",
+    "title": "K 线信号解读（第二部分）",
+    "chars_raw": 2291,
+    "chars_cleaned": 2292,
+    "requires_chart": false,
+    "sha1_cleaned": "7f2978eb4ec286a249edd9a7fff8295f7fbb9de5",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/08-candles-setups/08c.md",
+    "title": "窄震荡区间与突破模式",
+    "chars_raw": 1769,
+    "chars_cleaned": 1770,
+    "requires_chart": false,
+    "sha1_cleaned": "e671fbe57c0fa680a636dc97a64cdc91643bfae3",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/08-candles-setups/08d.md",
+    "title": "评估交易机会：信号、背景与确认",
+    "chars_raw": 1920,
+    "chars_cleaned": 1910,
+    "requires_chart": false,
+    "sha1_cleaned": "fe0c8b8d53227ef2b35182b7ab41469b63fc0f5c",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/09-pullbacks-counting/09a.md",
+    "title": "回调与数 K 线（第一部分）",
+    "chars_raw": 1864,
+    "chars_cleaned": 1865,
+    "requires_chart": false,
+    "sha1_cleaned": "ec9e1cf1ff730de00b6e9358bf37623da96bfbeb",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/09-pullbacks-counting/09b.md",
+    "title": "回调与数 K 线（第二部分）",
+    "chars_raw": 2054,
+    "chars_cleaned": 2055,
+    "requires_chart": false,
+    "sha1_cleaned": "9c15659819cd0d525be09150f7fc01ba66e8af32",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/09-pullbacks-counting/09c.md",
+    "title": "回调与数 K 线（第三部分）",
+    "chars_raw": 1749,
+    "chars_cleaned": 1749,
+    "requires_chart": false,
+    "sha1_cleaned": "1a3b90baf358587f7c59b13970e9b5e1ffcba8b8",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/10-buying-selling-pressure/10a.md",
+    "title": "买压与卖压（第一部分）",
+    "chars_raw": 1442,
+    "chars_cleaned": 1442,
+    "requires_chart": false,
+    "sha1_cleaned": "dc06b8b457ae13196b007ba6868a8de97564fa6a",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/10-buying-selling-pressure/10b.md",
+    "title": "买压与卖压（第二部分）",
+    "chars_raw": 1350,
+    "chars_cleaned": 1339,
+    "requires_chart": false,
+    "sha1_cleaned": "d2a4c7d1ec978df82a2716f98f34eb5072ee8e4e",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/11-gaps/11a.md",
+    "title": "缺口 (第一部分)",
+    "chars_raw": 1878,
+    "chars_cleaned": 1878,
+    "requires_chart": false,
+    "sha1_cleaned": "4d967eb4e788d0e53afcbf2061a25b4e702f9087",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/11-gaps/11b.md",
+    "title": "缺口分析（第二部分）：均线缺口与竭尽型缺口",
+    "chars_raw": 1470,
+    "chars_cleaned": 1470,
+    "requires_chart": false,
+    "sha1_cleaned": "91eb7bafdf257b40cb89745b883f4f9b94943a03",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/11-gaps/11c.md",
+    "title": "缺口（第三部分）",
+    "chars_raw": 1600,
+    "chars_cleaned": 1601,
+    "requires_chart": false,
+    "sha1_cleaned": "7ca053484632fcab13e6891c2b54109927b74002",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/11-gaps/11d.md",
+    "title": "缺口：趋势强度与阶梯模式",
+    "chars_raw": 1215,
+    "chars_cleaned": 1215,
+    "requires_chart": false,
+    "sha1_cleaned": "ccff72b4b91d6a2b100df26230435cb5ea6532a6",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/12-market-cycle/12a.md",
+    "title": "市场周期（第一部分）",
+    "chars_raw": 2137,
+    "chars_cleaned": 2116,
+    "requires_chart": false,
+    "sha1_cleaned": "311a6d9b9b4c2c36fb7200fddb1f0bd58b9c4100",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/12-market-cycle/12b.md",
+    "title": "市场周期：趋势、震荡与关键术语",
+    "chars_raw": 1715,
+    "chars_cleaned": 1693,
+    "requires_chart": false,
+    "sha1_cleaned": "c1fd4cab2c9a19720d1282dbbf643321b6a59a8e",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/12-market-cycle/12c.md",
+    "title": "市场周期（第三部分）",
+    "chars_raw": 1751,
+    "chars_cleaned": 1752,
+    "requires_chart": false,
+    "sha1_cleaned": "530707965c67efe1f0dcbedaa65cabc760bdc1f6",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/13-always-in/13a.md",
+    "title": "单边趋势（第一部分）",
+    "chars_raw": 1689,
+    "chars_cleaned": 1679,
+    "requires_chart": false,
+    "sha1_cleaned": "050f8f80b610c34e1d2c4cc881bc64737e82a1b4",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/13-always-in/13b.md",
+    "title": "交易单边趋势 (Spike and Channel)",
+    "chars_raw": 1661,
+    "chars_cleaned": 1661,
+    "requires_chart": false,
+    "sha1_cleaned": "5832af9a08f18f146c4dff121fdd42592f6e502d",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/13-always-in/13c.md",
+    "title": "单边趋势中的交易 (第三部分)",
+    "chars_raw": 1720,
+    "chars_cleaned": 1720,
+    "requires_chart": false,
+    "sha1_cleaned": "2aefcbcd970aefe436245e932782ee4e69c8699a",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/14-trends/14a.md",
+    "title": "趋势入门",
+    "chars_raw": 1891,
+    "chars_cleaned": 1891,
+    "requires_chart": false,
+    "sha1_cleaned": "4e550c404c7f1b7f70c5cdbb6c6be94f7f727218",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/14-trends/14b.md",
+    "title": "趋势（第二部分）",
+    "chars_raw": 1805,
+    "chars_cleaned": 1795,
+    "requires_chart": false,
+    "sha1_cleaned": "bb045623889fbfc4102eb316950aaf8a221f8d48",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/14-trends/14c.md",
+    "title": "趋势的类型、陷阱与突破（第三部分）",
+    "chars_raw": 1466,
+    "chars_cleaned": 1467,
+    "requires_chart": false,
+    "sha1_cleaned": "759ab2d5b228d5d23b6c108ad943b8151f7a1a11",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/14-trends/14d.md",
+    "title": "三种趋势类型",
+    "chars_raw": 1592,
+    "chars_cleaned": 1581,
+    "requires_chart": false,
+    "sha1_cleaned": "29b4e2b46f14c28ce015feb8eb336da053d7b520",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/14-trends/14e.md",
+    "title": "强趋势：窄通道与微回调",
+    "chars_raw": 1799,
+    "chars_cleaned": 1799,
+    "requires_chart": false,
+    "sha1_cleaned": "7a2ec92c2f4f3efcbb51819ce2339b54e8813d65",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/15-breakouts/15a.md",
+    "title": "突破导论",
+    "chars_raw": 1451,
+    "chars_cleaned": 1440,
+    "requires_chart": false,
+    "sha1_cleaned": "98b5691e4d6228d2dbf92390519d0d36c3a34a25",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/15-breakouts/15b.md",
+    "title": "突破（第二部分）：跟随与确认",
+    "chars_raw": 1918,
+    "chars_cleaned": 1918,
+    "requires_chart": false,
+    "sha1_cleaned": "3fb56c675161ade9a416f968159d2ccd12631b00",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/15-breakouts/15c.md",
+    "title": "突破（第三部分）：第二段行情与区间突破",
+    "chars_raw": 1936,
+    "chars_cleaned": 1936,
+    "requires_chart": false,
+    "sha1_cleaned": "50606f2137a073ab47fa5a46c9cb15a75e6f3c4e",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/15-breakouts/15d.md",
+    "title": "突破与陷阱 (第四部分)",
+    "chars_raw": 1812,
+    "chars_cleaned": 1801,
+    "requires_chart": false,
+    "sha1_cleaned": "ad2e1f65d971e8a9ac1ae8baa01e00667aa57e46",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/15-breakouts/15e.md",
+    "title": "突破（第五部分）：缺口、强度与回测",
+    "chars_raw": 1603,
+    "chars_cleaned": 1603,
+    "requires_chart": false,
+    "sha1_cleaned": "4d13032921fceb309de24b988bbe383dd49ec448",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/15-breakouts/15f.md",
+    "title": "失败的突破：趋势恢复还是反转",
+    "chars_raw": 1511,
+    "chars_cleaned": 1511,
+    "requires_chart": false,
+    "sha1_cleaned": "4544a9287ed6527a7c30a2c2991a9bdf50ffe984",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/15-breakouts/15g.md",
+    "title": "突破陷阱与反向交易",
+    "chars_raw": 1587,
+    "chars_cleaned": 1587,
+    "requires_chart": false,
+    "sha1_cleaned": "c2bb4164d29f722cb5830e576cba30916ef9f3be",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/15-breakouts/15h.md",
+    "title": "惊喜K线：识别与交易策略",
+    "chars_raw": 2103,
+    "chars_cleaned": 2104,
+    "requires_chart": false,
+    "sha1_cleaned": "5f8c103b57574086a2c6a7fd0a974b6c189cea8f",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/16-channels/16a.md",
+    "title": "通道基础与画线原则",
+    "chars_raw": 1685,
+    "chars_cleaned": 1685,
+    "requires_chart": false,
+    "sha1_cleaned": "64c64d68a11ad7993d30df65e9922ebc2aefd2a8",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/16-channels/16b.md",
+    "title": "通道的画法与交易策略",
+    "chars_raw": 1611,
+    "chars_cleaned": 1612,
+    "requires_chart": false,
+    "sha1_cleaned": "cfd3d067b7ad509a966533d2a83bef7ba9909e7f",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/16-channels/16c.md",
+    "title": "通道（第三部分）",
+    "chars_raw": 1773,
+    "chars_cleaned": 1774,
+    "requires_chart": false,
+    "sha1_cleaned": "18fc2eea5804e2300f9bbdb8086fe4a6483e15ed",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/16-channels/16d.md",
+    "title": "通道详解（第四部分）",
+    "chars_raw": 1815,
+    "chars_cleaned": 1805,
+    "requires_chart": false,
+    "sha1_cleaned": "6c5fea160663fa75264221b27a1c81d675be9d42",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/16-channels/16e.md",
+    "title": "通道与市场周期",
+    "chars_raw": 1912,
+    "chars_cleaned": 1890,
+    "requires_chart": false,
+    "sha1_cleaned": "d2d5f11ea235896ea564e7ed07ea915a096eb76e",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/16-channels/16f.md",
+    "title": "通道交易策略与市场周期",
+    "chars_raw": 1576,
+    "chars_cleaned": 1576,
+    "requires_chart": false,
+    "sha1_cleaned": "92e9951d2099d69479cb490e9f8d173f5a991b7a",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/17-tight-channels/17a.md",
+    "title": "窄通道与微通道 (第一部分)",
+    "chars_raw": 1504,
+    "chars_cleaned": 1493,
+    "requires_chart": false,
+    "sha1_cleaned": "d7ab7af6de2b9500e94bee42329c387d502617fd",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/17-tight-channels/17b.md",
+    "title": "窄通道与微通道（第二部分）",
+    "chars_raw": 1908,
+    "chars_cleaned": 1898,
+    "requires_chart": false,
+    "sha1_cleaned": "c26895f7226eae4f7f853176d67a2d6a555476f8",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/18-trading-ranges/18a.md",
+    "title": "震荡区间（第一部分）",
+    "chars_raw": 1781,
+    "chars_cleaned": 1771,
+    "requires_chart": false,
+    "sha1_cleaned": "741823faa9270fa4784c5f52c8c4b04a97d76a6a",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/18-trading-ranges/18b.md",
+    "title": "震荡区间交易策略（第二部分）",
+    "chars_raw": 1639,
+    "chars_cleaned": 1640,
+    "requires_chart": false,
+    "sha1_cleaned": "414d6845ea993c3c25efd61e87dce1a9570b2b98",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/18-trading-ranges/18c.md",
+    "title": "震荡区间与波段分析 (第三部分)",
+    "chars_raw": 1598,
+    "chars_cleaned": 1599,
+    "requires_chart": false,
+    "sha1_cleaned": "9a0c2e6c73d30567db345d6aecffdf684494f48f",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/18-trading-ranges/18d.md",
+    "title": "窄震荡区间",
+    "chars_raw": 1619,
+    "chars_cleaned": 1619,
+    "requires_chart": false,
+    "sha1_cleaned": "77c7627f54df15f6a3fba72057b201b85983c786",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/18-trading-ranges/18e.md",
+    "title": "震荡区间交易：磁铁效应与反向操作",
+    "chars_raw": 1955,
+    "chars_cleaned": 1944,
+    "requires_chart": false,
+    "sha1_cleaned": "335080f5b65f339d1a29f49625ba3464efcbda46",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/18-trading-ranges/18f.md",
+    "title": "震荡区间交易策略总结",
+    "chars_raw": 1751,
+    "chars_cleaned": 1751,
+    "requires_chart": false,
+    "sha1_cleaned": "7f3754e5887635ae31370add63665033874abd4d",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/19-support-resistance/19a.md",
+    "title": "支撑与阻力（第一部分）",
+    "chars_raw": 2555,
+    "chars_cleaned": 2555,
+    "requires_chart": false,
+    "sha1_cleaned": "4d535a2be492a75689b4fbd6f236e30906ddfdda",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/19-support-resistance/19b.md",
+    "title": "支撑与阻力（第二部分）",
+    "chars_raw": 2108,
+    "chars_cleaned": 2108,
+    "requires_chart": false,
+    "sha1_cleaned": "014f96e0f91fede69b93e8b34cdb9f0d752bf548",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/19-support-resistance/19c.md",
+    "title": "支撑与阻力（第三部分）",
+    "chars_raw": 2782,
+    "chars_cleaned": 2782,
+    "requires_chart": false,
+    "sha1_cleaned": "8cdddcc1c2905c984e8e0e3ced2d07fecfbb8275",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/19-support-resistance/19d.md",
+    "title": "支撑与阻力（第四部分）- 关键收盘价与突破回测",
+    "chars_raw": 1722,
+    "chars_cleaned": 1721,
+    "requires_chart": false,
+    "sha1_cleaned": "f02a39b5655b7591010a8c2bf1de12bc843e7c71",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/19-support-resistance/19e.md",
+    "title": "支撑与阻力（第五部分）- 综合应用与系列总结",
+    "chars_raw": 2437,
+    "chars_cleaned": 2436,
+    "requires_chart": false,
+    "sha1_cleaned": "3bdde13515519839484ba5063f5bdf3ccbf74f31",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/20-measured-moves/20a.md",
+    "title": "移动测量目标位（第一部分）：第一段 = 第二段 (Leg 1 = Leg 2)",
+    "chars_raw": 2052,
+    "chars_cleaned": 2051,
+    "requires_chart": false,
+    "sha1_cleaned": "0b123c7abf6f7d3adc839e1948bb6c07ab9fbd37",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/20-measured-moves/20b.md",
+    "title": "移动测量目标位（第二部分）：基于震荡区间与突破高度的MM",
+    "chars_raw": 2013,
+    "chars_cleaned": 1990,
+    "requires_chart": false,
+    "sha1_cleaned": "51361378bad005e3356a19d118c9976272ec72c3",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/21-reversals/21a.md",
+    "title": "市场反转（第一部分）：定义、分类与\"噪音\"辨析",
+    "chars_raw": 2933,
+    "chars_cleaned": 2921,
+    "requires_chart": false,
+    "sha1_cleaned": "23bdf849108370c49a1267bf0b90817bb1e13a04",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/21-reversals/21b.md",
+    "title": "市场反转（第二部分）：交易特性、入场时机与杯柄形态",
+    "chars_raw": 2423,
+    "chars_cleaned": 2422,
+    "requires_chart": false,
+    "sha1_cleaned": "c7caf2060d183bac8e414a6871eca2fb5cb90abe",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/21-reversals/21c.md",
+    "title": "市场反转（第三部分）：新手误区、买卖压力与嵌套结构",
+    "chars_raw": 2963,
+    "chars_cleaned": 2962,
+    "requires_chart": false,
+    "sha1_cleaned": "aaebac0132329abc6d62a3ae45d6f6310703b2a8",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/21-reversals/21d.md",
+    "title": "市场反转（第四部分）：胜率、目标与双重顶/底结构",
+    "chars_raw": 2686,
+    "chars_cleaned": 2674,
+    "requires_chart": false,
+    "sha1_cleaned": "c84183f23429a23d8334d2913462e32751079a57",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/22-major-trend-reversals/22a.md",
+    "title": "大反转（第一部分）",
+    "chars_raw": 1499,
+    "chars_cleaned": 1489,
+    "requires_chart": false,
+    "sha1_cleaned": "72360a721b7b230e5113f096eaae2c0ecd36fb50",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/22-major-trend-reversals/22b.md",
+    "title": "大反转的构成要素",
+    "chars_raw": 1883,
+    "chars_cleaned": 1884,
+    "requires_chart": false,
+    "sha1_cleaned": "92cf8b3d92624c511a05841b2b4470a922708a90",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/22-major-trend-reversals/22c.md",
+    "title": "大反转与结构（第三部分）",
+    "chars_raw": 1879,
+    "chars_cleaned": 1880,
+    "requires_chart": false,
+    "sha1_cleaned": "92f0c694194bbbc7f5a3068fd3e6290ad15b9203",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/22-major-trend-reversals/22d.md",
+    "title": "大反转（第四部分）：筑底、头肩形与失败反转",
+    "chars_raw": 1576,
+    "chars_cleaned": 1577,
+    "requires_chart": false,
+    "sha1_cleaned": "c18d47a1e9108b8b143bcfc8d65beb74d0f1e02a",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/23-final-flags/23a.md",
+    "title": "末端旗形（第一部分）",
+    "chars_raw": 1711,
+    "chars_cleaned": 1701,
+    "requires_chart": false,
+    "sha1_cleaned": "8d21a3fb5ac3d595d862a2333fce44527ce60a49",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/23-final-flags/23b.md",
+    "title": "末端旗形 (第二部分)",
+    "chars_raw": 1976,
+    "chars_cleaned": 1977,
+    "requires_chart": false,
+    "sha1_cleaned": "a9dff09655bb97b40711e6f9007579dbc95b49c9",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/24-wedges/24a.md",
+    "title": "楔形 (第一部分)",
+    "chars_raw": 2319,
+    "chars_cleaned": 2320,
+    "requires_chart": false,
+    "sha1_cleaned": "5e3ee44b36aac9772c3373e3d439e0414cc48e58",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/24-wedges/24b.md",
+    "title": "楔形（第二部分）",
+    "chars_raw": 1657,
+    "chars_cleaned": 1658,
+    "requires_chart": false,
+    "sha1_cleaned": "5c6aaca6519962cbb957429bce0a4a9b14913ed8",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/24-wedges/24c.md",
+    "title": "楔形（第三部分）",
+    "chars_raw": 1387,
+    "chars_cleaned": 1388,
+    "requires_chart": false,
+    "sha1_cleaned": "45159fcae751d39ef4ea8b5bbece09c50ae5dbbb",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/24-wedges/24d.md",
+    "title": "楔形（第四部分）",
+    "chars_raw": 1894,
+    "chars_cleaned": 1895,
+    "requires_chart": false,
+    "sha1_cleaned": "7636fdc7a8eaae1d4835e1458698fce26eafcba9",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/24-wedges/24e.md",
+    "title": "失败的楔形 (Failed Wedges)",
+    "chars_raw": 1597,
+    "chars_cleaned": 1598,
+    "requires_chart": false,
+    "sha1_cleaned": "0618b63052814cdb2ba78a5cee57ff1f5a74df7e",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/25-double-tops-bottoms/25a.md",
+    "title": "双顶与双底（第一部分）",
+    "chars_raw": 2306,
+    "chars_cleaned": 2307,
+    "requires_chart": false,
+    "sha1_cleaned": "31d60f20da27f94d0b99b7eea4582db4bd7027c4",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/25-double-tops-bottoms/25b.md",
+    "title": "双顶与双底（第二部分）",
+    "chars_raw": 1779,
+    "chars_cleaned": 1780,
+    "requires_chart": false,
+    "sha1_cleaned": "9a812c7c5a99d71e12a5dcb8787a45b603630e3d",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/26-triangles/26a.md",
+    "title": "三角形（第一部分）",
+    "chars_raw": 1599,
+    "chars_cleaned": 1600,
+    "requires_chart": false,
+    "sha1_cleaned": "c93a235b4effa0253cac2461e69cc91b74408653",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/26-triangles/26b.md",
+    "title": "三角形（第二部分）：扩张三角形与形态质量",
+    "chars_raw": 1660,
+    "chars_cleaned": 1660,
+    "requires_chart": false,
+    "sha1_cleaned": "6b4fdfda724ece510d67dbf9192085c5631bf873",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/27-head-shoulders/27a.md",
+    "title": "头肩形态（第一部分）",
+    "chars_raw": 1470,
+    "chars_cleaned": 1471,
+    "requires_chart": false,
+    "sha1_cleaned": "40bfffa3324bc6f963a84c6ce04b242a77e8c503",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/27-head-shoulders/27b.md",
+    "title": "头肩形态与市场心理（第二部分）",
+    "chars_raw": 1428,
+    "chars_cleaned": 1429,
+    "requires_chart": false,
+    "sha1_cleaned": "506c6293396869aebfb1b767d94e90001ec73f09",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/28-rounded-tops-bottoms/index.md",
+    "title": "圆弧顶与圆弧底",
+    "chars_raw": 1516,
+    "chars_cleaned": 1505,
+    "requires_chart": false,
+    "sha1_cleaned": "fa9e9a69e8c766a7869e92266b0197f61ab4b867",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/29-climaxes/29a.md",
+    "title": "高潮（第一部分）",
+    "chars_raw": 2034,
+    "chars_cleaned": 2035,
+    "requires_chart": false,
+    "sha1_cleaned": "1bee05d3e42ec325b7e923639a354750994b1a41",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/29-climaxes/29b.md",
+    "title": "高潮（第二部分）：V 形反转与交易者心理",
+    "chars_raw": 2003,
+    "chars_cleaned": 2003,
+    "requires_chart": false,
+    "sha1_cleaned": "5e958bdcc638508181cb78e6204b3d785b9f9d01",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/29-climaxes/29c.md",
+    "title": "高潮形态与交易（第三部分）",
+    "chars_raw": 1804,
+    "chars_cleaned": 1805,
+    "requires_chart": false,
+    "sha1_cleaned": "0165bbe896860bd831fbbe3e71e3aee51b6060a7",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/29-climaxes/29d.md",
+    "title": "高潮（第四部分）：连续高潮与市场心理",
+    "chars_raw": 2018,
+    "chars_cleaned": 2018,
+    "requires_chart": false,
+    "sha1_cleaned": "ee3e12d184d0134b735bdb1a0f9ae6d33437ef07",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/29-climaxes/29e.md",
+    "title": "高潮的成因与失败形态 (第五部分)",
+    "chars_raw": 1946,
+    "chars_cleaned": 1946,
+    "requires_chart": false,
+    "sha1_cleaned": "c423bc4f83532bb8c8da9b32ce92950f256faf10",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/30-trading-setups/30a.md",
+    "title": "交易的数学基础：数学期望与概率",
+    "chars_raw": 1810,
+    "chars_cleaned": 1799,
+    "requires_chart": false,
+    "sha1_cleaned": "face53ee786f2b4056bacd15cb948c95930ee031",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/30-trading-setups/30b.md",
+    "title": "数学期望与概率",
+    "chars_raw": 1716,
+    "chars_cleaned": 1716,
+    "requires_chart": false,
+    "sha1_cleaned": "6a78c6c1f29d6795c6e41a69b0f91953421fb8d1",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/30-trading-setups/30c.md",
+    "title": "数学期望与概率（第三部分）",
+    "chars_raw": 1973,
+    "chars_cleaned": 1974,
+    "requires_chart": false,
+    "sha1_cleaned": "28d98939228cb7c25d116cb53d1a5950bb594a56",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/30-trading-setups/30d.md",
+    "title": "数学期望与概率（第四部分）",
+    "chars_raw": 1678,
+    "chars_cleaned": 1679,
+    "requires_chart": false,
+    "sha1_cleaned": "a384f87b3a37ccc03113964f34099e082f157665",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/30-trading-setups/30e.md",
+    "title": "数学期望与概率（第五部分）",
+    "chars_raw": 1704,
+    "chars_cleaned": 1694,
+    "requires_chart": false,
+    "sha1_cleaned": "df3edb0bce366c11f64d5892d81ed7057f4cd927",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/31-trading-entries/31a.md",
+    "title": "波段交易 vs. 剥头皮交易 (第一部分)",
+    "chars_raw": 1381,
+    "chars_cleaned": 1381,
+    "requires_chart": false,
+    "sha1_cleaned": "2e3dd86b8e5125293c5077aac6135cccc0c082bd",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/31-trading-entries/31b.md",
+    "title": "波段交易 vs. 剥头皮交易：定义、管理与心态",
+    "chars_raw": 1340,
+    "chars_cleaned": 1340,
+    "requires_chart": false,
+    "sha1_cleaned": "26d4e0ba632f38eb7559821a11219de695015a27",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/31-trading-entries/31c.md",
+    "title": "剥头皮交易与最小利润目标（第三部分）",
+    "chars_raw": 1735,
+    "chars_cleaned": 1736,
+    "requires_chart": false,
+    "sha1_cleaned": "b0f79db84d49dd2b72a9cd94451c2ec804654ff2",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/31-trading-entries/31d.md",
+    "title": "波段与剥头皮的动态管理 (第四部分)",
+    "chars_raw": 1745,
+    "chars_cleaned": 1746,
+    "requires_chart": false,
+    "sha1_cleaned": "f12679e051b754cdedd2b447a00c44fab22f1e6b",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/32-trading-exits/32a.md",
+    "title": "交易订单基础",
+    "chars_raw": 1997,
+    "chars_cleaned": 1997,
+    "requires_chart": false,
+    "sha1_cleaned": "49666d6d43e6e11a750d5b1965c544434c397c63",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/32-trading-exits/32b.md",
+    "title": "交易订单类型：突破单 vs. 限价单",
+    "chars_raw": 1647,
+    "chars_cleaned": 1636,
+    "requires_chart": false,
+    "sha1_cleaned": "e68213b07be24bbfb699659db754bc2cc75f8fa2",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/32-trading-exits/32c.md",
+    "title": "订单类型与价格行为 (第三部分)",
+    "chars_raw": 1734,
+    "chars_cleaned": 1734,
+    "requires_chart": false,
+    "sha1_cleaned": "f9f083d36100fc9a5e79a546e4463b4d0c143160",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/33-protective-stops/33a.md",
+    "title": "保护性止损 (第一部分)",
+    "chars_raw": 1987,
+    "chars_cleaned": 1987,
+    "requires_chart": false,
+    "sha1_cleaned": "c5311ad184b6c467d0deadc55f61d0e2175e9d53",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/33-protective-stops/33b.md",
+    "title": "保护性止损（第二部分）",
+    "chars_raw": 1625,
+    "chars_cleaned": 1626,
+    "requires_chart": false,
+    "sha1_cleaned": "5df06da65d7c05339b8eeb6954b3d4b24b2a6f96",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/33-protective-stops/33c.md",
+    "title": "保护性止损与追踪",
+    "chars_raw": 1688,
+    "chars_cleaned": 1688,
+    "requires_chart": false,
+    "sha1_cleaned": "f2d538d5dfa42cd796c0bf46c166ecdd4ee87bf9",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/33-protective-stops/33d.md",
+    "title": "止损与前提的转变",
+    "chars_raw": 1646,
+    "chars_cleaned": 1635,
+    "requires_chart": false,
+    "sha1_cleaned": "6c8e0158922b33753b92996d73b9e5e3f57eb8ad",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/33-protective-stops/33e.md",
+    "title": "宽止损策略",
+    "chars_raw": 1517,
+    "chars_cleaned": 1517,
+    "requires_chart": false,
+    "sha1_cleaned": "3b675e8edd7f81f686564fd492dc3a386848fc81",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/33-protective-stops/33f.md",
+    "title": "保护性止损策略（第六部分）",
+    "chars_raw": 1502,
+    "chars_cleaned": 1503,
+    "requires_chart": false,
+    "sha1_cleaned": "c8f815d5bb9e856370f4afb20ee14d1dc5d89d58",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/33-protective-stops/33g.md",
+    "title": "保护性止损策略：保本、回测与剥头皮",
+    "chars_raw": 1681,
+    "chars_cleaned": 1681,
+    "requires_chart": false,
+    "sha1_cleaned": "34c1295b15a630a3377d622580f55e83b79b6e9e",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/34-actual-risk/34a.md",
+    "title": "实际风险与初始风险 (第一部分)",
+    "chars_raw": 1503,
+    "chars_cleaned": 1503,
+    "requires_chart": false,
+    "sha1_cleaned": "0530df1a2cd7f28bcb80898f0b8b303bcb4b74c4",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/34-actual-risk/34b.md",
+    "title": "实际风险与利润目标",
+    "chars_raw": 1578,
+    "chars_cleaned": 1578,
+    "requires_chart": false,
+    "sha1_cleaned": "6bca3c9c00a45838757932a41727cd1acb4b3902",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/35-scaling-in/35a.md",
+    "title": "分批入场导论（",
+    "chars_raw": 1473,
+    "chars_cleaned": 1474,
+    "requires_chart": false,
+    "sha1_cleaned": "0f86b0956acd28bb381cbc1b6044aa28742af7ec",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/35-scaling-in/35b.md",
+    "title": "浮亏时加仓（加仓第二部分）",
+    "chars_raw": 1565,
+    "chars_cleaned": 1566,
+    "requires_chart": false,
+    "sha1_cleaned": "2d8fff5977afcdb5ebd974aa4b0f511331cc333e",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/35-scaling-in/35c.md",
+    "title": "加仓策略示例",
+    "chars_raw": 1727,
+    "chars_cleaned": 1728,
+    "requires_chart": false,
+    "sha1_cleaned": "51f4eeb7199ab75425dc044cff25d357ded7db5e",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/36-trade-management/36a.md",
+    "title": "交易管理与止盈（第一部分）",
+    "chars_raw": 1566,
+    "chars_cleaned": 1567,
+    "requires_chart": false,
+    "sha1_cleaned": "684cc7b6c1f3eb82e0780465174685c92de5589b",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/36-trade-management/36b.md",
+    "title": "交易管理与止盈的默认标准",
+    "chars_raw": 1685,
+    "chars_cleaned": 1685,
+    "requires_chart": false,
+    "sha1_cleaned": "fccd72d0c8a50e6309107a39a3e716b124d9089a",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/index.md",
+    "title": "",
+    "chars_raw": 500,
+    "chars_cleaned": 500,
+    "requires_chart": false,
+    "sha1_cleaned": "def90bc952700c8b161cae404f6c1346b1f548d0",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/mes-recap/20250307.md",
+    "title": "详解Al Brooks价格行为交易图例：Emini 5分钟图表分析",
+    "chars_raw": 1880,
+    "chars_cleaned": 1856,
+    "requires_chart": true,
+    "sha1_cleaned": "4bb696f951233b1245a9119ea59405bdd11a10af",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/mes-recap/20250310.md",
+    "title": "Brooks风格解读：E-mini 5分钟熊市趋势图表分析",
+    "chars_raw": 2098,
+    "chars_cleaned": 2088,
+    "requires_chart": true,
+    "sha1_cleaned": "3cd34aaef29814c7c1071a5da1a026e17b86078b",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/mes-recap/20250311.md",
+    "title": "Brooks风格解读：E-mini 5分钟微型双顶与日间反转",
+    "chars_raw": 2427,
+    "chars_cleaned": 2393,
+    "requires_chart": true,
+    "sha1_cleaned": "062d2961c88b19ec5529c3c27f8db104d2f7edc3",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/mes-recap/20250312.md",
+    "title": "Brooks风格解读：E-mini 5分钟卖方高潮与反转上涨后的交易区间",
+    "chars_raw": 2840,
+    "chars_cleaned": 2795,
+    "requires_chart": true,
+    "sha1_cleaned": "5c0f6440529206ca5a89e4951212289522546302",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/mes-recap/20250313.md",
+    "title": "Brooks风格解读：E-mini 5分钟卖方高潮、多方高潮与双顶形态",
+    "chars_raw": 3051,
+    "chars_cleaned": 3050,
+    "requires_chart": true,
+    "sha1_cleaned": "d534ab14fef60a08922176cd1ac1250652233d64",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/mes-recap/20250314.md",
+    "title": "Brooks价格行为分析：E-mini 5分钟图的双底启动小回调牛市趋势",
+    "chars_raw": 2612,
+    "chars_cleaned": 2612,
+    "requires_chart": true,
+    "sha1_cleaned": "34fe6f9d943f029ca89582407e154af25dcdb3a4",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/mes-recap/20250317.md",
+    "title": "Brooks价格行为分析：E-mini 5分钟图的牛市陷阱与双底反转",
+    "chars_raw": 2649,
+    "chars_cleaned": 2649,
+    "requires_chart": true,
+    "sha1_cleaned": "b71e90133e504ddbfac8fc073efc0d614d6fc3cf",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/mes-recap/20250318.md",
+    "title": "Brooks价格行为分析：E-mini 5分钟图的开盘熊市趋势与交易区间",
+    "chars_raw": 1256,
+    "chars_cleaned": 1246,
+    "requires_chart": true,
+    "sha1_cleaned": "384e2a9fc4bbee6170c090eca8aef08a46ab7110",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/mes-recap/20250319.md",
+    "title": "Brooks价格行为分析：E-mini 5分钟图的抛物线楔形顶部失败与交易区间",
+    "chars_raw": 1266,
+    "chars_cleaned": 1255,
+    "requires_chart": true,
+    "sha1_cleaned": "3cfa37f33d0f7a134eca7d5f45f10237ce38859d",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/mes-recap/20250320.md",
+    "title": "Brooks价格行为分析：E-mini 5分钟图的开盘多头趋势转空头通道",
+    "chars_raw": 1494,
+    "chars_cleaned": 1472,
+    "requires_chart": true,
+    "sha1_cleaned": "35ca6184c13cb43b35a71c2e8c5b2fb1efbf6927",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/mes-recap/20250321.md",
+    "title": "Brooks价格行为分析：E-mini 5分钟图的较低低点双底与多头通道",
+    "chars_raw": 1448,
+    "chars_cleaned": 1426,
+    "requires_chart": true,
+    "sha1_cleaned": "4cce3b4805eb69033b183911cb58ffab5337e798",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/mes-recap/20250409.md",
+    "title": "E迷你5分钟图表: 交易区间后的牛市突破分析",
+    "chars_raw": 700,
+    "chars_cleaned": 700,
+    "requires_chart": true,
+    "sha1_cleaned": "f0a2d3fc2b5d6dcf5dc5433bbfd62044d474b9d4",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/mes-recap/20250410.md",
+    "title": "E迷你5分钟图表: 更低高点双顶形态与卖出高潮分析",
+    "chars_raw": 923,
+    "chars_cleaned": 913,
+    "requires_chart": true,
+    "sha1_cleaned": "65cf20d01cf57222b2d224227af37e202828f196",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/mes-recap/20250411.md",
+    "title": "E迷你5分钟图表: 交易区间开盘、突破及后续牛市通道分析",
+    "chars_raw": 982,
+    "chars_cleaned": 961,
+    "requires_chart": true,
+    "sha1_cleaned": "cc3a2e0e75bb4ffdde4bfc63bf136f9a6bad65d5",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/price-action-all-in-one/index.md",
+    "title": "[价格行为学全家桶指标](https://tw.tradingview.com/script/n78QYp0G-Price-Action-All-In-One/)",
+    "chars_raw": 2273,
+    "chars_cleaned": 2273,
+    "requires_chart": true,
+    "sha1_cleaned": "dfb243dc73c0f7145f4ae77c5bfcebd84f386aa0",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/qa-summary/about-liquidity-grab.md",
+    "title": "关于流动性猎取",
+    "chars_raw": 7627,
+    "chars_cleaned": 7534,
+    "requires_chart": true,
+    "sha1_cleaned": "d59e1083821ae523c4a5ef8ff23159e35c8ecc79",
+    "duplicate_of": null
+  },
+  {
+    "path": "knowledge/source/priceactions/docs/search-test.md",
+    "title": "搜索功能测试页面",
+    "chars_raw": 1061,
+    "chars_cleaned": 1061,
+    "requires_chart": false,
+    "sha1_cleaned": "9f91e3488d0f89a9c6b885c2ec7de29172d9145f",
+    "duplicate_of": null
+  }
+]
