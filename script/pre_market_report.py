@@ -42,9 +42,23 @@ def build_plan(symbol: str, values: list[dict]) -> dict:
     regime = classify_regime(closes)
     last_close = closes[0]
     last_open = opens[0]
+    last_high = highs[0]
+    last_low = lows[0]
+
+    prev_close = closes[1] if len(closes) > 1 else last_close
+    prev_high = highs[1] if len(highs) > 1 else last_high
+    prev_low = lows[1] if len(lows) > 1 else last_low
+
     recent_high = max(highs[:20])
     recent_low = min(lows[:20])
+
     day_change_pct = ((last_close / last_open) - 1) * 100 if last_open else 0.0
+    close_delta_pct = ((last_close / prev_close) - 1) * 100 if prev_close else 0.0
+
+    day_range = last_high - last_low
+    prev_day_range = prev_high - prev_low
+
+    atr3 = mean([h - l for h, l in zip(highs[:3], lows[:3])]) if len(highs) >= 3 else day_range
 
     if regime == "上行趋势":
         setup = "回调做多（等待回踩后确认）"
@@ -60,9 +74,18 @@ def build_plan(symbol: str, values: list[dict]) -> dict:
         "symbol": symbol,
         "regime": regime,
         "last_close": round(last_close, 2),
+        "last_high": round(last_high, 2),
+        "last_low": round(last_low, 2),
+        "prev_close": round(prev_close, 2),
+        "prev_high": round(prev_high, 2),
+        "prev_low": round(prev_low, 2),
         "recent_high_20": round(recent_high, 2),
         "recent_low_20": round(recent_low, 2),
         "day_change_pct": round(day_change_pct, 2),
+        "close_delta_pct": round(close_delta_pct, 2),
+        "day_range": round(day_range, 2),
+        "prev_day_range": round(prev_day_range, 2),
+        "atr3": round(atr3, 2),
         "potential_setup": setup,
         "trigger": trigger,
         "risk_note": "单笔风险<=1%，必须先定义失效位再下单",
@@ -113,14 +136,23 @@ def build_exec_brief(today: str, plans: list[dict], report_path: Path) -> str:
         support = p["recent_low_20"]
         resistance = p["recent_high_20"]
         pivot = round((support + resistance) / 2, 2)
+
+        short_support = p["last_low"]
+        short_resistance = p["last_high"]
+        close_delta_sign = "+" if p["close_delta_pct"] >= 0 else ""
+        range_delta = p["day_range"] - p["prev_day_range"]
+        range_delta_sign = "+" if range_delta >= 0 else ""
+
         lines.extend(
             [
                 f"### {p['symbol']}",
-                f"- 分水岭/关键位：{support}（支撑） / {pivot}（枢轴） / {resistance}（压力）",
+                f"- 20日关键位：{support}（支撑） / {pivot}（枢轴） / {resistance}（压力）",
+                f"- 1日动态位：{short_support}（昨低） / {p['last_close']}（昨收） / {short_resistance}（昨高）",
+                f"- 较昨日变化：收盘 {close_delta_sign}{p['close_delta_pct']}%｜振幅 {p['day_range']}（较前日 {range_delta_sign}{round(range_delta, 2)}）｜ATR3 {p['atr3']}",
                 f"- 主场景：若站稳 {pivot} 上方并保持，关注向 {resistance} 的延续测试。",
                 f"- 备选场景：若反抽不过 {pivot} 且回落，优先看向 {support} 回测。",
                 f"- 失效条件：主场景在跌回 {support} 下方并收不回时失效。",
-                "- 执行要点（1行）：只做‘触发-失效-仓位’完整定义的计划，单笔风险≤1%。",
+                "- 执行要点（1行）：先看1日动态位是否突破，再用20日关键位做仓位与风控。",
                 "",
             ]
         )
