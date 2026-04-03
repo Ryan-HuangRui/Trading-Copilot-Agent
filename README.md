@@ -42,6 +42,13 @@ cp .env.example .env
 - 第二步：由 Agent 读取 `agent/daily_analysis_prompt.md` + `knowledge/refined/` + context 文件，产出 `report/YYYY-MM-DD-pre-market.md`
 - 这样“分析过程”由 Agent 完成，脚本只做数据准备与限频控制
 
+### 5) 实时盯盘 Skill（`skill/monitoring_skill.md`）
+- 支持多标的 5m 监控，默认只输出做多路径（可配置）
+- 空仓：识别潜在交易信号（观察中/临近触发/可执行）
+- 持仓：输出 R 值与风险动作（减仓/止损上移/退出）
+- 执行脚本：`python3 script/monitor_scan.py --state config/monitor_state.json --interval 5min`
+- 输出文件：`report/latest-monitor.json`
+
 ## 运行示例
 
 ### 单次批量拉取（日线）
