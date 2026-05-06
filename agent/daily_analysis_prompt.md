@@ -40,6 +40,8 @@
 - 来自 report/<PRE_MARKET_DATE>/pre-market-context.json（由脚本预先生成）
 - context 中的 `source_snapshot_date` 是上一个已完成交易日；`snapshot` 是该交易日收盘后的同一份 daily snapshot
 - watchlist: config/watchlist.json
+- 若 snapshot 中存在 `candidate_universe`，它是盘后从 S&P 500 top 100 动态筛出的观察池；分析范围为固定 watchlist + 动态候选去重后的 merged universe
+- 不得把动态候选视为交易建议；它们只代表“值得盘前观察”的流动性/权重/量价结构候选
 
 【输出文件（必须同时生成）】
 1) 精简执行版（用于 Cron 正文发送）

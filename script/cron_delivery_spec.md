@@ -7,12 +7,13 @@
 - 次日盘前完整报告附件 = `report/<PRE_MARKET_DATE>/pre-market.md`
 
 ## 盘后推荐流程
-1. 运行 `python script/prepare_market_snapshot.py --watchlist config/watchlist.json --skip-non-trading-day`
+1. 运行 `python script/prepare_market_snapshot.py --watchlist config/watchlist.json --skip-non-trading-day --sp500-screen --sp500-top 100 --sp500-candidates 15`
 2. 若脚本输出 `skipped=true`，直接结束，不发送报告
 3. 调用 Agent（使用 `agent/post_market_analysis_prompt.md`）读取：
    - `report/<SNAPSHOT_DATE>/daily-snapshot.json`
 4. 生成：
    - `report/<SNAPSHOT_DATE>/post-market.md`
+   - 扩池数据已由脚本生成在 `report/<SNAPSHOT_DATE>/candidate-universe.json`
 5. 发送到 Feishu：
    - message body: 盘后复盘摘要
    - media/filePath: 盘后复盘 markdown 文件
@@ -30,7 +31,7 @@
    - media/filePath: 完整报告 markdown 文件
 
 ## Codex App Automation Prompt 建议
-- 盘后：先运行 daily snapshot 脚本；若非交易日跳过；否则基于 `agent/post_market_analysis_prompt.md`、`knowledge/refined/`、`report/<SNAPSHOT_DATE>/daily-snapshot.json` 生成盘后复盘。
+- 盘后：先运行 daily snapshot 脚本，默认同时启用 S&P 500 top 100 动态观察池并输出 15 个候选；若非交易日跳过；否则基于 `agent/post_market_analysis_prompt.md`、`knowledge/refined/`、`report/<SNAPSHOT_DATE>/daily-snapshot.json` 生成盘后复盘。
 - 次日盘前：先运行盘前上下文脚本；若非交易日跳过；否则基于 `agent/daily_analysis_prompt.md`、`knowledge/refined/`、`report/<PRE_MARKET_DATE>/pre-market-context.json` 生成盘前两份报告。
 - 第一版将节假日判断放在脚本内，automation 只按周一到周五触发。
 

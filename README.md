@@ -36,6 +36,9 @@ cp .env.example .env
 - 收盘后 daily snapshot：`script/prepare_market_snapshot.py` 拉取最新已完成日线，生成：
   - `raw_data/YYYY-MM-DD/1day/<SYMBOL>.json`
   - `report/YYYY-MM-DD/daily-snapshot.json`
+- 可选 S&P 500 扩池：收盘后加 `--sp500-screen --sp500-top 100 --sp500-candidates 15`，从 iShares IVV 官方持仓 CSV 获取 S&P 500 权重池，按权重/成交量/成交额/量价结构筛出 15 个动态观察候选，生成：
+  - `report/YYYY-MM-DD/candidate-universe.json`
+  - 并把动态候选与固定 `config/watchlist.json` 去重合并进 `daily-snapshot.json`
 - 盘后复盘：Agent 读取 `agent/post_market_analysis_prompt.md` + `knowledge/refined/` + snapshot，产出：
   - `report/YYYY-MM-DD/post-market.md`
 - 次日盘前上下文：`script/prepare_daily_context.py` 读取上一交易日 snapshot，生成：
@@ -77,6 +80,9 @@ python script/prepare_daily_context.py --watchlist config/watchlist.json --skip-
 # 1) 收盘后生成 daily snapshot（交易日判断 + 数据拉取 + 限频）
 python script/prepare_market_snapshot.py --watchlist config/watchlist.json --skip-non-trading-day
 
+# 可选：同时做 S&P 500 top 100 动态扩池，输出 15 个观察候选
+python script/prepare_market_snapshot.py --watchlist config/watchlist.json --skip-non-trading-day --sp500-screen --sp500-top 100 --sp500-candidates 15
+
 # 2) 让 Agent 基于 snapshot + knowledge 生成 report/YYYY-MM-DD/post-market.md
 # （在 Codex App automation 中触发即可）
 ```
@@ -91,6 +97,8 @@ python script/trading_day_guard.py --date 2026-05-06 --format text
 ### Codex App Automation
 
 第一版直接使用 Codex App automation 调度。盘后先生成 `daily-snapshot.json`，盘前复用上一交易日 snapshot。具体 prompt 和跳过规则见 `docs/daily-report-workflow.md`。
+
+在新机器上配置 Codex App automation 时，按 `docs/codex-automation-setup.md` 完成环境变量、两条 automation、首次运行和失败处理配置。
 
 ## 风险提示
 

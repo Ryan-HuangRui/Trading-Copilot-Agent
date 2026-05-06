@@ -1,9 +1,17 @@
+from __future__ import annotations
+
 import json
 import os
 from pathlib import Path
 from statistics import mean
 
 from twelve_data_client import TwelveDataClient, save_json
+from sp500_universe import (
+    fetch_sp500_holdings,
+    score_candidate,
+    select_candidates,
+    write_candidate_universe,
+)
 
 
 def load_env(repo_root: Path) -> None:
@@ -41,6 +49,10 @@ def report_day_dir(repo_root: Path, report_date: str) -> Path:
 
 def snapshot_path(repo_root: Path, snapshot_date: str, interval: str = "1day") -> Path:
     return report_day_dir(repo_root, snapshot_date) / snapshot_filename(interval)
+
+
+def candidate_universe_path(repo_root: Path, snapshot_date: str) -> Path:
+    return report_day_dir(repo_root, snapshot_date) / "candidate-universe.json"
 
 
 def to_float(row: dict, key: str) -> float | None:
@@ -109,6 +121,88 @@ def latest_bar_dates(symbols: list[dict]) -> list[str]:
     return sorted(set(dates))
 
 
+def merge_symbols(primary: list[str], secondary: list[str]) -> list[str]:
+    seen = set()
+    merged = []
+    for symbol in primary + secondary:
+        normalized = str(symbol).strip().upper()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        merged.append(normalized)
+    return merged
+
+
+def fetch_symbol_snapshot(
+    client: TwelveDataClient,
+    symbol: str,
+    interval: str,
+    outputsize: int,
+    raw_dir: Path,
+) -> tuple[dict, Path]:
+    path = raw_dir / f"{symbol}.json"
+    data = client.time_series(symbol=symbol, interval=interval, outputsize=outputsize)
+    save_json(path, data)
+    return build_symbol_snapshot(symbol, data, path), path
+
+
+def build_sp500_screen(
+    client: TwelveDataClient,
+    repo_root: Path,
+    snapshot_date: str,
+    interval: str,
+    outputsize: int,
+    raw_dir: Path,
+    top_n: int,
+    candidate_count: int,
+    source: str,
+) -> tuple[dict, dict[str, dict]]:
+    source_result = fetch_sp500_holdings(source)
+    holdings = source_result.holdings[:top_n]
+    fetched_snapshots = {}
+    scored = []
+    fetch_errors = []
+
+    for holding in holdings:
+        symbol = holding["symbol"]
+        try:
+            symbol_snapshot, _ = fetch_symbol_snapshot(
+                client=client,
+                symbol=symbol,
+                interval=interval,
+                outputsize=outputsize,
+                raw_dir=raw_dir,
+            )
+            symbol_snapshot["sources"] = ["sp500_screen"]
+            symbol_snapshot["universe_rank"] = holding.get("rank")
+            symbol_snapshot["index_weight_pct"] = holding.get("weight_pct")
+            symbol_snapshot["sector"] = holding.get("sector")
+            fetched_snapshots[symbol] = symbol_snapshot
+            scored.append(score_candidate(symbol_snapshot, holding))
+        except Exception as e:
+            fetch_errors.append(
+                {
+                    "symbol": symbol,
+                    "rank": holding.get("rank"),
+                    "source": holding.get("source"),
+                    "error": str(e),
+                }
+            )
+
+    candidates = select_candidates(scored, candidate_count)
+    payload = write_candidate_universe(
+        path=candidate_universe_path(repo_root, snapshot_date),
+        snapshot_date=snapshot_date,
+        source_result=source_result,
+        input_top_n=top_n,
+        candidate_count=candidate_count,
+        candidates=candidates,
+        evaluated_count=len(scored),
+        fetch_errors=fetch_errors,
+    )
+    return payload, fetched_snapshots
+
+
 def build_market_snapshot(
     repo_root: Path,
     snapshot_date: str,
@@ -116,10 +210,14 @@ def build_market_snapshot(
     watchlist_path: str = "config/watchlist.json",
     interval: str = "1day",
     outputsize: int = 200,
+    sp500_screen: bool = False,
+    sp500_top: int = 100,
+    sp500_candidates: int = 15,
+    sp500_source: str = "ishares_ivv",
 ) -> tuple[dict, Path]:
     load_env(repo_root)
     watch = json.loads((repo_root / watchlist_path).read_text(encoding="utf-8"))
-    symbols = watch.get("symbols", [])
+    watchlist_symbols = merge_symbols(watch.get("symbols", []), [])
 
     client = TwelveDataClient(
         max_calls_per_minute=8,
@@ -129,21 +227,85 @@ def build_market_snapshot(
     raw_dir = raw_data_dir(repo_root, snapshot_date, interval)
     raw_dir.mkdir(parents=True, exist_ok=True)
 
+    screen_payload = None
+    pre_fetched_snapshots = {}
+    dynamic_symbols = []
+    if sp500_screen:
+        try:
+            screen_payload, pre_fetched_snapshots = build_sp500_screen(
+                client=client,
+                repo_root=repo_root,
+                snapshot_date=snapshot_date,
+                interval=interval,
+                outputsize=outputsize,
+                raw_dir=raw_dir,
+                top_n=sp500_top,
+                candidate_count=sp500_candidates,
+                source=sp500_source,
+            )
+        except Exception as e:
+            screen_payload = {
+                "snapshot_date": snapshot_date,
+                "source": {"name": sp500_source, "url": None, "as_of": None, "fallback_errors": []},
+                "input_top_n": sp500_top,
+                "candidate_count": sp500_candidates,
+                "evaluated_count": 0,
+                "candidates": [],
+                "errors": [{"stage": "sp500_screen", "error": str(e)}],
+                "note": "S&P 500 screener failed; snapshot continued with the fixed watchlist only.",
+            }
+            failed_screen_path = candidate_universe_path(repo_root, snapshot_date)
+            failed_screen_path.parent.mkdir(parents=True, exist_ok=True)
+            failed_screen_path.write_text(
+                json.dumps(screen_payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        dynamic_symbols = [item["symbol"] for item in screen_payload.get("candidates", [])]
+
+    symbols = merge_symbols(watchlist_symbols, dynamic_symbols)
+
     snapshot = {
         "snapshot_date": snapshot_date,
         "interval": interval,
         "outputsize": outputsize,
         "watchlist_path": watchlist_path,
+        "watchlist_symbols": watchlist_symbols,
         "trading_day": trading_day,
+        "dynamic_universe_enabled": sp500_screen,
+        "dynamic_universe_symbols": dynamic_symbols,
         "symbols": [],
         "errors": [],
     }
+    if screen_payload:
+        snapshot["candidate_universe_path"] = str(candidate_universe_path(repo_root, snapshot_date))
+        snapshot["candidate_universe"] = {
+            "source": screen_payload.get("source"),
+            "input_top_n": screen_payload.get("input_top_n"),
+            "candidate_count": screen_payload.get("candidate_count"),
+            "evaluated_count": screen_payload.get("evaluated_count"),
+            "candidates": screen_payload.get("candidates", []),
+            "errors": screen_payload.get("errors", []),
+        }
 
     for symbol in symbols:
+        if symbol in pre_fetched_snapshots:
+            symbol_snapshot = pre_fetched_snapshots[symbol]
+            sources = set(symbol_snapshot.get("sources", []))
+            if symbol in watchlist_symbols:
+                sources.add("watchlist")
+            symbol_snapshot["sources"] = sorted(sources)
+            snapshot["symbols"].append(symbol_snapshot)
+            continue
+
         path = raw_dir / f"{symbol}.json"
         try:
-            data = client.time_series(symbol=symbol, interval=interval, outputsize=outputsize)
-            save_json(path, data)
+            symbol_snapshot, _ = fetch_symbol_snapshot(
+                client=client,
+                symbol=symbol,
+                interval=interval,
+                outputsize=outputsize,
+                raw_dir=raw_dir,
+            )
         except Exception as e:
             cached = load_cached_json(path)
             if cached is None:
@@ -151,7 +313,15 @@ def build_market_snapshot(
                 continue
             data = cached
             snapshot["errors"].append({"symbol": symbol, "error": str(e), "raw_path": str(path), "used_cache": True})
-        snapshot["symbols"].append(build_symbol_snapshot(symbol, data, path))
+            symbol_snapshot = build_symbol_snapshot(symbol, data, path)
+
+        sources = []
+        if symbol in watchlist_symbols:
+            sources.append("watchlist")
+        if symbol in dynamic_symbols:
+            sources.append("sp500_screen")
+        symbol_snapshot["sources"] = sources
+        snapshot["symbols"].append(symbol_snapshot)
 
     dates = latest_bar_dates(snapshot["symbols"])
     snapshot["latest_bar_dates"] = dates

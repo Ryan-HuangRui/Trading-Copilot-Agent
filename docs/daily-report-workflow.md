@@ -20,9 +20,14 @@ This project uses Codex App automation as the scheduler and report-generation ru
    ```bash
    python3 script/prepare_market_snapshot.py --watchlist config/watchlist.json --skip-non-trading-day
    ```
+   Optional dynamic universe:
+   ```bash
+   python3 script/prepare_market_snapshot.py --watchlist config/watchlist.json --skip-non-trading-day --sp500-screen --sp500-top 100 --sp500-candidates 15
+   ```
 2. The snapshot writes:
    - `raw_data/<SNAPSHOT_DATE>/<INTERVAL>/<SYMBOL>.json`
    - `report/<SNAPSHOT_DATE>/daily-snapshot.json`
+   - with `--sp500-screen`: `report/<SNAPSHOT_DATE>/candidate-universe.json`
 3. Post-market review reads the snapshot and writes:
    - `report/<SNAPSHOT_DATE>/post-market.md`
 4. Next pre-market context reuses the previous trading day's snapshot:
@@ -46,10 +51,12 @@ This project uses Codex App automation as the scheduler and report-generation ru
 ### Post-market automation
 Run:
 ```bash
-python3 script/prepare_market_snapshot.py --watchlist config/watchlist.json --skip-non-trading-day
+python3 script/prepare_market_snapshot.py --watchlist config/watchlist.json --skip-non-trading-day --sp500-screen --sp500-top 100 --sp500-candidates 15
 ```
 
 If output contains `skipped=true`, stop. If the generated `daily-snapshot.json` contains `stale_data=true`, write a short status note and stop. Otherwise read `agent/post_market_analysis_prompt.md`, `knowledge/refined/`, and `report/<SNAPSHOT_DATE>/daily-snapshot.json`, then generate `report/<SNAPSHOT_DATE>/post-market.md`.
+
+The dynamic universe uses iShares IVV holdings CSV as the default source and falls back to Slickcharts if the primary source fails. If the screener itself fails, the snapshot still continues with the fixed watchlist and records the failure in `candidate-universe.json`.
 
 ### Pre-market automation
 Run:
@@ -66,3 +73,4 @@ If output contains `skipped=true`, stop. Otherwise read `agent/daily_analysis_pr
 - Do not output deterministic buy/sell instructions.
 - Every candidate must include setup reference, trigger, invalidation, and risk constraint.
 - If market regime is unclear, data is insufficient, or refined rules do not support a setup, output `NO TRADE`.
+- Dynamic S&P 500 candidates are only an observation universe; they must still pass refined setup rules before appearing as executable candidates.

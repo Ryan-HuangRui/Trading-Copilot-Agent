@@ -24,6 +24,7 @@
 - Do not output deterministic buy/sell instructions. Use scenarios, triggers, invalidation, risk, and `NO TRADE` where appropriate.
 - For current/recent symbol analysis, fetch real market data first through Twelve Data or clearly state that no concrete price conclusion can be made.
 - Batch data fetches must respect the shared 8 requests/minute limiter in `config/rate_limit_state.json`.
+- S&P 500 dynamic candidates are an observation universe only; they must not be treated as trading recommendations or written back to the fixed watchlist.
 - Do not invent prices, indicators, setup rules, or market state when data or refined rules are missing.
 
 ## Cross-component workflows
@@ -31,6 +32,9 @@
   - `python3 script/prepare_market_snapshot.py --watchlist config/watchlist.json --skip-non-trading-day`
   - Writes raw bars to `raw_data/<SNAPSHOT_DATE>/<INTERVAL>/<SYMBOL>.json`.
   - Writes the reusable snapshot to `report/<SNAPSHOT_DATE>/daily-snapshot.json`.
+- Optional S&P 500 dynamic universe:
+  - `python3 script/prepare_market_snapshot.py --watchlist config/watchlist.json --skip-non-trading-day --sp500-screen --sp500-top 100 --sp500-candidates 15`
+  - Uses iShares IVV holdings CSV as the default S&P 500 universe source, writes `report/<SNAPSHOT_DATE>/candidate-universe.json`, and merges selected candidates into the snapshot without editing `config/watchlist.json`.
 - Post-market review flow:
   - Agent reads `agent/post_market_analysis_prompt.md`, `knowledge/refined/`, and `report/<SNAPSHOT_DATE>/daily-snapshot.json`.
   - Agent writes `report/<SNAPSHOT_DATE>/post-market.md`.
