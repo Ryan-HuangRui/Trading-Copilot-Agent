@@ -1,80 +1,71 @@
 #!/usr/bin/env python3
 """
-准备“由 Agent 分析”所需的上下文文件：
-1) 拉取 watchlist 日线数据（限频）
-2) 生成 report/<date>-context.json 供 Agent 分析
+准备盘前计划所需的上下文文件。
+
+盘前不重新拉行情数据，而是读取上一个已完成交易日的 daily snapshot：
+- source: report/<SNAPSHOT_DATE>/daily-snapshot.json
+- output: report/<PRE_MARKET_DATE>/pre-market-context.json
 """
 import argparse
-import datetime as dt
 import json
-import os
 from pathlib import Path
 
-from twelve_data_client import TwelveDataClient, save_json
+from market_calendar import MARKET_TIMEZONE, previous_trading_day, resolve_market_date, trading_day_status
+from market_snapshot import snapshot_path
 
 
-def load_env(repo_root: Path):
-    env_file = repo_root / ".env"
-    if not env_file.exists():
-        return
-    for line in env_file.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        k, v = line.split("=", 1)
-        os.environ.setdefault(k.strip(), v.strip())
-
-
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--watchlist", default="config/watchlist.json")
+    parser.add_argument("--watchlist", default="config/watchlist.json", help="Kept for compatibility; snapshot stores the watchlist path.")
     parser.add_argument("--interval", default="1day")
-    parser.add_argument("--outputsize", type=int, default=200)
+    parser.add_argument("--date", help="Pre-market report date in YYYY-MM-DD. Defaults to today in America/New_York.")
+    parser.add_argument("--snapshot-date", help="Completed trading date to use. Defaults to previous trading day.")
+    parser.add_argument("--timezone", default=MARKET_TIMEZONE)
+    parser.add_argument("--skip-non-trading-day", action="store_true")
     args = parser.parse_args()
 
     repo_root = Path(__file__).resolve().parents[1]
-    load_env(repo_root)
+    report_date = resolve_market_date(args.date, timezone=args.timezone)
+    guard = trading_day_status(report_date)
+    if args.skip_non_trading_day and not guard["is_trading_day"]:
+        print(json.dumps({"skipped": True, "guard": guard}, ensure_ascii=False, indent=2))
+        return
 
-    watch = json.loads((repo_root / args.watchlist).read_text(encoding="utf-8"))
-    symbols = watch.get("symbols", [])
-
-    today = dt.datetime.utcnow().strftime("%Y-%m-%d")
-    data_tag = dt.datetime.utcnow().strftime("%Y%m%d")
-
-    client = TwelveDataClient(
-        max_calls_per_minute=8,
-        state_file=str(repo_root / "config" / "rate_limit_state.json"),
-    )
-
-    raw_dir = repo_root / "raw_data" / args.interval / data_tag
-    raw_dir.mkdir(parents=True, exist_ok=True)
-
-    context = {
-        "date": today,
-        "interval": args.interval,
-        "symbols": [],
-    }
-
-    for s in symbols:
-        data = client.time_series(symbol=s, interval=args.interval, outputsize=args.outputsize)
-        path = raw_dir / f"{s}.json"
-        save_json(path, data)
-        values = data.get("values", [])[:120]
-        context["symbols"].append(
-            {
-                "symbol": s,
-                "meta": data.get("meta", {}),
-                "latest": values[0] if values else None,
-                "bars": values,
-                "raw_path": str(path),
-            }
+    source_date = resolve_market_date(args.snapshot_date, timezone=args.timezone) if args.snapshot_date else previous_trading_day(report_date)
+    source_path = snapshot_path(repo_root, source_date.isoformat(), args.interval)
+    if not source_path.exists():
+        raise FileNotFoundError(
+            f"Missing market snapshot: {source_path}. "
+            f"Run: python3 script/prepare_market_snapshot.py --date {source_date.isoformat()} --skip-non-trading-day"
         )
 
-    context_path = repo_root / "report" / f"{today}-context.json"
-    context_path.parent.mkdir(parents=True, exist_ok=True)
+    snapshot = json.loads(source_path.read_text(encoding="utf-8"))
+    context = {
+        "report_date": report_date.isoformat(),
+        "session": "pre-market",
+        "source_snapshot_date": source_date.isoformat(),
+        "source_snapshot_path": str(source_path),
+        "trading_day": guard,
+        "snapshot": snapshot,
+    }
+
+    out_dir = repo_root / "report" / report_date.isoformat()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    context_path = out_dir / "pre-market-context.json"
     context_path.write_text(json.dumps(context, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"Context ready: {context_path}")
-    print("Next step: let Agent read this context + knowledge/refined and produce report markdown.")
+
+    print(json.dumps(
+        {
+            "context_path": str(context_path),
+            "report_date": context["report_date"],
+            "source_snapshot_date": context["source_snapshot_date"],
+            "symbols": len(snapshot.get("symbols", [])),
+            "errors": len(snapshot.get("errors", [])),
+            "stale_data": snapshot.get("stale_data", False),
+        },
+        ensure_ascii=False,
+        indent=2,
+    ))
 
 
 if __name__ == "__main__":

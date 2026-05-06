@@ -36,8 +36,8 @@ def main():
         state_file=str(repo_root / "config" / "rate_limit_state.json"),
     )
 
-    date_tag = dt.datetime.utcnow().strftime("%Y%m%d")
-    out_dir = repo_root / args.output / args.interval / date_tag
+    date_tag = dt.datetime.utcnow().strftime("%Y-%m-%d")
+    out_dir = repo_root / args.output / date_tag / args.interval
     out_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"Fetching {len(symbols)} symbols with interval={args.interval}, outputsize={args.outputsize}")

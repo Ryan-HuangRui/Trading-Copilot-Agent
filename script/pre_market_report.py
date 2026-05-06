@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 import argparse
-import datetime as dt
 import json
 import os
 from pathlib import Path
 from statistics import mean
 
+from market_calendar import MARKET_TIMEZONE, resolve_market_date, trading_day_status
 from twelve_data_client import TwelveDataClient, save_json
 
 
@@ -176,10 +176,19 @@ def main():
     parser.add_argument("--watchlist", default="config/watchlist.json")
     parser.add_argument("--interval", default="1day")
     parser.add_argument("--outputsize", type=int, default=200)
+    parser.add_argument("--date", help="Market date in YYYY-MM-DD. Defaults to today in America/New_York.")
+    parser.add_argument("--timezone", default=MARKET_TIMEZONE)
+    parser.add_argument("--skip-non-trading-day", action="store_true")
     args = parser.parse_args()
 
     repo_root = Path(__file__).resolve().parents[1]
     load_env(repo_root)
+
+    market_date = resolve_market_date(args.date, timezone=args.timezone)
+    guard = trading_day_status(market_date)
+    if args.skip_non_trading_day and not guard["is_trading_day"]:
+        print(json.dumps({"skipped": True, "guard": guard}, ensure_ascii=False, indent=2))
+        return
 
     watchlist_path = repo_root / args.watchlist
     watch = json.loads(watchlist_path.read_text(encoding="utf-8"))
@@ -189,10 +198,10 @@ def main():
         max_calls_per_minute=8,
         state_file=str(repo_root / "config" / "rate_limit_state.json"),
     )
-    today = dt.datetime.utcnow().strftime("%Y-%m-%d")
+    today = market_date.isoformat()
 
     plans = []
-    raw_dir = repo_root / "raw_data" / args.interval / today
+    raw_dir = repo_root / "raw_data" / today / args.interval
     raw_dir.mkdir(parents=True, exist_ok=True)
 
     for symbol in symbols:
@@ -209,6 +218,7 @@ def main():
         "## 总结",
         f"- 覆盖标的数: {len(plans)}",
         f"- 数据周期: {args.interval}",
+        f"- 交易日检查: {guard['reason']}",
         "",
         "## 交易计划候选",
     ]
@@ -227,10 +237,12 @@ def main():
             ]
         )
 
-    report_path = repo_root / "report" / f"{today}-pre-market.md"
+    report_dir = repo_root / "report" / today
+    report_dir.mkdir(parents=True, exist_ok=True)
+    report_path = report_dir / "pre-market.md"
     report_path.write_text("\n".join(report_lines), encoding="utf-8")
 
-    exec_brief_path = repo_root / "report" / f"{today}-exec-brief.md"
+    exec_brief_path = report_dir / "exec-brief.md"
     exec_brief_content = build_exec_brief(today=today, plans=plans, report_path=report_path)
     exec_brief_path.write_text(exec_brief_content, encoding="utf-8")
 

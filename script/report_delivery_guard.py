@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 import argparse
-import datetime as dt
 import json
 from pathlib import Path
+
+from market_calendar import MARKET_TIMEZONE, resolve_market_date
 
 
 def main():
@@ -10,12 +11,14 @@ def main():
     ap.add_argument("--state", default="config/delivery_state.json")
     ap.add_argument("--report-dir", default="report")
     ap.add_argument("--mark-sent", action="store_true")
-    ap.add_argument("--kind", default="pre-market", choices=["pre-market", "exec-brief"])
+    ap.add_argument("--kind", default="pre-market", choices=["pre-market", "exec-brief", "post-market"])
+    ap.add_argument("--date", help="Market date in YYYY-MM-DD. Defaults to today in America/New_York.")
+    ap.add_argument("--timezone", default=MARKET_TIMEZONE)
     args = ap.parse_args()
 
     root = Path(__file__).resolve().parents[1]
-    today = dt.datetime.utcnow().strftime("%Y-%m-%d")
-    report_path = root / args.report_dir / f"{today}-{args.kind}.md"
+    today = resolve_market_date(args.date, timezone=args.timezone).isoformat()
+    report_path = root / args.report_dir / today / f"{args.kind}.md"
     state_path = root / args.state
 
     state = {}

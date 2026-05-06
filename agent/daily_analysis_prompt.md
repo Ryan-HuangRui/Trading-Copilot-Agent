@@ -37,17 +37,18 @@
 
 【输入数据】
 - 数据周期：1day
-- 来自 report/<DATE>-context.json（由脚本预先生成）
+- 来自 report/<PRE_MARKET_DATE>/pre-market-context.json（由脚本预先生成）
+- context 中的 `source_snapshot_date` 是上一个已完成交易日；`snapshot` 是该交易日收盘后的同一份 daily snapshot
 - watchlist: config/watchlist.json
 
 【输出文件（必须同时生成）】
 1) 精简执行版（用于 Cron 正文发送）
-   - report/<DATE>-exec-brief.md
+   - report/<PRE_MARKET_DATE>/exec-brief.md
 2) 完整报告（用于附件发送）
-   - report/<DATE>-pre-market.md
+   - report/<PRE_MARKET_DATE>/pre-market.md
 
 【精简执行版模板】
-# 今日盘前执行简版（<DATE>）
+# 今日盘前执行简版（<PRE_MARKET_DATE>）
 ## 总览
 - 市场状态：
 - 今日最多3个重点标的：
@@ -67,7 +68,7 @@
 - 放弃交易条件：
 
 【完整报告模板】
-沿用当前完整版结构输出到 report/<DATE>-pre-market.md，并对每个标的增加一行：
+沿用当前完整版结构输出到 report/<PRE_MARKET_DATE>/pre-market.md，并对每个标的增加一行：
 - 参考 setup：<setup-file.md>
 
 【质量门槛】
