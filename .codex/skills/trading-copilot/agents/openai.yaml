@@ -1,0 +1,7 @@
+interface:
+  display_name: "Trading Copilot"
+  short_description: "Run disciplined trading research workflows"
+  default_prompt: "Use $trading-copilot to prepare a market research workflow with scenarios, invalidation, risk, and NO TRADE where appropriate."
+
+policy:
+  allow_implicit_invocation: true
