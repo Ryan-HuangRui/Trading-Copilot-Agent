@@ -30,15 +30,24 @@ This project uses Codex App automation as the scheduler and report-generation ru
    - with `--sp500-screen`: `report/<SNAPSHOT_DATE>/candidate-universe.json`
 3. Post-market review reads the snapshot and writes:
    - `report/<SNAPSHOT_DATE>/post-market.md`
-4. Next pre-market context reuses the previous trading day's snapshot:
+4. Post-market Longbridge sync fully replaces the `今日关注` group from the generated post-market focus list:
+   ```bash
+   python3 script/trading_copilot.py sync-longbridge-watchlist --session post-market --date <SNAPSHOT_DATE> --group-name 今日关注 --sync-mode replace --execute --no-create
+   ```
+   This removes stale symbols from the `今日关注` group only; it must not globally unfollow securities or remove them from other watchlists.
+5. Next pre-market context reuses the previous trading day's snapshot:
    ```bash
    python3 script/prepare_daily_context.py --watchlist config/watchlist.json --skip-non-trading-day
    ```
-5. Pre-market report generation reads:
+6. Pre-market report generation reads:
    - `report/<PRE_MARKET_DATE>/pre-market-context.json`
-6. Pre-market output writes:
+7. Pre-market output writes:
    - `report/<PRE_MARKET_DATE>/exec-brief.md`
    - `report/<PRE_MARKET_DATE>/pre-market.md`
+8. Pre-market Longbridge sync incrementally adds the generated focus symbols to `今日关注`:
+   ```bash
+   python3 script/trading_copilot.py sync-longbridge-watchlist --session pre-market --date <PRE_MARKET_DATE> --group-name 今日关注 --sync-mode add --execute --no-create
+   ```
 
 ## Data freshness rules
 - `daily-snapshot.json` contains `latest_bar_dates` and `stale_data`.
@@ -58,6 +67,12 @@ If output contains `skipped=true`, stop. If the generated `daily-snapshot.json` 
 
 The dynamic universe uses iShares IVV holdings CSV as the default source and falls back to Slickcharts if the primary source fails. If the screener itself fails, the snapshot still continues with the fixed watchlist and records the failure in `candidate-universe.json`.
 
+After `post-market.md` is generated, run:
+```bash
+python3 script/trading_copilot.py sync-longbridge-watchlist --session post-market --date <SNAPSHOT_DATE> --group-name 今日关注 --sync-mode replace --execute --no-create
+```
+This is a full replacement of the `今日关注` group for tomorrow's focus list. Removing a symbol here only removes it from `今日关注`; do not delete the security globally or from other Longbridge watchlist groups.
+
 ### Pre-market automation
 Run:
 ```bash
@@ -67,6 +82,12 @@ python3 script/prepare_daily_context.py --watchlist config/watchlist.json --skip
 If output contains `skipped=true`, stop. Otherwise read `agent/daily_analysis_prompt.md`, `knowledge/refined/`, and `report/<PRE_MARKET_DATE>/pre-market-context.json`, then generate:
 - `report/<PRE_MARKET_DATE>/exec-brief.md`
 - `report/<PRE_MARKET_DATE>/pre-market.md`
+
+After `exec-brief.md` is generated, run:
+```bash
+python3 script/trading_copilot.py sync-longbridge-watchlist --session pre-market --date <PRE_MARKET_DATE> --group-name 今日关注 --sync-mode add --execute --no-create
+```
+This is additive only. It may add new focus symbols from the pre-market plan, but it must not remove existing `今日关注` symbols.
 
 ## Analysis boundaries
 - Reports are research and process support only; they are not investment advice.

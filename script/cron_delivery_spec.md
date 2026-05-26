@@ -14,7 +14,10 @@
 4. 生成：
    - `report/<SNAPSHOT_DATE>/post-market.md`
    - 扩池数据已由脚本生成在 `report/<SNAPSHOT_DATE>/candidate-universe.json`
-5. 发送到 Feishu：
+5. 全量更新长桥【今日关注】分组：
+   - `python script/trading_copilot.py sync-longbridge-watchlist --session post-market --date <SNAPSHOT_DATE> --group-name 今日关注 --sync-mode replace --execute --no-create`
+   - 仅替换【今日关注】这个分组内的标的；移出的标的不要取消全局关注，也不要从其他 watchlist 分组删除
+6. 发送到 Feishu：
    - message body: 盘后复盘摘要
    - media/filePath: 盘后复盘 markdown 文件
 
@@ -26,13 +29,16 @@
 4. 生成两个报告文件：
    - `report/<PRE_MARKET_DATE>/exec-brief.md`
    - `report/<PRE_MARKET_DATE>/pre-market.md`
-5. 发送到 Feishu：
+5. 增量更新长桥【今日关注】分组：
+   - `python script/trading_copilot.py sync-longbridge-watchlist --session pre-market --date <PRE_MARKET_DATE> --group-name 今日关注 --sync-mode add --execute --no-create`
+   - 只添加盘前新增重点标的，不移除【今日关注】中的既有标的
+6. 发送到 Feishu：
    - message body: 精简执行版全文
    - media/filePath: 完整报告 markdown 文件
 
 ## Codex App Automation Prompt 建议
-- 盘后：先运行 daily snapshot 脚本，默认同时启用 S&P 500 top 100 动态观察池并输出 15 个候选；若非交易日跳过；否则基于 `agent/post_market_analysis_prompt.md`、`knowledge/refined/`、`report/<SNAPSHOT_DATE>/daily-snapshot.json` 生成盘后复盘。
-- 次日盘前：先运行盘前上下文脚本；若非交易日跳过；否则基于 `agent/daily_analysis_prompt.md`、`knowledge/refined/`、`report/<PRE_MARKET_DATE>/pre-market-context.json` 生成盘前两份报告。
+- 盘后：先运行 daily snapshot 脚本，默认同时启用 S&P 500 top 100 动态观察池并输出 15 个候选；若非交易日跳过；否则基于 `agent/post_market_analysis_prompt.md`、`knowledge/refined/`、`report/<SNAPSHOT_DATE>/daily-snapshot.json` 生成盘后复盘；生成后全量替换长桥【今日关注】分组。
+- 次日盘前：先运行盘前上下文脚本；若非交易日跳过；否则基于 `agent/daily_analysis_prompt.md`、`knowledge/refined/`、`report/<PRE_MARKET_DATE>/pre-market-context.json` 生成盘前两份报告；生成后只向长桥【今日关注】分组增量添加盘前重点标的。
 - 第一版将节假日判断放在脚本内，automation 只按周一到周五触发。
 
 ## 发送内容规范

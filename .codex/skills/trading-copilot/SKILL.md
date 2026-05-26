@@ -51,12 +51,23 @@ Every workflow run should return or report the same status fields:
 1. Run `python3 script/trading_copilot.py pre-market-plan --watchlist config/watchlist.json --skip-non-trading-day`.
 2. Read `agent/daily_analysis_prompt.md`, `knowledge/refined/`, and `report/<DATE>/pre-market-context.json`.
 3. Write `report/<DATE>/exec-brief.md` and `report/<DATE>/pre-market.md`.
+4. After `exec-brief.md` exists, incrementally add focus symbols to Longbridge `今日关注`:
+   `python3 script/trading_copilot.py sync-longbridge-watchlist --session pre-market --date <DATE> --group-name 今日关注 --sync-mode add --execute --no-create`.
 
 ### Post-Market Review
 
 1. Run `python3 script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day`.
 2. Read `agent/post_market_analysis_prompt.md`, `knowledge/refined/`, and `report/<DATE>/daily-snapshot.json`.
 3. Write `report/<DATE>/post-market.md`.
+4. After `post-market.md` exists, fully replace Longbridge `今日关注` from the post-market focus list:
+   `python3 script/trading_copilot.py sync-longbridge-watchlist --session post-market --date <DATE> --group-name 今日关注 --sync-mode replace --execute --no-create`.
+
+### Longbridge Watchlist Sync
+
+- Default target group is `今日关注`.
+- Pre-market sync is additive (`add`) so newly selected focus symbols are added without removing existing `今日关注` symbols.
+- Post-market sync is full replacement (`replace`) so the next day's focus list is reset from the post-market report.
+- Removing a symbol from `今日关注` must only remove it from that group. Do not globally unfollow/delete the security or remove it from other Longbridge watchlist groups.
 
 ### Monitor Brief
 

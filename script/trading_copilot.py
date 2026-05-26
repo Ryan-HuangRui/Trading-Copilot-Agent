@@ -225,6 +225,50 @@ def run_trading_day_check(args: argparse.Namespace) -> None:
     emit(response)
 
 
+def run_sync_longbridge_watchlist(args: argparse.Namespace) -> None:
+    command = [
+        "script/sync_longbridge_watchlist.py",
+        "--session",
+        args.session,
+        "--sync-mode",
+        args.sync_mode,
+        "--max-symbols",
+        str(args.max_symbols),
+    ]
+    if args.date:
+        command.extend(["--date", args.date])
+    if args.report:
+        command.extend(["--report", args.report])
+    if args.group_name:
+        command.extend(["--group-name", args.group_name])
+    if args.default_market:
+        command.extend(["--default-market", args.default_market])
+    for symbol in args.symbol or []:
+        command.extend(["--symbol", symbol])
+    if args.execute:
+        command.append("--execute")
+    if args.no_create:
+        command.append("--no-create")
+    command.extend(["--method", args.method])
+    if args.longbridge_cli:
+        command.extend(["--longbridge-cli", args.longbridge_cli])
+
+    proc = run_child(command)
+    stdout = parse_json_output(proc.stdout)
+    if proc.returncode != 0:
+        emit(failed_response("sync-longbridge-watchlist", command, proc), 1)
+
+    response = base_response("sync-longbridge-watchlist", command, stdout)
+    response["date"] = (stdout or {}).get("date") or args.date
+    response["artifacts"] = []
+    response["group_name"] = (stdout or {}).get("group_name")
+    response["sync_mode"] = (stdout or {}).get("sync_mode")
+    response["dry_run"] = (stdout or {}).get("dry_run")
+    response["symbols"] = (stdout or {}).get("symbols", [])
+    response["longbridge"] = (stdout or {}).get("longbridge")
+    emit(response)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Unified Trading Copilot workflow wrapper for agent callers"
@@ -263,6 +307,24 @@ def build_parser() -> argparse.ArgumentParser:
     day.add_argument("--date")
     day.add_argument("--timezone", default="America/New_York")
     day.set_defaults(func=run_trading_day_check)
+
+    sync = sub.add_parser(
+        "sync-longbridge-watchlist",
+        help="Sync extracted daily focus symbols to a Longbridge watchlist group",
+    )
+    sync.add_argument("--session", choices=["pre-market", "post-market"], required=True)
+    sync.add_argument("--date")
+    sync.add_argument("--report")
+    sync.add_argument("--group-name")
+    sync.add_argument("--default-market", default="US")
+    sync.add_argument("--max-symbols", type=int, default=3)
+    sync.add_argument("--symbol", action="append")
+    sync.add_argument("--execute", action="store_true")
+    sync.add_argument("--no-create", action="store_true")
+    sync.add_argument("--sync-mode", choices=["auto", "add", "replace"], default="auto")
+    sync.add_argument("--method", choices=["auto", "cli", "sdk"], default="auto")
+    sync.add_argument("--longbridge-cli")
+    sync.set_defaults(func=run_sync_longbridge_watchlist)
 
     return parser
 
