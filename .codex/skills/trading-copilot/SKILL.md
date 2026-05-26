@@ -11,6 +11,21 @@ Use this skill when the user asks for market preparation, report generation, sym
 
 This repository is a trading research assistant for Codex/Claude/OpenClaw-style agents. It is not an independent trading product and not an execution system.
 
+Canonical machine entrypoint:
+
+```bash
+python3 script/trading_copilot.py <workflow> [options]
+```
+
+Every workflow run should return or report the same status fields:
+
+- `status`: `success`, `skipped`, or `failed`
+- `workflow`
+- `date`
+- `artifacts`
+- `skipped`
+- `reason`
+
 ## Safety Rules
 
 - Never place real trades, call broker APIs, or imply order execution.
@@ -33,21 +48,33 @@ This repository is a trading research assistant for Codex/Claude/OpenClaw-style 
 
 ### Pre-Market Plan
 
-1. Run `python3 script/prepare_daily_context.py --watchlist config/watchlist.json --skip-non-trading-day`.
+1. Run `python3 script/trading_copilot.py pre-market-plan --watchlist config/watchlist.json --skip-non-trading-day`.
 2. Read `agent/daily_analysis_prompt.md`, `knowledge/refined/`, and `report/<DATE>/pre-market-context.json`.
 3. Write `report/<DATE>/exec-brief.md` and `report/<DATE>/pre-market.md`.
 
 ### Post-Market Review
 
-1. Run `python3 script/prepare_market_snapshot.py --watchlist config/watchlist.json --skip-non-trading-day`.
+1. Run `python3 script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day`.
 2. Read `agent/post_market_analysis_prompt.md`, `knowledge/refined/`, and `report/<DATE>/daily-snapshot.json`.
 3. Write `report/<DATE>/post-market.md`.
 
 ### Monitor Brief
 
-1. Run `python3 script/monitor_scan.py --state config/monitor_state.json --interval 5min`.
+1. Run `python3 script/trading_copilot.py monitor-brief --state config/monitor_state.json --interval 5min`.
 2. Read `report/latest-monitor.json`.
 3. Summarize actionable observations as scenarios with invalidation and risk. Use `NO TRADE` when data or setup quality is insufficient.
+
+### Symbol Analysis
+
+1. For current or recent analysis, first run a data-preparation workflow that covers the symbol, or state that fresh market data is unavailable.
+2. Read the relevant snapshot/context artifact and `knowledge/refined/`.
+3. Write a concise symbol memo with setup quality, scenarios, invalidation, risk, and `NO TRADE` when the rules are not satisfied.
+
+### Research Note
+
+1. Use `knowledge/source/` only as raw research material.
+2. Promote conclusions only when they are consistent with `knowledge/refined/`.
+3. Write the note as a research artifact; do not change refined rules unless the user explicitly asks for a rule promotion task.
 
 ### Rule Validation
 
@@ -59,6 +86,7 @@ This repository is a trading research assistant for Codex/Claude/OpenClaw-style 
 
 - Syntax check after script changes: `python3 -m py_compile script/*.py`.
 - Trading-day guard smoke test: `python3 script/trading_day_guard.py --date 2026-05-06 --format text`.
+- Wrapper smoke test without market-data access: `python3 script/trading_copilot.py trading-day-check --date 2026-05-06`.
 - Data-fetch smoke tests require `.env` with `TWELVE_DATA_API_KEY`.
 
 ## Output Contract
@@ -71,3 +99,5 @@ When running a workflow, clearly report:
 - output artifacts written
 - skipped state and reason, if applicable
 - data limitations and rule limitations
+
+The detailed workflow and data contracts live in `docs/contracts/`.
