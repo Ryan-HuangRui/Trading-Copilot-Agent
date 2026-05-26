@@ -9,6 +9,7 @@
 - `pre_market_report.py`: scripted pre-market report generator.
 - `monitor_scan.py`: 5m watchlist/position scan and `report/latest-monitor.json` writer.
 - `report_delivery_guard.py`: idempotent delivery-state helper.
+- `trading_copilot.py`: unified agent-facing workflow wrapper that returns `status/date/artifacts/skipped/reason`.
 - `trading_day_guard.py` and `market_calendar.py`: simple US regular trading-day guard.
 - `import_priceactions_knowledge.py`: normalizes source PriceActions docs and refreshes source metadata.
 
@@ -19,6 +20,10 @@
 - Prepare daily snapshot with S&P 500 dynamic universe: `python3 script/prepare_market_snapshot.py --watchlist config/watchlist.json --skip-non-trading-day --sp500-screen --sp500-top 100 --sp500-candidates 15`.
 - Fetch S&P 500 universe only: `python3 script/sp500_universe.py --top 100`.
 - Prepare pre-market context with guard: `python3 script/prepare_daily_context.py --watchlist config/watchlist.json --skip-non-trading-day`.
+- Run unified pre-market workflow: `python3 script/trading_copilot.py pre-market-plan --watchlist config/watchlist.json --skip-non-trading-day`.
+- Run unified post-market workflow: `python3 script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day`.
+- Run unified monitor workflow: `python3 script/trading_copilot.py monitor-brief --state config/monitor_state.json --interval 5min`.
+- Check trading day through wrapper: `python3 script/trading_copilot.py trading-day-check --date 2026-05-06`.
 - Check trading day: `python3 script/trading_day_guard.py`.
 - Generate scripted report: `python3 script/pre_market_report.py --watchlist config/watchlist.json`.
 - Generate scripted report with guard: `python3 script/pre_market_report.py --watchlist config/watchlist.json --skip-non-trading-day`.
@@ -34,6 +39,7 @@
 - If adding a script that fetches market data, reuse `TwelveDataClient` and its shared limiter.
 - S&P 500 universe fetches may use standard-library HTTP, but per-symbol market-data screening must still use `TwelveDataClient` and the shared limiter.
 - For scheduled report scripts, support `--skip-non-trading-day` and use the market date in `America/New_York`.
+- Agent-facing wrapper responses should keep the shared fields `status`, `workflow`, `date`, `artifacts`, `skipped`, and `reason`.
 - Snapshot builders should continue after per-symbol fetch failures and record failures in `errors`; same-day cache fallback must be marked with `used_cache`.
 - Dynamic S&P 500 candidates should be written to `report/<DATE>/candidate-universe.json` and merged into the snapshot only for that date; do not mutate `config/watchlist.json`.
 
