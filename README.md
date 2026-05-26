@@ -11,6 +11,7 @@
 - `agent/`：Codex App automation 实际读取的报告生成 Prompt
 - `docs/`：Codex App automation 与人工操作 runbook
 - `config/`：watchlist 与策略参数
+- `.codex/skills/trading-copilot/`：repo-local skill 入口，供 Codex/Claude/OpenClaw 类 agent 识别本仓库能力
 
 ## 快速开始
 
@@ -26,10 +27,29 @@ cp .env.example .env
 ## 职责分层
 
 - `script/`：只做确定性数据工作，包括交易日判断、行情拉取、限频、缓存、context 生成。
+- `script/trading_copilot.py`：面向 agent 的统一 workflow wrapper，返回 `status/date/artifacts/skipped/reason`。
 - `agent/`：Codex App 自动化生成报告时实际读取的 Prompt，目前只保留盘前和盘后两个执行 Prompt。
 - `knowledge/refined/`：唯一交易规则源。
 - `docs/`：调度流程和运维说明。
 - `AGENTS.md`：Codex 维护本仓库时的工程约束，不作为交易分析 Prompt。
+- `.codex/skills/trading-copilot/SKILL.md`：交易研究 skill 的触发条件、安全边界、标准命令与输出契约。
+
+## Agent Skill 用法
+
+本仓库优先作为 agent skill/workflow 包使用，而不是独立产品。推荐入口：
+
+```bash
+python3 script/trading_copilot.py trading-day-check --date 2026-05-06
+python3 script/trading_copilot.py pre-market-plan --watchlist config/watchlist.json --skip-non-trading-day
+python3 script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day
+python3 script/trading_copilot.py monitor-brief --state config/monitor_state.json --interval 5min
+```
+
+契约文档：
+
+- `docs/contracts/workflows.md`
+- `docs/contracts/data-contracts.md`
+- `docs/workflows/`
 
 ## 每日报告流程
 - 交易日判断：`script/trading_day_guard.py`，默认按美股东部时间判断常规交易日
@@ -68,7 +88,7 @@ python script/fetch_daily.py --symbols AAPL,MSFT,NVDA,TSLA --interval 1day --out
 
 ```bash
 # 1) 准备上下文（交易日判断 + 读取上一交易日 snapshot）
-python script/prepare_daily_context.py --watchlist config/watchlist.json --skip-non-trading-day
+python script/trading_copilot.py pre-market-plan --watchlist config/watchlist.json --skip-non-trading-day
 
 # 2) 让 Agent 基于 context + knowledge 生成 report/YYYY-MM-DD/pre-market.md
 # （在 Codex App automation 中触发即可）
@@ -78,10 +98,10 @@ python script/prepare_daily_context.py --watchlist config/watchlist.json --skip-
 
 ```bash
 # 1) 收盘后生成 daily snapshot（交易日判断 + 数据拉取 + 限频）
-python script/prepare_market_snapshot.py --watchlist config/watchlist.json --skip-non-trading-day
+python script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day
 
 # 可选：同时做 S&P 500 top 100 动态扩池，输出 15 个观察候选
-python script/prepare_market_snapshot.py --watchlist config/watchlist.json --skip-non-trading-day --sp500-screen --sp500-top 100 --sp500-candidates 15
+python script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day --sp500-screen --sp500-top 100 --sp500-candidates 15
 
 # 2) 让 Agent 基于 snapshot + knowledge 生成 report/YYYY-MM-DD/post-market.md
 # （在 Codex App automation 中触发即可）
