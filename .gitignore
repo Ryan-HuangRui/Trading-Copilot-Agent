@@ -10,6 +10,7 @@ __pycache__/
 
 # OS/editor
 .DS_Store
+.idea/
 
 # Local OpenClaw runtime state
 .openclaw/
@@ -17,7 +18,9 @@ __pycache__/
 # Generated runtime data
 raw_data/
 report/
+runtime/
 config/rate_limit_state.json
+config/delivery_state.json
 
 # Local assistant persona/context files (not project source)
 SOUL.md

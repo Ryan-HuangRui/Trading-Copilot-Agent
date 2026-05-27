@@ -51,16 +51,26 @@ Every workflow run should return or report the same status fields:
 1. Run `python3 script/trading_copilot.py pre-market-plan --watchlist config/watchlist.json --skip-non-trading-day`.
 2. Read `agent/daily_analysis_prompt.md`, `knowledge/refined/`, and `report/<DATE>/pre-market-context.json`.
 3. Write `report/<DATE>/exec-brief.md` and `report/<DATE>/pre-market.md`.
-4. After `exec-brief.md` exists, incrementally add focus symbols to Longbridge `今日关注`:
-   `python3 script/trading_copilot.py sync-longbridge-watchlist --session pre-market --date <DATE> --group-name 今日关注 --sync-mode add --execute --no-create`.
+4. Validate both generated reports:
+   `python3 script/trading_copilot.py validate-report --session pre-market --date <DATE>`.
+5. After validation passes, append the focused plan to the local journal:
+   `python3 script/trading_copilot.py extract-report-signals --session pre-market --date <DATE> --require-validation --append`.
+6. Incrementally add focus symbols to Longbridge `今日关注`:
+   `python3 script/trading_copilot.py sync-longbridge-watchlist --session pre-market --date <DATE> --group-name 今日关注 --sync-mode add --require-validation --execute --no-create`.
 
 ### Post-Market Review
 
 1. Run `python3 script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day`.
 2. Read `agent/post_market_analysis_prompt.md`, `knowledge/refined/`, and `report/<DATE>/daily-snapshot.json`.
 3. Write `report/<DATE>/post-market.md`.
-4. After `post-market.md` exists, fully replace Longbridge `今日关注` from the post-market focus list:
-   `python3 script/trading_copilot.py sync-longbridge-watchlist --session post-market --date <DATE> --group-name 今日关注 --sync-mode replace --execute --no-create`.
+4. Validate the generated report:
+   `python3 script/trading_copilot.py validate-report --session post-market --date <DATE>`.
+5. After validation passes, backfill outcomes for plans targeting the completed snapshot date:
+   `python3 script/trading_copilot.py backfill-signal-outcomes --date <DATE> --append`.
+6. Append the focused observation plan to the local journal:
+   `python3 script/trading_copilot.py extract-report-signals --session post-market --date <DATE> --require-validation --append`.
+7. Fully replace Longbridge `今日关注` from the post-market focus list:
+   `python3 script/trading_copilot.py sync-longbridge-watchlist --session post-market --date <DATE> --group-name 今日关注 --sync-mode replace --require-validation --execute --no-create`.
 
 ### Longbridge Watchlist Sync
 

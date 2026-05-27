@@ -51,8 +51,15 @@ Run the post-market workflow for this repository.
    - report/<SNAPSHOT_DATE>/daily-snapshot.json
 6. Generate:
    - report/<SNAPSHOT_DATE>/post-market.md
-7. Update the Longbridge watchlist group `今日关注` as a full replacement from the post-market focus list:
-   python3 script/trading_copilot.py sync-longbridge-watchlist --session post-market --date <SNAPSHOT_DATE> --group-name 今日关注 --sync-mode replace --execute --no-create
+7. Validate the generated report. If validation fails, stop and do not sync Longbridge:
+   python3 script/trading_copilot.py validate-report --session post-market --date <SNAPSHOT_DATE>
+8. Backfill outcomes for prior plans whose target date is the completed snapshot date:
+   python3 script/trading_copilot.py backfill-signal-outcomes --date <SNAPSHOT_DATE> --append
+   If this fails, send or log a short status note, but do not treat it as a report-quality failure.
+9. Append the focused post-market observation plan to the local journal:
+   python3 script/trading_copilot.py extract-report-signals --session post-market --date <SNAPSHOT_DATE> --require-validation --append
+10. Update the Longbridge watchlist group `今日关注` as a full replacement from the post-market focus list:
+   python3 script/trading_copilot.py sync-longbridge-watchlist --session post-market --date <SNAPSHOT_DATE> --group-name 今日关注 --sync-mode replace --require-validation --execute --no-create
 
 Keep output in simplified Chinese. Treat S&P 500 dynamic candidates as an observation universe only, not investment advice.
 The Longbridge sync replaces only the securities inside the `今日关注` group; symbols removed from that group must not be globally unfollowed or deleted from other watchlists.
@@ -81,8 +88,12 @@ Run the pre-market workflow for this repository.
 5. Generate both files:
    - report/<PRE_MARKET_DATE>/exec-brief.md
    - report/<PRE_MARKET_DATE>/pre-market.md
-6. Incrementally add the pre-market focus symbols to the Longbridge watchlist group `今日关注`:
-   python3 script/trading_copilot.py sync-longbridge-watchlist --session pre-market --date <PRE_MARKET_DATE> --group-name 今日关注 --sync-mode add --execute --no-create
+6. Validate the generated reports. If validation fails, stop and do not sync Longbridge:
+   python3 script/trading_copilot.py validate-report --session pre-market --date <PRE_MARKET_DATE>
+7. Append the focused pre-market plan to the local journal:
+   python3 script/trading_copilot.py extract-report-signals --session pre-market --date <PRE_MARKET_DATE> --require-validation --append
+8. Incrementally add the pre-market focus symbols to the Longbridge watchlist group `今日关注`:
+   python3 script/trading_copilot.py sync-longbridge-watchlist --session pre-market --date <PRE_MARKET_DATE> --group-name 今日关注 --sync-mode add --require-validation --execute --no-create
 
 Keep output in simplified Chinese. The merged universe may include fixed watchlist symbols and S&P 500 dynamic candidates, but every executable candidate must still pass refined setup rules.
 The Longbridge sync is additive before market open and must not remove existing `今日关注` symbols.
@@ -100,5 +111,6 @@ The Longbridge sync is additive before market open and must not remove existing 
 - `stale_data=true` after market close: wait and rerun the post-market automation later.
 - S&P 500 screener failure: the snapshot continues with the fixed watchlist and records the screener error in `candidate-universe.json`.
 - Missing pre-market source snapshot: run the post-market snapshot workflow for the previous completed trading day first.
+- Report validation failure: fix the generated report so every actionable candidate has setup, trigger, invalidation, and risk framing; rerun `validate-report` before Longbridge sync.
 - Rate limiting: the repo uses the shared 8 requests/minute limiter in `config/rate_limit_state.json`; full S&P 500 top 100 screening can take more than ten minutes.
 - Longbridge watchlist sync failure: keep the generated report, fix CLI login/connectivity with `longbridge auth login` and `longbridge check`, then rerun only the `sync-longbridge-watchlist` command for that report date.

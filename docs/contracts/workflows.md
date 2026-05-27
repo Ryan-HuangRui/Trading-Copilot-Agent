@@ -128,6 +128,92 @@ Output rules:
 - Include data freshness and rule limitations.
 - Use `NO TRADE` when setup quality, data quality, or risk framing is insufficient.
 
+## validate-report
+
+Purpose: enforce quality gates on generated markdown reports before delivery or Longbridge watchlist sync.
+
+Canonical commands:
+
+```bash
+python3 script/trading_copilot.py validate-report --session pre-market --date <PRE_MARKET_DATE>
+python3 script/trading_copilot.py validate-report --session post-market --date <SNAPSHOT_DATE>
+```
+
+Inputs:
+
+- Generated markdown reports under `report/<DATE>/`.
+- `knowledge/refined/setups/` for setup filename validation.
+- `pre-market-context.json` or `daily-snapshot.json` when available for stale-data checks.
+
+Output:
+
+- JSON envelope with `status`, `workflow`, `date`, `artifacts`, and `validation`.
+- `validation.status` is `pass` or `fail`.
+- `validation.errors` contains blocking quality issues.
+- `validation.warnings` contains non-blocking wording or disclosure concerns.
+
+Required behavior:
+
+- A failed validation must stop delivery and Longbridge sync.
+- `sync-longbridge-watchlist --require-validation` must run this gate before extracting and syncing report focus symbols.
+
+## extract-report-signals
+
+Purpose: extract the focused report candidates into structured journal records so later reviews can compare planned setups with outcomes.
+
+Canonical commands:
+
+```bash
+python3 script/trading_copilot.py extract-report-signals --session pre-market --date <PRE_MARKET_DATE> --require-validation --append
+python3 script/trading_copilot.py extract-report-signals --session post-market --date <SNAPSHOT_DATE> --require-validation --append
+```
+
+Inputs:
+
+- Pre-market default: `report/<DATE>/exec-brief.md`.
+- Post-market default: `report/<DATE>/post-market.md`.
+- Optional `--report` path for ad-hoc extraction.
+
+Output:
+
+- JSON envelope with extracted `signals`.
+- With `--append`, writes new records to `runtime/journal/signals.jsonl`.
+
+Required behavior:
+
+- Extract at most 3 focused candidates by default.
+- Prefer explicit focus lists such as `今日最多3个重点标的` and `明日观察清单`.
+- Include `signal_id`, `symbol`, `setup`, `setup_files`, `trigger`, `invalidation`, `risk`, `status`, and `source_report` when available.
+- Repeated extraction of the same source report should skip duplicate `signal_id` records.
+
+## backfill-signal-outcomes
+
+Purpose: compare previously planned signals with a completed daily snapshot and append objective outcome records for review statistics.
+
+Canonical command:
+
+```bash
+python3 script/trading_copilot.py backfill-signal-outcomes --date <SNAPSHOT_DATE> --append
+```
+
+Inputs:
+
+- `runtime/journal/signals.jsonl`.
+- `report/<DATE>/daily-snapshot.json`.
+
+Output:
+
+- JSON envelope with `outcomes`, `summary`, and optional appended outcome ids.
+- With `--append`, writes new records to `runtime/journal/outcomes.jsonl`.
+
+Required behavior:
+
+- Pre-market signals target the same date as the signal.
+- Post-market signals target the next regular trading day after the signal date.
+- Outcome statuses are observational: `triggered`, `invalidated`, `triggered_and_invalidated`, `not_triggered`, `not_evaluable`, or `no_data`.
+- Daily bars cannot determine intraday order; if both trigger and invalidation are touched, use `triggered_and_invalidated`.
+- This is research feedback only and must not imply a trade was entered.
+
 ## symbol-analysis
 
 Purpose: perform an ad-hoc review of a single symbol.

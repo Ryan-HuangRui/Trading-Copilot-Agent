@@ -30,23 +30,44 @@ This project uses Codex App automation as the scheduler and report-generation ru
    - with `--sp500-screen`: `report/<SNAPSHOT_DATE>/candidate-universe.json`
 3. Post-market review reads the snapshot and writes:
    - `report/<SNAPSHOT_DATE>/post-market.md`
-4. Post-market Longbridge sync fully replaces the `今日关注` group from the generated post-market focus list:
+4. Validate the generated post-market report:
    ```bash
-   python3 script/trading_copilot.py sync-longbridge-watchlist --session post-market --date <SNAPSHOT_DATE> --group-name 今日关注 --sync-mode replace --execute --no-create
+   python3 script/trading_copilot.py validate-report --session post-market --date <SNAPSHOT_DATE>
+   ```
+5. Backfill outcomes for plans whose target date is the completed snapshot date:
+   ```bash
+   python3 script/trading_copilot.py backfill-signal-outcomes --date <SNAPSHOT_DATE> --append
+   ```
+   If this fails, send or log a status note, but do not treat it as a trading report quality failure.
+6. Append the focused post-market observation plan to `runtime/journal/signals.jsonl`:
+   ```bash
+   python3 script/trading_copilot.py extract-report-signals --session post-market --date <SNAPSHOT_DATE> --require-validation --append
+   ```
+7. Post-market Longbridge sync fully replaces the `今日关注` group from the generated post-market focus list:
+   ```bash
+   python3 script/trading_copilot.py sync-longbridge-watchlist --session post-market --date <SNAPSHOT_DATE> --group-name 今日关注 --sync-mode replace --require-validation --execute --no-create
    ```
    This removes stale symbols from the `今日关注` group only; it must not globally unfollow securities or remove them from other watchlists.
-5. Next pre-market context reuses the previous trading day's snapshot:
+8. Next pre-market context reuses the previous trading day's snapshot:
    ```bash
    python3 script/prepare_daily_context.py --watchlist config/watchlist.json --skip-non-trading-day
    ```
-6. Pre-market report generation reads:
+9. Pre-market report generation reads:
    - `report/<PRE_MARKET_DATE>/pre-market-context.json`
-7. Pre-market output writes:
+10. Pre-market output writes:
    - `report/<PRE_MARKET_DATE>/exec-brief.md`
    - `report/<PRE_MARKET_DATE>/pre-market.md`
-8. Pre-market Longbridge sync incrementally adds the generated focus symbols to `今日关注`:
+11. Validate the generated pre-market reports:
    ```bash
-   python3 script/trading_copilot.py sync-longbridge-watchlist --session pre-market --date <PRE_MARKET_DATE> --group-name 今日关注 --sync-mode add --execute --no-create
+   python3 script/trading_copilot.py validate-report --session pre-market --date <PRE_MARKET_DATE>
+   ```
+12. Append the focused pre-market plan to `runtime/journal/signals.jsonl`:
+   ```bash
+   python3 script/trading_copilot.py extract-report-signals --session pre-market --date <PRE_MARKET_DATE> --require-validation --append
+   ```
+13. Pre-market Longbridge sync incrementally adds the generated focus symbols to `今日关注`:
+   ```bash
+   python3 script/trading_copilot.py sync-longbridge-watchlist --session pre-market --date <PRE_MARKET_DATE> --group-name 今日关注 --sync-mode add --require-validation --execute --no-create
    ```
 
 ## Data freshness rules
@@ -67,9 +88,24 @@ If output contains `skipped=true`, stop. If the generated `daily-snapshot.json` 
 
 The dynamic universe uses iShares IVV holdings CSV as the default source and falls back to Slickcharts if the primary source fails. If the screener itself fails, the snapshot still continues with the fixed watchlist and records the failure in `candidate-universe.json`.
 
-After `post-market.md` is generated, run:
+After `post-market.md` is generated, validate it:
 ```bash
-python3 script/trading_copilot.py sync-longbridge-watchlist --session post-market --date <SNAPSHOT_DATE> --group-name 今日关注 --sync-mode replace --execute --no-create
+python3 script/trading_copilot.py validate-report --session post-market --date <SNAPSHOT_DATE>
+```
+
+Only after validation passes, backfill outcomes for the completed snapshot date:
+```bash
+python3 script/trading_copilot.py backfill-signal-outcomes --date <SNAPSHOT_DATE> --append
+```
+
+Then append the focused observation plan:
+```bash
+python3 script/trading_copilot.py extract-report-signals --session post-market --date <SNAPSHOT_DATE> --require-validation --append
+```
+
+Then run:
+```bash
+python3 script/trading_copilot.py sync-longbridge-watchlist --session post-market --date <SNAPSHOT_DATE> --group-name 今日关注 --sync-mode replace --require-validation --execute --no-create
 ```
 This is a full replacement of the `今日关注` group for tomorrow's focus list. Removing a symbol here only removes it from `今日关注`; do not delete the security globally or from other Longbridge watchlist groups.
 
@@ -83,9 +119,19 @@ If output contains `skipped=true`, stop. Otherwise read `agent/daily_analysis_pr
 - `report/<PRE_MARKET_DATE>/exec-brief.md`
 - `report/<PRE_MARKET_DATE>/pre-market.md`
 
-After `exec-brief.md` is generated, run:
+After `exec-brief.md` and `pre-market.md` are generated, validate them:
 ```bash
-python3 script/trading_copilot.py sync-longbridge-watchlist --session pre-market --date <PRE_MARKET_DATE> --group-name 今日关注 --sync-mode add --execute --no-create
+python3 script/trading_copilot.py validate-report --session pre-market --date <PRE_MARKET_DATE>
+```
+
+Only after validation passes, append the focused pre-market plan:
+```bash
+python3 script/trading_copilot.py extract-report-signals --session pre-market --date <PRE_MARKET_DATE> --require-validation --append
+```
+
+Then run:
+```bash
+python3 script/trading_copilot.py sync-longbridge-watchlist --session pre-market --date <PRE_MARKET_DATE> --group-name 今日关注 --sync-mode add --require-validation --execute --no-create
 ```
 This is additive only. It may add new focus symbols from the pre-market plan, but it must not remove existing `今日关注` symbols.
 
