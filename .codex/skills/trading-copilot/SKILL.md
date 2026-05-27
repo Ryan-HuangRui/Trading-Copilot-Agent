@@ -50,7 +50,7 @@ Every workflow run should return or report the same status fields:
 
 1. Run `python3 script/trading_copilot.py pre-market-plan --watchlist config/watchlist.json --skip-non-trading-day`.
 2. Read `agent/daily_analysis_prompt.md`, `knowledge/refined/`, and `report/<DATE>/pre-market-context.json`.
-3. Write `report/<DATE>/exec-brief.md` and `report/<DATE>/pre-market.md`.
+3. Write `report/<DATE>/exec-brief.md`, `report/<DATE>/pre-market.md`, and `report/<DATE>/signals.json`.
 4. Validate both generated reports:
    `python3 script/trading_copilot.py validate-report --session pre-market --date <DATE>`.
 5. After validation passes, append the focused plan to the local journal:
@@ -62,14 +62,16 @@ Every workflow run should return or report the same status fields:
 
 1. Run `python3 script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day`.
 2. Read `agent/post_market_analysis_prompt.md`, `knowledge/refined/`, and `report/<DATE>/daily-snapshot.json`.
-3. Write `report/<DATE>/post-market.md`.
+3. Write `report/<DATE>/post-market.md` and `report/<DATE>/signals.json`.
 4. Validate the generated report:
    `python3 script/trading_copilot.py validate-report --session post-market --date <DATE>`.
 5. After validation passes, backfill outcomes for plans targeting the completed snapshot date:
    `python3 script/trading_copilot.py backfill-signal-outcomes --date <DATE> --append`.
 6. Append the focused observation plan to the local journal:
    `python3 script/trading_copilot.py extract-report-signals --session post-market --date <DATE> --require-validation --append`.
-7. Fully replace Longbridge `今日关注` from the post-market focus list:
+7. Generate the daily self-review:
+   `python3 script/trading_copilot.py daily-self-review --date <DATE> --append`.
+8. Fully replace Longbridge `今日关注` from the post-market focus list:
    `python3 script/trading_copilot.py sync-longbridge-watchlist --session post-market --date <DATE> --group-name 今日关注 --sync-mode replace --require-validation --execute --no-create`.
 
 ### Longbridge Watchlist Sync
@@ -84,6 +86,14 @@ Every workflow run should return or report the same status fields:
 1. Run `python3 script/trading_copilot.py monitor-brief --state config/monitor_state.json --interval 5min`.
 2. Read `report/latest-monitor.json`.
 3. Summarize actionable observations as scenarios with invalidation and risk. Use `NO TRADE` when data or setup quality is insufficient.
+4. If the user wants monitor observations in the journal, run:
+   `python3 script/trading_copilot.py extract-monitor-signals --append`.
+
+### Weekly Review
+
+1. Run `python3 script/trading_copilot.py weekly-review --week <YYYY-Www> --append`.
+2. Read `report/weekly/<YYYY-Www>.md`.
+3. Present the weekly review as process feedback only. Do not convert signal outcomes into trading win rate unless `trades.jsonl` contains actual execution results.
 
 ### Symbol Analysis
 
@@ -108,6 +118,7 @@ Every workflow run should return or report the same status fields:
 - Syntax check after script changes: `python3 -m py_compile script/*.py`.
 - Trading-day guard smoke test: `python3 script/trading_day_guard.py --date 2026-05-06 --format text`.
 - Wrapper smoke test without market-data access: `python3 script/trading_copilot.py trading-day-check --date 2026-05-06`.
+- Review smoke test without market-data access: `python3 script/trading_copilot.py weekly-review --week 2026-W22`.
 - Data-fetch smoke tests require `.env` with `TWELVE_DATA_API_KEY`.
 
 ## Output Contract

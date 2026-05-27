@@ -7,6 +7,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from signal_artifacts import default_signals_path, read_json, validate_sidecar_payload
+
 
 REPORT_FILES = {
     "pre-market": ["pre-market.md", "exec-brief.md"],
@@ -14,7 +16,9 @@ REPORT_FILES = {
 }
 
 SETUP_RE = re.compile(r"\b[a-z0-9][a-z0-9_-]+\.md\b")
+SYMBOL_RE = re.compile(r"\b[A-Z][A-Z0-9.-]{0,9}\b")
 SYMBOL_HEADING_RE = re.compile(r"^###\s+`?([A-Z][A-Z0-9.-]{0,9})`?\s*$", re.MULTILINE)
+SKIP_TOKENS = {"AI", "API", "BOS", "CLI", "ETF", "MA20", "MA50", "NO", "R", "S", "US"}
 FORBIDDEN_PATTERNS = [
     re.compile(pattern)
     for pattern in (
@@ -42,6 +46,13 @@ def expected_reports(repo_root: Path, report_date: str, session: str, explicit_r
     if explicit_report:
         return [Path(explicit_report) if Path(explicit_report).is_absolute() else repo_root / explicit_report]
     return [repo_root / "report" / report_date / name for name in REPORT_FILES[session]]
+
+
+def expected_signals(repo_root: Path, report_date: str, explicit_signals: str | None) -> Path:
+    if explicit_signals:
+        path = Path(explicit_signals)
+        return path if path.is_absolute() else repo_root / path
+    return default_signals_path(repo_root, report_date)
 
 
 def refined_setup_files(repo_root: Path) -> set[str]:
@@ -83,6 +94,30 @@ def is_actionable_section(text: str) -> bool:
 
 def mentions_stale_data_limit(text: str) -> bool:
     return any(token in text for token in ("stale_data", "数据限制", "数据滞后", "缓存", "非最新", "行情受限"))
+
+
+def ordered_unique(items: list[str]) -> list[str]:
+    seen = set()
+    result = []
+    for item in items:
+        if item and item not in seen:
+            seen.add(item)
+            result.append(item)
+    return result
+
+
+def focus_symbols(markdown: str, session: str) -> list[str]:
+    labels = (
+        ("今日最多3个重点标的",)
+        if session == "pre-market"
+        else ("明日最多3个重点观察标的",)
+    )
+    for line in markdown.splitlines():
+        if any(label in line for label in labels):
+            text = line.split("：", 1)[-1].split(":", 1)[-1]
+            symbols = [token for token in SYMBOL_RE.findall(text.upper()) if token not in SKIP_TOKENS]
+            return ordered_unique(symbols)
+    return []
 
 
 def snapshot_payload(repo_root: Path, report_date: str, session: str) -> dict[str, Any] | None:
@@ -152,6 +187,8 @@ def validate_report_text(
 def validate(args: argparse.Namespace) -> dict[str, Any]:
     repo_root = Path(args.repo_root).resolve()
     reports = expected_reports(repo_root, args.date, args.session, args.report)
+    explicit_signals = getattr(args, "signals", None)
+    sidecar = expected_signals(repo_root, args.date, explicit_signals)
     setup_files = refined_setup_files(repo_root)
     snapshot = snapshot_payload(repo_root, args.date, args.session) or {}
     stale_data = bool(snapshot.get("stale_data"))
@@ -159,6 +196,9 @@ def validate(args: argparse.Namespace) -> dict[str, Any]:
     errors: list[str] = []
     warnings: list[str] = []
     checked: list[str] = []
+    checked_artifacts: list[str] = []
+    signals_payload: dict[str, Any] | None = None
+    require_sidecar = not args.report or bool(explicit_signals)
 
     if not setup_files:
         errors.append("missing refined setup directory or setup markdown files")
@@ -169,6 +209,7 @@ def validate(args: argparse.Namespace) -> dict[str, Any]:
             continue
         text = report.read_text(encoding="utf-8")
         checked.append(str(report))
+        checked_artifacts.append(str(report))
         report_errors, report_warnings = validate_report_text(
             path=report,
             text=text,
@@ -179,11 +220,47 @@ def validate(args: argparse.Namespace) -> dict[str, Any]:
         errors.extend(report_errors)
         warnings.extend(report_warnings)
 
+    if sidecar.exists():
+        checked_artifacts.append(str(sidecar))
+        try:
+            signals_payload = read_json(sidecar)
+        except Exception as exc:
+            errors.append(f"{sidecar}: invalid JSON: {exc}")
+            signals_payload = None
+        if signals_payload is not None:
+            sidecar_errors, sidecar_warnings = validate_sidecar_payload(
+                payload=signals_payload,
+                path=sidecar,
+                expected_date=args.date,
+                expected_session=args.session,
+                setup_files=setup_files,
+            )
+            errors.extend(sidecar_errors)
+            warnings.extend(sidecar_warnings)
+
+            signal_symbols = [
+                str(item.get("symbol")).upper()
+                for item in signals_payload.get("signals", [])
+                if isinstance(item, dict) and item.get("symbol")
+            ]
+            for report in reports:
+                if not report.exists():
+                    continue
+                symbols = focus_symbols(report.read_text(encoding="utf-8"), args.session)
+                if symbols and signal_symbols and symbols[: len(signal_symbols)] != signal_symbols[: len(symbols)]:
+                    errors.append(
+                        f"{sidecar}: signal symbols {signal_symbols} do not match focus list {symbols} in {report}"
+                    )
+    elif require_sidecar:
+        errors.append(f"missing structured signal sidecar: {sidecar}")
+
     return {
         "status": "fail" if errors else "pass",
         "date": args.date,
         "session": args.session,
         "checked_reports": checked,
+        "checked_artifacts": checked_artifacts or checked,
+        "checked_signals": str(sidecar) if sidecar.exists() else None,
         "stale_data": stale_data,
         "errors": errors,
         "warnings": warnings,
@@ -195,6 +272,7 @@ def main() -> None:
     parser.add_argument("--date", required=True, help="Report date in YYYY-MM-DD")
     parser.add_argument("--session", choices=["pre-market", "post-market"], required=True)
     parser.add_argument("--report", help="Validate a single report path instead of the session defaults")
+    parser.add_argument("--signals", help="Validate a structured signals.json sidecar path")
     parser.add_argument("--repo-root", default=str(Path(__file__).resolve().parents[1]))
     args = parser.parse_args()
 

@@ -1,4 +1,5 @@
 import argparse
+import json
 import sys
 import tempfile
 import unittest
@@ -76,6 +77,55 @@ class ValidateReportTest(unittest.TestCase):
 
         self.assertEqual(payload["status"], "fail")
         self.assertTrue(any("does not exist" in error for error in payload["errors"]))
+
+    def test_default_session_requires_and_validates_signals_sidecar(self):
+        temp, root = self.make_repo(GOOD_REPORT.replace("今日盘前完整报告", "今日盘前执行简版"))
+        with temp:
+            sidecar = {
+                "date": "2026-05-26",
+                "session": "pre-market",
+                "source_report": "report/2026-05-26/exec-brief.md",
+                "signals": [
+                    {
+                        "symbol": "MU",
+                        "setup": "breakout_pullback_continuation.md",
+                        "trigger": {"type": "break_above", "price": 100, "text": "突破 100"},
+                        "invalidation": {"type": "break_below", "price": 95, "text": "跌破 95"},
+                        "risk": {"max_risk_pct": 1},
+                        "status": "planned",
+                    }
+                ],
+            }
+            (root / "report" / "2026-05-26" / "signals.json").write_text(
+                json.dumps(sidecar, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            args = argparse.Namespace(
+                repo_root=str(root),
+                date="2026-05-26",
+                session="pre-market",
+                report=None,
+                signals=None,
+            )
+            payload = validate(args)
+
+        self.assertEqual(payload["status"], "pass")
+        self.assertTrue(payload["checked_signals"].endswith("signals.json"))
+
+    def test_default_session_fails_missing_signals_sidecar(self):
+        temp, root = self.make_repo(GOOD_REPORT)
+        with temp:
+            args = argparse.Namespace(
+                repo_root=str(root),
+                date="2026-05-26",
+                session="pre-market",
+                report=None,
+                signals=None,
+            )
+            payload = validate(args)
+
+        self.assertEqual(payload["status"], "fail")
+        self.assertTrue(any("missing structured signal sidecar" in error for error in payload["errors"]))
 
 
 if __name__ == "__main__":

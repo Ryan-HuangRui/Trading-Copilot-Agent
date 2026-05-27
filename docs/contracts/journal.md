@@ -32,8 +32,14 @@ Recommended fields:
 
 - `regime`: market regime used for setup selection.
 - `trigger`: trigger price or textual trigger condition.
+- `trigger_price`: numeric trigger price when available.
+- `trigger_detail`: structured trigger object from `signals.json` when available.
 - `invalidation`: invalidation price or textual abandonment condition.
+- `invalidation_price`: numeric invalidation price when available.
+- `invalidation_detail`: structured invalidation object from `signals.json` when available.
 - `risk_r`: planned risk in R units when available.
+- `risk`: textual risk limit.
+- `risk_detail`: structured risk object from `signals.json` when available.
 - `notes`: concise context.
 
 Example:
@@ -87,6 +93,8 @@ python3 script/trading_copilot.py extract-report-signals --date 2026-05-22 --ses
 
 The extractor records at most 3 focused candidates by default. It uses a stable `signal_id`, so rerunning the same extraction skips duplicate records in `signals.jsonl`.
 
+The extractor prefers `report/<DATE>/signals.json` and only falls back to Markdown parsing when the sidecar is absent. New production reports should generate both Markdown and `signals.json`.
+
 Use the outcome backfill after the completed daily snapshot is available:
 
 ```bash
@@ -94,6 +102,19 @@ python3 script/trading_copilot.py backfill-signal-outcomes --date 2026-05-26 --a
 ```
 
 Backfill reads `runtime/journal/signals.jsonl` and `report/<DATE>/daily-snapshot.json`, then appends computed records to `runtime/journal/outcomes.jsonl`. For pre-market signals, the target date is the signal date. For post-market signals, the target date is the next regular trading day. Daily bars cannot determine intraday order, so a signal that touches both trigger and invalidation is recorded as `triggered_and_invalidated`.
+
+Use daily and weekly review workflows after outcome backfill:
+
+```bash
+python3 script/trading_copilot.py daily-self-review --date 2026-05-26 --append
+python3 script/trading_copilot.py weekly-review --week 2026-W22 --append
+```
+
+Use monitor extraction only for observation records:
+
+```bash
+python3 script/trading_copilot.py extract-monitor-signals --append
+```
 
 Use the lower-level append helper for manual entries:
 

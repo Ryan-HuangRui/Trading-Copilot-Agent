@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from journal_append import append_jsonl, journal_path
+from signal_artifacts import default_signals_path, normalize_sidecar, read_json
 
 
 REPORT_FILES = {
@@ -52,6 +53,13 @@ def report_path(repo_root: Path, report_date: str, session: str, explicit_report
         path = Path(explicit_report)
         return path if path.is_absolute() else repo_root / path
     return repo_root / "report" / report_date / REPORT_FILES[session]
+
+
+def signals_path(repo_root: Path, report_date: str, explicit_signals: str | None) -> Path:
+    if explicit_signals:
+        path = Path(explicit_signals)
+        return path if path.is_absolute() else repo_root / path
+    return default_signals_path(repo_root, report_date)
 
 
 def split_symbol_sections(markdown: str) -> dict[str, str]:
@@ -256,7 +264,7 @@ def existing_signal_ids(path: Path) -> set[str]:
     return ids
 
 
-def validate_report(repo_root: Path, date: str, session: str, report: Path | None) -> dict[str, Any]:
+def validate_report(repo_root: Path, date: str, session: str, report: Path | None, signals: Path | None) -> dict[str, Any]:
     command = [
         sys.executable,
         "script/validate_report.py",
@@ -267,6 +275,8 @@ def validate_report(repo_root: Path, date: str, session: str, report: Path | Non
     ]
     if report:
         command.extend(["--report", str(report)])
+    if signals:
+        command.extend(["--signals", str(signals)])
     proc = subprocess.run(command, cwd=repo_root, check=False, text=True, capture_output=True)
     try:
         payload = json.loads(proc.stdout)
@@ -280,17 +290,29 @@ def validate_report(repo_root: Path, date: str, session: str, report: Path | Non
 def extract(args: argparse.Namespace) -> dict[str, Any]:
     repo_root = Path(args.repo_root).resolve()
     report = report_path(repo_root, args.date, args.session, args.report)
+    sidecar = signals_path(repo_root, args.date, args.signals)
     if args.require_validation:
-        validate_report(repo_root, args.date, args.session, report if args.report else None)
-    if not report.exists():
-        raise FileNotFoundError(f"missing report file: {report}")
+        validate_report(repo_root, args.date, args.session, report if args.report else None, sidecar if args.signals else None)
 
-    markdown = report.read_text(encoding="utf-8")
-    source_report = str(report.relative_to(repo_root)) if report.is_relative_to(repo_root) else str(report)
-    if args.session == "pre-market":
-        signals = extract_pre_market(markdown, args.date, source_report, args.max_signals)
+    source_report = str(report.relative_to(repo_root)) if report.exists() and report.is_relative_to(repo_root) else str(report)
+    source_signals = None
+    if sidecar.exists():
+        payload = read_json(sidecar)
+        if payload.get("date") != args.date:
+            raise ValueError(f"{sidecar}: date must be {args.date}")
+        if payload.get("session") != args.session:
+            raise ValueError(f"{sidecar}: session must be {args.session}")
+        extracted_signals = normalize_sidecar(payload, sidecar, repo_root)[: args.max_signals]
+        signals = extracted_signals
+        source_signals = str(sidecar.relative_to(repo_root)) if sidecar.is_relative_to(repo_root) else str(sidecar)
     else:
-        signals = extract_post_market(markdown, args.date, source_report, args.max_signals)
+        if not report.exists():
+            raise FileNotFoundError(f"missing report file: {report}")
+        markdown = report.read_text(encoding="utf-8")
+        if args.session == "pre-market":
+            signals = extract_pre_market(markdown, args.date, source_report, args.max_signals)
+        else:
+            signals = extract_post_market(markdown, args.date, source_report, args.max_signals)
 
     appended = []
     skipped_duplicates = []
@@ -311,6 +333,7 @@ def extract(args: argparse.Namespace) -> dict[str, Any]:
         "date": args.date,
         "session": args.session,
         "source_report": source_report,
+        "source_signals": source_signals,
         "signals": signals,
         "append": args.append,
         "journal_path": str(journal_file) if journal_file else None,
@@ -324,6 +347,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--date", required=True)
     parser.add_argument("--session", choices=["pre-market", "post-market"], required=True)
     parser.add_argument("--report")
+    parser.add_argument("--signals", help="Structured signals.json sidecar path. Defaults to report/<DATE>/signals.json.")
     parser.add_argument("--max-signals", type=int, default=3)
     parser.add_argument("--append", action="store_true", help="Append extracted signals to runtime journal JSONL.")
     parser.add_argument("--journal-dir", default="runtime/journal")

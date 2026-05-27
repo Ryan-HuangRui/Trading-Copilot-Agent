@@ -59,6 +59,7 @@ Agent report outputs:
 
 - `report/<PRE_MARKET_DATE>/exec-brief.md`
 - `report/<PRE_MARKET_DATE>/pre-market.md`
+- `report/<PRE_MARKET_DATE>/signals.json`
 
 Skip behavior:
 
@@ -92,6 +93,7 @@ Deterministic script outputs:
 Agent report output:
 
 - `report/<SNAPSHOT_DATE>/post-market.md`
+- `report/<SNAPSHOT_DATE>/signals.json`
 
 Skip behavior:
 
@@ -121,6 +123,7 @@ Deterministic output:
 Agent summary output:
 
 - A concise monitor brief in the response or a user-requested report file.
+- Optional journal extraction through `extract-monitor-signals`.
 
 Output rules:
 
@@ -130,7 +133,7 @@ Output rules:
 
 ## validate-report
 
-Purpose: enforce quality gates on generated markdown reports before delivery or Longbridge watchlist sync.
+Purpose: enforce quality gates on generated report artifacts before delivery or Longbridge watchlist sync.
 
 Canonical commands:
 
@@ -142,6 +145,7 @@ python3 script/trading_copilot.py validate-report --session post-market --date <
 Inputs:
 
 - Generated markdown reports under `report/<DATE>/`.
+- Structured `report/<DATE>/signals.json` sidecar when validating a full session.
 - `knowledge/refined/setups/` for setup filename validation.
 - `pre-market-context.json` or `daily-snapshot.json` when available for stale-data checks.
 
@@ -151,11 +155,14 @@ Output:
 - `validation.status` is `pass` or `fail`.
 - `validation.errors` contains blocking quality issues.
 - `validation.warnings` contains non-blocking wording or disclosure concerns.
+- `validation.checked_artifacts` includes markdown reports and `signals.json` when present.
 
 Required behavior:
 
 - A failed validation must stop delivery and Longbridge sync.
 - `sync-longbridge-watchlist --require-validation` must run this gate before extracting and syncing report focus symbols.
+- Full-session validation requires `report/<DATE>/signals.json`. Single-report validation through `--report` keeps sidecar validation optional for ad-hoc checks.
+- Markdown focus symbols must match the symbols in `signals.json`.
 
 ## extract-report-signals
 
@@ -170,9 +177,11 @@ python3 script/trading_copilot.py extract-report-signals --session post-market -
 
 Inputs:
 
-- Pre-market default: `report/<DATE>/exec-brief.md`.
-- Post-market default: `report/<DATE>/post-market.md`.
+- Preferred structured input: `report/<DATE>/signals.json`.
+- Markdown fallback for pre-market: `report/<DATE>/exec-brief.md`.
+- Markdown fallback for post-market: `report/<DATE>/post-market.md`.
 - Optional `--report` path for ad-hoc extraction.
+- Optional `--signals` path for ad-hoc structured extraction.
 
 Output:
 
@@ -181,6 +190,7 @@ Output:
 
 Required behavior:
 
+- Prefer structured `signals.json` over Markdown parsing.
 - Extract at most 3 focused candidates by default.
 - Prefer explicit focus lists such as `今日最多3个重点标的` and `明日观察清单`.
 - Include `signal_id`, `symbol`, `setup`, `setup_files`, `trigger`, `invalidation`, `risk`, `status`, and `source_report` when available.
@@ -243,6 +253,83 @@ Required sections:
 Boundary:
 
 - Do not analyze current/recent prices without first preparing or reading real market data.
+
+## daily-self-review
+
+Purpose: generate a daily self-review after post-market validation and outcome backfill.
+
+Canonical command:
+
+```bash
+python3 script/trading_copilot.py daily-self-review --date <SNAPSHOT_DATE> --append
+```
+
+Inputs:
+
+- `runtime/journal/signals.jsonl`
+- `runtime/journal/outcomes.jsonl`
+- `runtime/journal/trades.jsonl`
+- Optional `report/<DATE>/post-market.md`
+
+Output:
+
+- `report/<DATE>/self-review.md`
+- With `--append`, a deduplicated daily review record in `runtime/journal/reviews.jsonl`.
+
+Required behavior:
+
+- Treat signal outcomes as objective price-touch observations, not true trade results.
+- Use `trades.jsonl` only for actual execution review.
+- Surface `not_evaluable`, `no_data`, and `triggered_and_invalidated` counts as follow-up items.
+
+## weekly-review
+
+Purpose: generate a weekly process review from the journal.
+
+Canonical command:
+
+```bash
+python3 script/trading_copilot.py weekly-review --week <YYYY-Www> --append
+```
+
+Inputs:
+
+- `runtime/journal/signals.jsonl`
+- `runtime/journal/outcomes.jsonl`
+- `runtime/journal/trades.jsonl`
+
+Output:
+
+- `report/weekly/<YYYY-Www>.md`
+- With `--append`, a deduplicated weekly review record in `runtime/journal/reviews.jsonl`.
+
+Required behavior:
+
+- Summarize planned signals, outcome distribution, setup distribution, symbol distribution, and trade records.
+- Do not convert outcome touch statistics into win rate unless trades contain actual `result_r`.
+
+## extract-monitor-signals
+
+Purpose: append actionable monitor observations to the journal.
+
+Canonical command:
+
+```bash
+python3 script/trading_copilot.py extract-monitor-signals --append
+```
+
+Inputs:
+
+- `report/latest-monitor.json`
+
+Output:
+
+- With `--append`, writes observed monitor signals to `runtime/journal/signals.jsonl`.
+
+Required behavior:
+
+- Append only actionable observation statuses such as `可执行` and `临近触发`.
+- Treat monitor entries as observations, not trade instructions.
 
 ## research-note
 

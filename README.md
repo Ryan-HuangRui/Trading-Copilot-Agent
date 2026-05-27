@@ -43,12 +43,20 @@ python3 script/trading_copilot.py trading-day-check --date 2026-05-06
 python3 script/trading_copilot.py pre-market-plan --watchlist config/watchlist.json --skip-non-trading-day
 python3 script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day
 python3 script/trading_copilot.py monitor-brief --state config/monitor_state.json --interval 5min
+python3 script/trading_copilot.py validate-report --session pre-market --date <DATE>
+python3 script/trading_copilot.py extract-report-signals --session pre-market --date <DATE> --require-validation --append
+python3 script/trading_copilot.py backfill-signal-outcomes --date <DATE> --append
+python3 script/trading_copilot.py daily-self-review --date <DATE> --append
+python3 script/trading_copilot.py weekly-review --week <YYYY-Www> --append
+python3 script/trading_copilot.py extract-monitor-signals --append
 ```
 
 契约文档：
 
 - `docs/contracts/workflows.md`
 - `docs/contracts/data-contracts.md`
+- `docs/contracts/journal.md`
+- `docs/cc-connect-scheduler.md`
 - `docs/workflows/`
 
 ## 每日报告流程
@@ -61,13 +69,24 @@ python3 script/trading_copilot.py monitor-brief --state config/monitor_state.jso
   - 并把动态候选与固定 `config/watchlist.json` 去重合并进 `daily-snapshot.json`
 - 盘后复盘：Agent 读取 `agent/post_market_analysis_prompt.md` + `knowledge/refined/` + snapshot，产出：
   - `report/YYYY-MM-DD/post-market.md`
+  - `report/YYYY-MM-DD/signals.json`
 - 次日盘前上下文：`script/prepare_daily_context.py` 读取上一交易日 snapshot，生成：
   - `report/YYYY-MM-DD/pre-market-context.json`
 - 次日盘前分析：Agent 读取 `agent/daily_analysis_prompt.md` + `knowledge/refined/` + pre-market context，产出：
   - `report/YYYY-MM-DD/exec-brief.md`
   - `report/YYYY-MM-DD/pre-market.md`
+  - `report/YYYY-MM-DD/signals.json`
+- 报告校验：`python3 script/trading_copilot.py validate-report --session pre-market --date YYYY-MM-DD`
+- 信号入 journal：`python3 script/trading_copilot.py extract-report-signals --session pre-market --date YYYY-MM-DD --require-validation --append`
 - 分析过程由 Agent 完成，脚本只做交易日判断、数据准备、指标摘要与限频控制
 - 详细 runbook：`docs/daily-report-workflow.md`
+
+## 复盘闭环
+- 盘后复盘：Agent 生成 `post-market.md` 与 `signals.json` 后，先跑 `validate-report`
+- outcome 回填：`python3 script/trading_copilot.py backfill-signal-outcomes --date YYYY-MM-DD --append`
+- 日度自我复盘：`python3 script/trading_copilot.py daily-self-review --date YYYY-MM-DD --append`
+- 周度复盘：`python3 script/trading_copilot.py weekly-review --week YYYY-Www --append`
+- journal 默认写入 ignored runtime 路径：`runtime/journal/signals.jsonl`、`outcomes.jsonl`、`trades.jsonl`、`reviews.jsonl`
 
 ## 实时盯盘
 - 支持多标的 5m 监控，默认只输出做多路径（可配置）
@@ -75,6 +94,7 @@ python3 script/trading_copilot.py monitor-brief --state config/monitor_state.jso
 - 持仓：输出 R 值与风险动作（减仓/止损上移/退出）
 - 执行脚本：`python3 script/monitor_scan.py --state config/monitor_state.json --interval 5min`
 - 输出文件：`report/latest-monitor.json`
+- 可选写入 journal：`python3 script/trading_copilot.py extract-monitor-signals --append`
 
 ## 运行示例
 

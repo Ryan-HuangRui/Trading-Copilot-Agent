@@ -48,6 +48,8 @@
    - report/<PRE_MARKET_DATE>/exec-brief.md
 2) 完整报告（用于附件发送）
    - report/<PRE_MARKET_DATE>/pre-market.md
+3) 机器可读信号 sidecar（用于校验、journal、复盘）
+   - report/<PRE_MARKET_DATE>/signals.json
 
 【精简执行版模板】
 # 今日盘前执行简版（<PRE_MARKET_DATE>）
@@ -73,7 +75,44 @@
 沿用当前完整版结构输出到 report/<PRE_MARKET_DATE>/pre-market.md，并对每个标的增加一行：
 - 参考 setup：<setup-file.md>
 
+【signals.json 模板】
+必须与精简执行版里的「今日最多3个重点标的」一致；若没有可执行候选，`signals` 输出空数组或 `status=no_trade` 的观察记录。
+
+```json
+{
+  "date": "<PRE_MARKET_DATE>",
+  "session": "pre-market",
+  "source_report": "report/<PRE_MARKET_DATE>/exec-brief.md",
+  "signals": [
+    {
+      "symbol": "MU",
+      "setup": "breakout_pullback_continuation.md",
+      "direction": "long",
+      "regime": "trend",
+      "trigger": {
+        "type": "break_above",
+        "price": 100.0,
+        "text": "突破 100 后回踩站稳"
+      },
+      "invalidation": {
+        "type": "break_below",
+        "price": 95.0,
+        "text": "跌破 95"
+      },
+      "risk": {
+        "max_risk_pct": 1.0,
+        "text": "单笔风险 <=1%，止损过宽则放弃"
+      },
+      "status": "planned",
+      "notes": "只做确认，不追第一波"
+    }
+  ]
+}
+```
+
 【质量门槛】
 - 未标注 setup 文件名 -> 该标的分析视为无效
 - 未给失效位或风险约束 -> 该标的分析视为无效
+- 可执行候选未写入 signals.json，或 signals.json 与 Markdown 重点标的不一致 -> 视为无效
+- signals.json 中 actionable signal 必须有结构化 trigger.price / invalidation.price / risk
 - regime 无法识别时，默认 NO TRADE

@@ -67,6 +67,48 @@ class ExtractReportSignalsTest(unittest.TestCase):
         self.assertIn("265.21", signals[0]["invalidation"])
         self.assertEqual(signals[0]["risk"], "<=1%")
 
+    def test_cli_prefers_structured_sidecar(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            report_dir = root / "report" / "2026-05-26"
+            report_dir.mkdir(parents=True)
+            (report_dir / "exec-brief.md").write_text(PRE_MARKET_BRIEF, encoding="utf-8")
+            sidecar = {
+                "date": "2026-05-26",
+                "session": "pre-market",
+                "source_report": "report/2026-05-26/exec-brief.md",
+                "signals": [
+                    {
+                        "symbol": "MU",
+                        "setup": "breakout_pullback_continuation.md",
+                        "trigger": {"type": "break_above", "price": 100, "text": "突破 100"},
+                        "invalidation": {"type": "break_below", "price": 95, "text": "跌破 95"},
+                        "risk": {"max_risk_pct": 1},
+                        "status": "planned",
+                    }
+                ],
+            }
+            (report_dir / "signals.json").write_text(json.dumps(sidecar, ensure_ascii=False), encoding="utf-8")
+
+            command = [
+                sys.executable,
+                str(ROOT / "script" / "extract_report_signals.py"),
+                "--repo-root",
+                str(root),
+                "--date",
+                "2026-05-26",
+                "--session",
+                "pre-market",
+            ]
+            proc = subprocess.run(command, check=False, text=True, capture_output=True)
+
+            self.assertEqual(proc.returncode, 0, msg=proc.stderr or proc.stdout)
+            payload = json.loads(proc.stdout)
+            self.assertEqual([signal["symbol"] for signal in payload["signals"]], ["MU"])
+            self.assertEqual(payload["signals"][0]["trigger_price"], 100.0)
+            self.assertEqual(payload["signals"][0]["invalidation_price"], 95.0)
+            self.assertEqual(payload["source_signals"], "report/2026-05-26/signals.json")
+
     def test_cli_append_deduplicates_signal_ids(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

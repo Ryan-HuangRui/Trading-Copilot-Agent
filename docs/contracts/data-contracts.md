@@ -94,6 +94,48 @@ Consumer rules:
 - If `snapshot.stale_data` is true, surface it in the report.
 - If the source snapshot is missing, the workflow should fail before report writing.
 
+## `report/<DATE>/signals.json`
+
+Producer:
+
+- Codex report generation using `agent/daily_analysis_prompt.md` or `agent/post_market_analysis_prompt.md`.
+
+Consumers:
+
+```bash
+python3 script/trading_copilot.py validate-report --session pre-market --date <DATE>
+python3 script/trading_copilot.py extract-report-signals --session pre-market --date <DATE> --require-validation --append
+python3 script/trading_copilot.py validate-report --session post-market --date <DATE>
+python3 script/trading_copilot.py extract-report-signals --session post-market --date <DATE> --require-validation --append
+```
+
+Expected top-level fields:
+
+- `date`: report date in `YYYY-MM-DD`.
+- `session`: `pre-market` or `post-market`.
+- `source_report`: Markdown report path that the sidecar represents.
+- `signals`: at most 3 focused signal objects.
+
+Expected signal fields:
+
+- `symbol`: ticker symbol.
+- `setup`: refined setup filename or `NO VALID SETUP`.
+- `direction`: usually `long` for the current workflow.
+- `regime`: trend/range/transition/Barb Wire label when available.
+- `trigger`: object with `type`, numeric `price`, and human-readable `text`.
+- `invalidation`: object with `type`, numeric `price`, and human-readable `text`.
+- `risk`: object with `max_risk_pct` and optional `text`.
+- `status`: `planned`, `observed`, or `no_trade`.
+- `notes`: concise context.
+
+Consumer rules:
+
+- Markdown remains the human-facing artifact; `signals.json` is the machine-facing artifact.
+- Full-session validation requires this file.
+- `extract-report-signals` prefers this file and falls back to Markdown only when it is absent.
+- Actionable signals must include structured trigger, invalidation, and risk fields.
+- `signals.json` must match the report focus list.
+
 ## `report/latest-monitor.json`
 
 Producer:

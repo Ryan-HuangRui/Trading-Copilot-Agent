@@ -74,6 +74,22 @@ def first_price(pattern: re.Pattern[str], text: str | None) -> float | None:
     return float(numbers[0]) if numbers else None
 
 
+def signal_price(signal: dict[str, Any], price_field: str, detail_field: str, text_field: str, pattern: re.Pattern[str]) -> float | None:
+    value = signal.get(price_field)
+    if value is not None:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            pass
+    detail = signal.get(detail_field)
+    if isinstance(detail, dict) and detail.get("price") is not None:
+        try:
+            return float(detail["price"])
+        except (TypeError, ValueError):
+            pass
+    return first_price(pattern, signal.get(text_field))
+
+
 def planned_target_date(signal: dict[str, Any]) -> str | None:
     date_text = signal.get("date")
     if not isinstance(date_text, str):
@@ -125,8 +141,8 @@ def evaluate_signal(signal: dict[str, Any], review_date: str, symbols: dict[str,
     if not bar:
         return {**base, "outcome": "no_data", "reason": "latest bar missing from snapshot"}
 
-    trigger_price = first_price(TRIGGER_RE, signal.get("trigger"))
-    invalidation_price = first_price(INVALID_RE, signal.get("invalidation"))
+    trigger_price = signal_price(signal, "trigger_price", "trigger_detail", "trigger", TRIGGER_RE)
+    invalidation_price = signal_price(signal, "invalidation_price", "invalidation_detail", "invalidation", INVALID_RE)
     high = to_float(bar.get("high"))
     low = to_float(bar.get("low"))
     open_price = to_float(bar.get("open"))

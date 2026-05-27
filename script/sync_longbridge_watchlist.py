@@ -11,6 +11,8 @@ import sys
 from pathlib import Path
 from typing import Iterable
 
+from signal_artifacts import default_signals_path, read_json
+
 
 DEFAULT_GROUPS = {
     "pre-market": "今日关注",
@@ -63,6 +65,13 @@ def load_env(repo_root: Path) -> None:
 
 def report_path(repo_root: Path, report_date: str, session: str) -> Path:
     return repo_root / "report" / report_date / REPORT_FILES[session]
+
+
+def signals_path(repo_root: Path, report_date: str, explicit_signals: str | None) -> Path:
+    if explicit_signals:
+        path = Path(explicit_signals)
+        return path if path.is_absolute() else repo_root / path
+    return default_signals_path(repo_root, report_date)
 
 
 def normalize_symbol(symbol: str, default_market: str) -> str:
@@ -143,14 +152,37 @@ def extract_focus_symbols(markdown: str, session: str) -> list[str]:
     return ordered_unique(symbols_from_candidate_headings(markdown))
 
 
+def extract_symbols_from_sidecar(path: Path, session: str) -> list[str]:
+    payload = read_json(path)
+    if payload.get("session") != session:
+        raise ValueError(f"{path}: session must be {session}")
+    signals = payload.get("signals")
+    if not isinstance(signals, list):
+        raise ValueError(f"{path}: signals must be an array")
+    symbols = []
+    for signal in signals:
+        if not isinstance(signal, dict):
+            continue
+        if signal.get("status") == "no_trade":
+            continue
+        symbol = signal.get("symbol")
+        if isinstance(symbol, str):
+            symbols.append(symbol.upper())
+    return ordered_unique(symbols)
+
+
 def load_symbols(args: argparse.Namespace, repo_root: Path) -> list[str]:
     if args.symbol:
         raw_symbols = args.symbol
     else:
-        path = Path(args.report) if args.report else report_path(repo_root, args.date, args.session)
-        if not path.exists():
-            raise FileNotFoundError(f"Missing report file: {path}")
-        raw_symbols = extract_focus_symbols(path.read_text(encoding="utf-8"), args.session)
+        sidecar = signals_path(repo_root, args.date, args.signals) if args.date or args.signals else None
+        if sidecar and sidecar.exists() and not args.report:
+            raw_symbols = extract_symbols_from_sidecar(sidecar, args.session)
+        else:
+            path = Path(args.report) if args.report else report_path(repo_root, args.date, args.session)
+            if not path.exists():
+                raise FileNotFoundError(f"Missing report file: {path}")
+            raw_symbols = extract_focus_symbols(path.read_text(encoding="utf-8"), args.session)
 
     symbols = [normalize_symbol(symbol, args.default_market) for symbol in raw_symbols]
     symbols = ordered_unique(symbols)
@@ -406,6 +438,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--session", choices=["pre-market", "post-market"], required=True)
     parser.add_argument("--date", help="Report date in YYYY-MM-DD. Required unless --report or --symbol is used.")
     parser.add_argument("--report", help="Explicit report Markdown path.")
+    parser.add_argument("--signals", help="Structured signals.json path. Defaults to report/<DATE>/signals.json.")
     parser.add_argument("--group-name", help="Longbridge watchlist group name. Defaults by session or env var.")
     parser.add_argument("--default-market", default="US", help="Suffix for bare tickers, e.g. AAPL -> AAPL.US.")
     parser.add_argument("--max-symbols", type=int, default=3)

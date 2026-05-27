@@ -1,0 +1,198 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+from collections import Counter
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from journal_append import append_jsonl, journal_path
+from journal_review import planned_target_date, read_jsonl, summarize
+
+
+def read_text(path: Path) -> str:
+    return path.read_text(encoding="utf-8") if path.exists() else ""
+
+
+def review_id(date: str) -> str:
+    return f"daily:{date}"
+
+
+def existing_review_ids(path: Path) -> set[str]:
+    ids = set()
+    for record in read_jsonl(path):
+        value = record.get("review_id")
+        if isinstance(value, str):
+            ids.add(value)
+    return ids
+
+
+def report_path(repo_root: Path, date: str) -> Path:
+    return repo_root / "report" / date / "self-review.md"
+
+
+def build_markdown(
+    *,
+    date: str,
+    outcomes: list[dict[str, Any]],
+    signals: list[dict[str, Any]],
+    trades: list[dict[str, Any]],
+    post_market_exists: bool,
+) -> str:
+    outcome_summary = summarize(outcomes)
+    by_status = Counter(str(signal.get("status") or "unknown") for signal in signals)
+    by_trade = Counter(str(trade.get("status") or "unknown") for trade in trades)
+    not_evaluable = [item for item in outcomes if item.get("outcome") in {"not_evaluable", "no_data"}]
+    ambiguous = [item for item in outcomes if item.get("outcome") == "triggered_and_invalidated"]
+
+    lines = [
+        f"# 日度自我复盘（{date}）",
+        "",
+        "## 数据基础",
+        f"- 盘后报告：{'已生成' if post_market_exists else '缺失'}",
+        f"- 计划/观察信号数：{len(signals)}",
+        f"- 已回填 outcome 数：{len(outcomes)}",
+        f"- 人工交易记录数：{len(trades)}",
+        "",
+        "## 信号结果",
+        f"- outcome 汇总：{json.dumps(outcome_summary['by_outcome'], ensure_ascii=False, sort_keys=True)}",
+        f"- 信号状态：{json.dumps(dict(by_status), ensure_ascii=False, sort_keys=True)}",
+        f"- 交易记录状态：{json.dumps(dict(by_trade), ensure_ascii=False, sort_keys=True)}",
+        "",
+        "## 需要人工复核",
+    ]
+    if ambiguous:
+        lines.append(f"- {len(ambiguous)} 个信号日线同时触及触发和失效，无法判断盘中先后。")
+    if not_evaluable:
+        symbols = ", ".join(sorted({str(item.get("symbol")) for item in not_evaluable if item.get("symbol")}))
+        lines.append(f"- {len(not_evaluable)} 个信号不可评估或缺数据：{symbols or '无 symbol'}。")
+    if not ambiguous and not not_evaluable:
+        lines.append("- 暂无必须人工复核的 outcome。")
+
+    lines.extend(
+        [
+            "",
+            "## Setup 反馈",
+        ]
+    )
+    if outcome_summary["by_setup"]:
+        for setup, counts in outcome_summary["by_setup"].items():
+            lines.append(f"- {setup}：{json.dumps(counts, ensure_ascii=False, sort_keys=True)}")
+    else:
+        lines.append("- 暂无 setup outcome。")
+
+    lines.extend(
+        [
+            "",
+            "## 今日纪律结论",
+            "- 不把触发记录等同于真实入场结果；真实执行只从 trades.jsonl 判断。",
+            "- 对不可评估信号补充结构化 trigger/invalidation 价格，减少后续回填噪音。",
+            "- 若 outcome 显示触发后又失效，次日降低同类追突破场景的执行优先级。",
+        ]
+    )
+    return "\n".join(lines) + "\n"
+
+
+def build_review_record(date: str, markdown_path: Path, outcomes: list[dict[str, Any]]) -> dict[str, Any]:
+    summary = summarize(outcomes)
+    return {
+        "kind": "review",
+        "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "review_id": review_id(date),
+        "date": date,
+        "scope": "daily",
+        "summary": f"outcomes={summary['by_outcome']}",
+        "outcome": summary["by_outcome"],
+        "source_report": str(markdown_path),
+    }
+
+
+def run(args: argparse.Namespace) -> dict[str, Any]:
+    repo_root = Path(args.repo_root).resolve()
+    signals_file = journal_path(repo_root, args.journal_dir, "signal")
+    outcomes_file = journal_path(repo_root, args.journal_dir, "outcome")
+    trades_file = journal_path(repo_root, args.journal_dir, "trade")
+    reviews_file = journal_path(repo_root, args.journal_dir, "review")
+
+    signals = [
+        record
+        for record in read_jsonl(signals_file)
+        if record.get("kind") == "signal" and planned_target_date(record) == args.date
+    ]
+    outcomes = [
+        record
+        for record in read_jsonl(outcomes_file)
+        if record.get("kind") == "outcome" and record.get("review_date") == args.date
+    ]
+    trades = [
+        record
+        for record in read_jsonl(trades_file)
+        if record.get("kind") == "trade" and record.get("date") == args.date
+    ]
+
+    post_market = repo_root / "report" / args.date / "post-market.md"
+    output = Path(args.output) if args.output else report_path(repo_root, args.date)
+    if not output.is_absolute():
+        output = repo_root / output
+    markdown = build_markdown(
+        date=args.date,
+        outcomes=outcomes,
+        signals=signals,
+        trades=trades,
+        post_market_exists=post_market.exists(),
+    )
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(markdown, encoding="utf-8")
+
+    appended = []
+    skipped_duplicates = []
+    if args.append:
+        rid = review_id(args.date)
+        existing = existing_review_ids(reviews_file)
+        if rid in existing:
+            skipped_duplicates.append(rid)
+        else:
+            append_jsonl(reviews_file, build_review_record(args.date, output, outcomes))
+            appended.append(rid)
+
+    return {
+        "status": "success",
+        "date": args.date,
+        "output": str(output),
+        "signals_path": str(signals_file),
+        "outcomes_path": str(outcomes_file),
+        "trades_path": str(trades_file),
+        "reviews_path": str(reviews_file) if args.append else None,
+        "summary": summarize(outcomes),
+        "signals_count": len(signals),
+        "trades_count": len(trades),
+        "append": args.append,
+        "appended": appended,
+        "skipped_duplicates": skipped_duplicates,
+    }
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Generate a daily Trading Copilot self-review")
+    parser.add_argument("--date", required=True)
+    parser.add_argument("--append", action="store_true")
+    parser.add_argument("--output")
+    parser.add_argument("--journal-dir", default="runtime/journal")
+    parser.add_argument("--repo-root", default=str(Path(__file__).resolve().parents[1]))
+    return parser
+
+
+def main() -> None:
+    args = build_parser().parse_args()
+    try:
+        payload = run(args)
+    except Exception as exc:
+        print(json.dumps({"status": "failed", "reason": str(exc)}, ensure_ascii=False, indent=2))
+        raise SystemExit(1)
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+if __name__ == "__main__":
+    main()

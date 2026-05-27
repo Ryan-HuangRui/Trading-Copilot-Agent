@@ -235,6 +235,8 @@ def validate_report_command(args: argparse.Namespace) -> List[str]:
     ]
     if getattr(args, "report", None):
         command.extend(["--report", args.report])
+    if getattr(args, "signals", None):
+        command.extend(["--signals", args.signals])
     return command
 
 
@@ -266,6 +268,8 @@ def run_extract_report_signals(args: argparse.Namespace) -> None:
     ]
     if args.report:
         command.extend(["--report", args.report])
+    if args.signals:
+        command.extend(["--signals", args.signals])
     if args.append:
         command.append("--append")
     if args.require_validation:
@@ -315,6 +319,92 @@ def run_backfill_signal_outcomes(args: argparse.Namespace) -> None:
     emit(response)
 
 
+def run_daily_self_review(args: argparse.Namespace) -> None:
+    command = [
+        "script/daily_self_review.py",
+        "--date",
+        args.date,
+        "--journal-dir",
+        args.journal_dir,
+    ]
+    if args.output:
+        command.extend(["--output", args.output])
+    if args.append:
+        command.append("--append")
+
+    proc = run_child(command)
+    stdout = parse_json_output(proc.stdout)
+    if proc.returncode != 0:
+        emit(failed_response("daily-self-review", command, proc), 1)
+
+    response = base_response("daily-self-review", command, stdout)
+    response["date"] = args.date
+    response["artifacts"] = [stdout["output"]] if stdout and stdout.get("output") else []
+    response["summary"] = (stdout or {}).get("summary")
+    response["appended"] = (stdout or {}).get("appended", [])
+    response["skipped_duplicates"] = (stdout or {}).get("skipped_duplicates", [])
+    emit(response)
+
+
+def run_weekly_review(args: argparse.Namespace) -> None:
+    command = [
+        "script/weekly_review.py",
+        "--week",
+        args.week,
+        "--journal-dir",
+        args.journal_dir,
+    ]
+    if args.output:
+        command.extend(["--output", args.output])
+    if args.append:
+        command.append("--append")
+
+    proc = run_child(command)
+    stdout = parse_json_output(proc.stdout)
+    if proc.returncode != 0:
+        emit(failed_response("weekly-review", command, proc), 1)
+
+    response = base_response("weekly-review", command, stdout)
+    response["date"] = (stdout or {}).get("date")
+    response["week"] = args.week
+    response["artifacts"] = [stdout["output"]] if stdout and stdout.get("output") else []
+    response["summary"] = (stdout or {}).get("summary")
+    response["appended"] = (stdout or {}).get("appended", [])
+    response["skipped_duplicates"] = (stdout or {}).get("skipped_duplicates", [])
+    emit(response)
+
+
+def run_extract_monitor_signals(args: argparse.Namespace) -> None:
+    command = [
+        "script/extract_monitor_signals.py",
+        "--monitor",
+        args.monitor,
+        "--max-signals",
+        str(args.max_signals),
+        "--journal-dir",
+        args.journal_dir,
+        "--timezone",
+        args.timezone,
+    ]
+    if args.date:
+        command.extend(["--date", args.date])
+    if args.append:
+        command.append("--append")
+
+    proc = run_child(command)
+    stdout = parse_json_output(proc.stdout)
+    if proc.returncode != 0:
+        emit(failed_response("extract-monitor-signals", command, proc), 1)
+
+    response = base_response("extract-monitor-signals", command, stdout)
+    response["date"] = (stdout or {}).get("date") or args.date
+    response["artifacts"] = [stdout["journal_path"]] if stdout and stdout.get("journal_path") else []
+    response["signals"] = (stdout or {}).get("signals", [])
+    response["appended"] = (stdout or {}).get("appended", [])
+    response["skipped_duplicates"] = (stdout or {}).get("skipped_duplicates", [])
+    emit(response)
+
+
 def run_sync_longbridge_watchlist(args: argparse.Namespace) -> None:
     validation = None
     if args.require_validation:
@@ -354,6 +444,8 @@ def run_sync_longbridge_watchlist(args: argparse.Namespace) -> None:
         command.extend(["--date", args.date])
     if args.report:
         command.extend(["--report", args.report])
+    if args.signals:
+        command.extend(["--signals", args.signals])
     if args.group_name:
         command.extend(["--group-name", args.group_name])
     if args.default_market:
@@ -428,12 +520,14 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument("--date", required=True)
     validate.add_argument("--session", choices=["pre-market", "post-market"], required=True)
     validate.add_argument("--report")
+    validate.add_argument("--signals")
     validate.set_defaults(func=run_validate_report)
 
     signals = sub.add_parser("extract-report-signals", help="Extract focused report candidates into journal signal records")
     signals.add_argument("--date", required=True)
     signals.add_argument("--session", choices=["pre-market", "post-market"], required=True)
     signals.add_argument("--report")
+    signals.add_argument("--signals")
     signals.add_argument("--max-signals", type=int, default=3)
     signals.add_argument("--append", action="store_true")
     signals.add_argument("--journal-dir", default="runtime/journal")
@@ -448,6 +542,29 @@ def build_parser() -> argparse.ArgumentParser:
     outcomes.add_argument("--journal-dir", default="runtime/journal")
     outcomes.set_defaults(func=run_backfill_signal_outcomes)
 
+    daily_review = sub.add_parser("daily-self-review", help="Generate a daily self-review from journal outcomes")
+    daily_review.add_argument("--date", required=True)
+    daily_review.add_argument("--append", action="store_true")
+    daily_review.add_argument("--output")
+    daily_review.add_argument("--journal-dir", default="runtime/journal")
+    daily_review.set_defaults(func=run_daily_self_review)
+
+    weekly_review = sub.add_parser("weekly-review", help="Generate a weekly review from journal outcomes and trades")
+    weekly_review.add_argument("--week", required=True)
+    weekly_review.add_argument("--append", action="store_true")
+    weekly_review.add_argument("--output")
+    weekly_review.add_argument("--journal-dir", default="runtime/journal")
+    weekly_review.set_defaults(func=run_weekly_review)
+
+    monitor_signals = sub.add_parser("extract-monitor-signals", help="Extract monitor scan observations into the journal")
+    monitor_signals.add_argument("--monitor", default="report/latest-monitor.json")
+    monitor_signals.add_argument("--date")
+    monitor_signals.add_argument("--timezone", default="America/New_York")
+    monitor_signals.add_argument("--max-signals", type=int, default=5)
+    monitor_signals.add_argument("--append", action="store_true")
+    monitor_signals.add_argument("--journal-dir", default="runtime/journal")
+    monitor_signals.set_defaults(func=run_extract_monitor_signals)
+
     sync = sub.add_parser(
         "sync-longbridge-watchlist",
         help="Sync extracted daily focus symbols to a Longbridge watchlist group",
@@ -455,6 +572,7 @@ def build_parser() -> argparse.ArgumentParser:
     sync.add_argument("--session", choices=["pre-market", "post-market"], required=True)
     sync.add_argument("--date")
     sync.add_argument("--report")
+    sync.add_argument("--signals")
     sync.add_argument("--group-name")
     sync.add_argument("--default-market", default="US")
     sync.add_argument("--max-symbols", type=int, default=3)

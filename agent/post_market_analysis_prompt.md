@@ -41,6 +41,7 @@
 
 【输出文件（必须生成）】
 - report/<SNAPSHOT_DATE>/post-market.md
+- report/<SNAPSHOT_DATE>/signals.json
 
 【输出模板】
 # 今日盘后复盘（<SNAPSHOT_DATE>）
@@ -75,7 +76,44 @@
 - 今天应避免的行为：
 - 明日执行纪律：
 
+【signals.json 模板】
+必须与 Markdown 中「明日最多3个重点观察标的」和「明日观察清单」一致；它表示明日观察计划，不是交易指令。
+
+```json
+{
+  "date": "<SNAPSHOT_DATE>",
+  "session": "post-market",
+  "source_report": "report/<SNAPSHOT_DATE>/post-market.md",
+  "signals": [
+    {
+      "symbol": "MU",
+      "setup": "breakout_pullback_continuation.md",
+      "direction": "long",
+      "regime": "trend",
+      "trigger": {
+        "type": "break_above",
+        "price": 100.0,
+        "text": "明日突破 100 后回踩站稳"
+      },
+      "invalidation": {
+        "type": "break_below",
+        "price": 95.0,
+        "text": "跌破 95 或开盘跳空后无法收复"
+      },
+      "risk": {
+        "max_risk_pct": 1.0,
+        "text": "单笔风险 <=1%，触发和失效距离过宽则放弃"
+      },
+      "status": "planned",
+      "notes": "仅观察，等待明日确认"
+    }
+  ]
+}
+```
+
 【质量门槛】
 - 未标注 setup 文件名或明确 `NO VALID SETUP` -> 该标的复盘视为无效
 - 未给失效/放弃条件 -> 该标的复盘视为无效
+- 值得明日重点观察的标的未写入 signals.json，或 signals.json 与 Markdown 观察清单不一致 -> 视为无效
+- signals.json 中 actionable signal 必须有结构化 trigger.price / invalidation.price / risk
 - regime 无法识别时，默认 `NO TRADE / 仅复盘不计划`

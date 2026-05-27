@@ -1,4 +1,7 @@
+import argparse
+import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -9,6 +12,7 @@ sys.path.insert(0, str(ROOT / "script"))
 from sync_longbridge_watchlist import (
     extract_focus_symbols,
     group_symbol_payloads,
+    load_symbols,
     normalize_symbol,
     ordered_unique,
     watchlist_update_args,
@@ -58,6 +62,38 @@ class SyncLongbridgeWatchlistTest(unittest.TestCase):
         self.assertEqual(args[:5], ["watchlist", "update", "group-1", "--mode", "replace"])
         self.assertIn("--add", args)
         self.assertNotIn("delete", args)
+
+    def test_load_symbols_prefers_signals_sidecar(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            report_dir = root / "report" / "2026-05-26"
+            report_dir.mkdir(parents=True)
+            (report_dir / "exec-brief.md").write_text("- 今日最多3个重点标的：OLD\n", encoding="utf-8")
+            (report_dir / "signals.json").write_text(
+                json.dumps(
+                    {
+                        "date": "2026-05-26",
+                        "session": "pre-market",
+                        "signals": [
+                            {"symbol": "MU", "setup": "breakout_pullback_continuation.md", "status": "planned"},
+                            {"symbol": "NVDA", "setup": "strong_breakout_trend_following.md", "status": "planned"},
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            args = argparse.Namespace(
+                symbol=None,
+                report=None,
+                signals=None,
+                date="2026-05-26",
+                session="pre-market",
+                default_market="US",
+                max_symbols=3,
+            )
+
+            self.assertEqual(load_symbols(args, root), ["MU.US", "NVDA.US"])
 
 
 if __name__ == "__main__":
