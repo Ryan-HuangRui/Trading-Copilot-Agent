@@ -14,6 +14,39 @@ from signal_artifacts import normalize_sidecar, read_json
 
 CLOSE_TO_INVALIDATION_PCT = 3.0
 HIGH_CONCENTRATION_PCT = 25.0
+DEFAULT_CONFIG = {
+    "close_to_invalidation_pct": CLOSE_TO_INVALIDATION_PCT,
+    "high_concentration_pct": HIGH_CONCENTRATION_PCT,
+    "ignore_symbols": [],
+    "core_holding_symbols": [],
+}
+
+
+def config_path(repo_root: Path, explicit_path: str | None) -> Path:
+    if explicit_path:
+        path = Path(explicit_path)
+        return path if path.is_absolute() else repo_root / path
+    return repo_root / "config" / "position_review.json"
+
+
+def load_config(repo_root: Path, explicit_path: str | None) -> dict[str, Any]:
+    path = config_path(repo_root, explicit_path)
+    config = dict(DEFAULT_CONFIG)
+    if not path.exists():
+        return config
+    raw = read_json(path)
+    section = raw.get("position_review", raw)
+    if not isinstance(section, dict):
+        return config
+    for key in ("close_to_invalidation_pct", "high_concentration_pct"):
+        value = to_float(section.get(key))
+        if value is not None:
+            config[key] = value
+    for key in ("ignore_symbols", "core_holding_symbols"):
+        value = section.get(key)
+        if isinstance(value, list):
+            config[key] = [str(item).upper() for item in value if str(item).strip()]
+    return config
 
 
 def account_snapshot_path(repo_root: Path, date: str, explicit_path: str | None) -> Path:
@@ -76,6 +109,7 @@ def position_review_record(
     net_liquidation: float | None,
     account_snapshot: Path,
     signals_file: Path,
+    config: dict[str, Any],
 ) -> dict[str, Any]:
     symbol = str(position.get("symbol") or "").upper()
     last_price = to_float(position.get("last_price"))
@@ -90,13 +124,16 @@ def position_review_record(
         distance_pct = round((last_price - invalidation) / last_price * 100, 3)
 
     in_today_signals = signal is not None
-    close_to_invalidation = distance_pct is not None and distance_pct <= CLOSE_TO_INVALIDATION_PCT
-    high_concentration = concentration_pct is not None and concentration_pct >= HIGH_CONCENTRATION_PCT
-    review_required = (not in_today_signals) or close_to_invalidation or high_concentration
+    core_holding = symbol in set(config.get("core_holding_symbols", []))
+    close_to_invalidation = distance_pct is not None and distance_pct <= float(config["close_to_invalidation_pct"])
+    high_concentration = concentration_pct is not None and concentration_pct >= float(config["high_concentration_pct"])
+    review_required = ((not in_today_signals) and not core_holding) or close_to_invalidation or high_concentration
     if close_to_invalidation:
         risk_state = "close_to_invalidation"
     elif high_concentration:
         risk_state = "high_concentration"
+    elif core_holding and not in_today_signals:
+        risk_state = "core_holding_not_in_plan"
     elif not in_today_signals:
         risk_state = "not_in_plan"
     else:
@@ -116,6 +153,7 @@ def position_review_record(
         "unrealized_pnl": position.get("unrealized_pnl"),
         "unrealized_pnl_pct": position.get("unrealized_pnl_pct"),
         "in_today_signals": in_today_signals,
+        "core_holding": core_holding,
         "setup": signal.get("setup") if signal else None,
         "nearest_invalidation": invalidation,
         "distance_to_invalidation_pct": distance_pct,
@@ -128,17 +166,35 @@ def position_review_record(
     return {key: value for key, value in payload.items() if value is not None}
 
 
-def build_markdown(date: str, records: list[dict[str, Any]]) -> str:
+def build_markdown(date: str, records: list[dict[str, Any]], summary: dict[str, Any]) -> str:
     review_required = [record for record in records if record.get("review_required")]
+    cash_pct = summary.get("cash_pct")
     lines = [
         f"# 持仓风险复核（{date}）",
         "",
         "## 总览",
         f"- 持仓数：{len(records)}",
         f"- 需要人工复核：{len(review_required)}",
+        f"- 今日计划信号数：{summary.get('planned_signals', 0)}",
+        f"- 现金比例：{cash_pct if cash_pct is not None else '未知'}%",
         "",
-        "## 逐持仓",
     ]
+    if not records:
+        lines.extend(
+            [
+                "## 空仓状态",
+                "- 当前无持仓。",
+                f"- 今日计划信号数：{summary.get('planned_signals', 0)}",
+                f"- 现金比例：{cash_pct if cash_pct is not None else '未知'}%",
+                "",
+                "## 边界",
+                "- 本报告只做持仓和计划一致性复核，不构成交易建议。",
+                "- 任何加仓、减仓、卖出、止损都必须由人工确认。",
+            ]
+        )
+        return "\n".join(lines) + "\n"
+
+    lines.append("## 逐持仓")
     for record in records:
         lines.extend(
             [
@@ -171,7 +227,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     signal_path = signals_path(repo_root, args.date, args.signals)
     account = read_json(account_path)
     signals = active_signals(repo_root, signal_path)
+    config = load_config(repo_root, getattr(args, "config", None))
+    ignored_symbols = set(config.get("ignore_symbols", []))
     net_liquidation = to_float((account.get("account") or {}).get("net_liquidation"))
+    cash = to_float((account.get("account") or {}).get("cash"))
+    cash_pct = round(cash / net_liquidation * 100, 3) if cash is not None and net_liquidation else None
     records = [
         position_review_record(
             date=args.date,
@@ -180,9 +240,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             net_liquidation=net_liquidation,
             account_snapshot=account_path,
             signals_file=signal_path,
+            config=config,
         )
         for position in account.get("positions", [])
-        if isinstance(position, dict) and position.get("symbol")
+        if isinstance(position, dict) and position.get("symbol") and str(position.get("symbol")).split(".", 1)[0].upper() not in ignored_symbols
     ]
 
     base = output_base(repo_root, args.date, args.output)
@@ -194,13 +255,19 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "source_account_snapshot": str(account_path),
         "source_signals": str(signal_path) if signal_path.exists() else None,
         "position_reviews": records,
-        "summary": {
-            "positions": len(records),
-            "review_required": sum(1 for record in records if record.get("review_required")),
-            "in_today_signals": sum(1 for record in records if record.get("in_today_signals")),
-        },
+        "summary": {},
     }
-    markdown_path.write_text(build_markdown(args.date, records), encoding="utf-8")
+    summary = {
+        "positions": len(records),
+        "review_required": sum(1 for record in records if record.get("review_required")),
+        "in_today_signals": sum(1 for record in records if record.get("in_today_signals")),
+        "planned_signals": len(signals),
+        "empty_position_state": len(records) == 0,
+        "cash_pct": cash_pct,
+    }
+    payload["summary"] = summary
+    markdown = build_markdown(args.date, records, summary)
+    markdown_path.write_text(markdown, encoding="utf-8")
     json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
     appended = []
@@ -235,6 +302,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--date", required=True)
     parser.add_argument("--account-snapshot")
     parser.add_argument("--signals")
+    parser.add_argument("--config", help="Position review config path. Defaults to config/position_review.json.")
     parser.add_argument("--output", help="Output base path without extension")
     parser.add_argument("--append", action="store_true")
     parser.add_argument("--journal-dir", default="runtime/journal")

@@ -365,13 +365,14 @@ Purpose: compare current read-only positions against the structured daily plan.
 Canonical command:
 
 ```bash
-python3 script/trading_copilot.py position-review --date <DATE> --append
+python3 script/trading_copilot.py position-review --date <DATE> --config config/position_review.json --append
 ```
 
 Inputs:
 
 - `runtime/account/<DATE>/account-snapshot.json`
 - `report/<DATE>/signals.json`
+- `config/position_review.json`
 - Optional `runtime/journal/position_reviews.jsonl` for duplicate detection.
 
 Output:
@@ -384,6 +385,8 @@ Required behavior:
 
 - Report whether each position appears in today's structured signals.
 - Report concentration, distance to invalidation, and whether human review is required.
+- Use configurable thresholds for close-to-invalidation and high concentration.
+- Treat configured core holdings as review context, not as automatic exceptions to risk checks.
 - Do not output deterministic buy/sell instructions or automatic adjustment actions.
 
 ## workflow-smoke-test
@@ -393,13 +396,13 @@ Purpose: run a fixture-based end-to-end loop without external data calls.
 Canonical command:
 
 ```bash
-python3 script/workflow_smoke_test.py --date <DATE> --week <YYYY-Www>
+python3 script/workflow_smoke_test.py --date <DATE> --week <YYYY-Www> --account-input path/to/account-fixture.json
 ```
 
 Required behavior:
 
 - Use existing fixture artifacts under `--repo-root`.
-- Exercise validation, signal extraction, outcome backfill, daily review, weekly review, and monitor extraction.
+- Exercise validation, signal extraction, outcome backfill, optional account snapshot and position review, daily review, weekly review, and monitor extraction.
 - Must not fetch market data or account data.
 
 ## research-note

@@ -9,6 +9,8 @@ import daily_self_review
 import extract_monitor_signals
 import extract_report_signals
 import journal_review
+import longbridge_account_snapshot
+import position_review
 import validate_report
 import weekly_review
 
@@ -52,6 +54,38 @@ def run(args: argparse.Namespace) -> dict:
     )
     steps["backfill-signal-outcomes"] = journal_review.backfill(backfill_args)
 
+    account_snapshot_path = None
+    if args.account_input:
+        account_args = argparse.Namespace(
+            repo_root=str(repo_root),
+            date=args.date,
+            timezone=args.timezone,
+            input=args.account_input,
+            output=args.account_output,
+            longbridge_cli=None,
+        )
+        steps["account-snapshot"] = longbridge_account_snapshot.run(account_args)
+        account_snapshot_path = steps["account-snapshot"].get("output")
+    elif args.account_snapshot:
+        account_snapshot_path = args.account_snapshot
+    else:
+        default_account = repo_root / "runtime" / "account" / args.date / "account-snapshot.json"
+        if default_account.exists():
+            account_snapshot_path = str(default_account)
+
+    if account_snapshot_path:
+        position_args = argparse.Namespace(
+            repo_root=str(repo_root),
+            date=args.date,
+            account_snapshot=account_snapshot_path,
+            signals=None,
+            config=args.position_config,
+            output=None,
+            append=True,
+            journal_dir=args.journal_dir,
+        )
+        steps["position-review"] = position_review.run(position_args)
+
     daily_args = argparse.Namespace(
         repo_root=str(repo_root),
         date=args.date,
@@ -90,7 +124,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--week", required=True)
     parser.add_argument("--session", choices=["pre-market", "post-market"], default="pre-market")
     parser.add_argument("--monitor", default="report/latest-monitor.json")
+    parser.add_argument("--account-input", help="Fixture payload for account-snapshot smoke coverage")
+    parser.add_argument("--account-output", help="Optional account snapshot output path")
+    parser.add_argument("--account-snapshot", help="Existing account snapshot path for position-review smoke coverage")
+    parser.add_argument("--position-config", help="Optional position review config path")
     parser.add_argument("--journal-dir", default="runtime/journal")
+    parser.add_argument("--timezone", default="America/New_York")
     parser.add_argument("--repo-root", default=str(Path(__file__).resolve().parents[1]))
     return parser
 

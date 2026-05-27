@@ -205,7 +205,7 @@ Consumer rules:
 Producer:
 
 ```bash
-python3 script/trading_copilot.py position-review --date <DATE> --append
+python3 script/trading_copilot.py position-review --date <DATE> --config config/position_review.json --append
 ```
 
 Expected top-level fields:
@@ -219,6 +219,8 @@ Expected top-level fields:
 Consumer rules:
 
 - Treat `review_required=true` as a prompt for human review only.
+- `summary.empty_position_state=true` means there are no reviewed positions; keep the report informational.
+- Review thresholds and core holding handling come from `config/position_review.json` unless an alternate `--config` path is passed.
 - Do not convert risk states into automatic trading actions.
 
 ## Wrapper Status JSON

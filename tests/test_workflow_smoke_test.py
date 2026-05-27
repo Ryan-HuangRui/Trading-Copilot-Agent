@@ -95,6 +95,23 @@ class WorkflowSmokeTest(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            account_fixture = root / "account-fixture.json"
+            account_fixture.write_text(
+                json.dumps(
+                    {
+                        "account": {"net_liquidation": 100000, "cash": 90000, "currency": "USD"},
+                        "positions": [
+                            {
+                                "symbol": "MU.US",
+                                "quantity": 10,
+                                "last_price": 100,
+                                "market_value": 1000,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
 
             proc = subprocess.run(
                 [
@@ -106,6 +123,8 @@ class WorkflowSmokeTest(unittest.TestCase):
                     "2026-05-26",
                     "--week",
                     "2026-W22",
+                    "--account-input",
+                    str(account_fixture),
                 ],
                 check=False,
                 text=True,
@@ -116,7 +135,10 @@ class WorkflowSmokeTest(unittest.TestCase):
             payload = json.loads(proc.stdout)
             self.assertEqual(payload["status"], "success")
             self.assertEqual(payload["steps"]["validate-report"]["validation"]["status"], "pass")
+            self.assertIn("account-snapshot", payload["steps"])
+            self.assertIn("position-review", payload["steps"])
             self.assertTrue((root / "report" / "2026-05-26" / "self-review.md").exists())
+            self.assertTrue((root / "report" / "2026-05-26" / "position-review.json").exists())
             self.assertTrue((root / "report" / "weekly" / "2026-W22.md").exists())
 
 

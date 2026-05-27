@@ -23,7 +23,7 @@ Add this block after `extract-report-signals` and before Feishu delivery:
 ```text
 Try to run the read-only position review steps:
 python3 script/trading_copilot.py account-snapshot --date <DATE>
-python3 script/trading_copilot.py position-review --date <DATE> --append
+python3 script/trading_copilot.py position-review --date <DATE> --config config/position_review.json --append
 
 If either command fails, do not fail the pre-market report workflow.
 Continue sending the report and include the failure reason in the Feishu summary.
@@ -37,7 +37,7 @@ Add this block after `extract-report-signals` and before `daily-self-review`:
 ```text
 Try to run the read-only position review steps:
 python3 script/trading_copilot.py account-snapshot --date <DATE>
-python3 script/trading_copilot.py position-review --date <DATE> --append
+python3 script/trading_copilot.py position-review --date <DATE> --config config/position_review.json --append
 
 If either command fails, do not fail the post-market report workflow.
 Continue with daily-self-review and Feishu delivery, and include the failure reason in the Feishu summary.
@@ -81,7 +81,7 @@ python3 script/trading_copilot.py pre-market-plan --watchlist config/watchlist.j
 python3 script/trading_copilot.py validate-report --session pre-market --date <DATE>
 python3 script/trading_copilot.py extract-report-signals --session pre-market --date <DATE> --require-validation --append
 python3 script/trading_copilot.py account-snapshot --date <DATE>
-python3 script/trading_copilot.py position-review --date <DATE> --append
+python3 script/trading_copilot.py position-review --date <DATE> --config config/position_review.json --append
 ```
 
 ### Task B: Post-Market Review + Daily Self-Review
@@ -106,7 +106,7 @@ python3 script/trading_copilot.py validate-report --session post-market --date <
 python3 script/trading_copilot.py backfill-signal-outcomes --date <DATE> --append
 python3 script/trading_copilot.py extract-report-signals --session post-market --date <DATE> --require-validation --append
 python3 script/trading_copilot.py account-snapshot --date <DATE>
-python3 script/trading_copilot.py position-review --date <DATE> --append
+python3 script/trading_copilot.py position-review --date <DATE> --config config/position_review.json --append
 python3 script/trading_copilot.py daily-self-review --date <DATE> --append
 ```
 
@@ -151,3 +151,5 @@ The final Feishu message should be a concise summary with artifact paths:
 - data limitations, if `stale_data=true` or any fetch errors exist
 
 The full Markdown reports should remain in `report/<DATE>/` or `report/weekly/` and can be attached or linked by the cc connect integration.
+
+For Longbridge account setup, read-only CLI assumptions, and position review threshold config, see `docs/longbridge-account-setup.md`.

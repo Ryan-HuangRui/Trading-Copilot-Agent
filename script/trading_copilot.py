@@ -446,6 +446,8 @@ def run_position_review(args: argparse.Namespace) -> None:
         command.extend(["--account-snapshot", args.account_snapshot])
     if args.signals:
         command.extend(["--signals", args.signals])
+    if args.config:
+        command.extend(["--config", args.config])
     if args.output:
         command.extend(["--output", args.output])
     if args.append:
@@ -637,6 +639,7 @@ def build_parser() -> argparse.ArgumentParser:
     position.add_argument("--date", required=True)
     position.add_argument("--account-snapshot")
     position.add_argument("--signals")
+    position.add_argument("--config")
     position.add_argument("--output")
     position.add_argument("--append", action="store_true")
     position.add_argument("--journal-dir", default="runtime/journal")

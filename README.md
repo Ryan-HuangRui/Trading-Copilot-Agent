@@ -60,6 +60,7 @@ python3 script/workflow_smoke_test.py --date <DATE> --week <YYYY-Www>
 - `docs/contracts/data-contracts.md`
 - `docs/contracts/journal.md`
 - `docs/cc-connect-scheduler.md`
+- `docs/longbridge-account-setup.md`
 - `docs/workflows/`
 
 ## 每日报告流程
@@ -92,8 +93,9 @@ python3 script/workflow_smoke_test.py --date <DATE> --week <YYYY-Www>
 - journal 默认写入 ignored runtime 路径：`runtime/journal/signals.jsonl`、`outcomes.jsonl`、`trades.jsonl`、`reviews.jsonl`
 - 持仓复核只读 Longbridge 账户快照，不下单、不撤单、不自动调仓：
   - `python3 script/trading_copilot.py account-snapshot --date YYYY-MM-DD`
-  - `python3 script/trading_copilot.py position-review --date YYYY-MM-DD --append`
+  - `python3 script/trading_copilot.py position-review --date YYYY-MM-DD --config config/position_review.json --append`
   - 产物：`runtime/account/YYYY-MM-DD/account-snapshot.json`、`report/YYYY-MM-DD/position-review.md`、`report/YYYY-MM-DD/position-review.json`
+  - 配置：`config/position_review.json`
 
 ## 实时盯盘
 - 支持多标的 5m 监控，默认只输出做多路径（可配置）
