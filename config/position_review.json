@@ -3,6 +3,7 @@
     "close_to_invalidation_pct": 3,
     "high_concentration_pct": 25,
     "ignore_symbols": [],
-    "core_holding_symbols": []
+    "core_holding_symbols": [],
+    "require_trade_link": false
   }
 }

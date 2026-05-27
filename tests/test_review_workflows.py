@@ -53,6 +53,7 @@ class ReviewWorkflowsTest(unittest.TestCase):
                         "date": "2026-05-26",
                         "symbol": "MU",
                         "review_required": True,
+                        "trade_link_state": "linked_to_source_signal",
                     },
                     ensure_ascii=False,
                 )
@@ -80,6 +81,7 @@ class ReviewWorkflowsTest(unittest.TestCase):
             self.assertEqual(second_payload["appended"], [])
             markdown = (root / "report" / "2026-05-26" / "self-review.md").read_text(encoding="utf-8")
             self.assertIn("持仓复核记录数：1", markdown)
+            self.assertIn("持仓交易关联：{\"linked_to_source_signal\": 1}", markdown)
 
     def test_weekly_review_writes_week_report(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -109,6 +111,7 @@ class ReviewWorkflowsTest(unittest.TestCase):
                         "date": "2026-05-26",
                         "symbol": "MU",
                         "review_required": True,
+                        "trade_link_state": "trade_missing_source_signal_id",
                     },
                     ensure_ascii=False,
                 )
@@ -131,6 +134,7 @@ class ReviewWorkflowsTest(unittest.TestCase):
             self.assertEqual(payload["summary"]["by_outcome"], {"not_triggered": 1})
             markdown = (root / "report" / "weekly" / "2026-W22.md").read_text(encoding="utf-8")
             self.assertIn("position review 数：1", markdown)
+            self.assertIn("持仓交易关联：{\"trade_missing_source_signal_id\": 1}", markdown)
             self.assertEqual(payload["appended"], ["weekly:2026-W22"])
 
     def test_extract_monitor_signals_appends_actionable_scans(self):

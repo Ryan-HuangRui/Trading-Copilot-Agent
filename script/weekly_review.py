@@ -66,6 +66,7 @@ def build_markdown(
 ) -> str:
     outcome_summary = summarize(outcomes)
     trade_status = Counter(str(trade.get("status") or "unknown") for trade in trades)
+    trade_link_status = Counter(str(record.get("trade_link_state") or "unknown") for record in position_reviews)
     position_required = sum(1 for record in position_reviews if record.get("review_required"))
     result_r = [
         float(trade["result_r"])
@@ -101,6 +102,7 @@ def build_markdown(
             "",
             "## 实际执行",
             f"- trade 状态：{json.dumps(dict(trade_status), ensure_ascii=False, sort_keys=True)}",
+            f"- 持仓交易关联：{json.dumps(dict(trade_link_status), ensure_ascii=False, sort_keys=True)}",
             f"- 合计 R：{total_r if total_r is not None else '暂无 result_r'}",
             f"- 持仓需人工复核：{position_required}",
             "",

@@ -19,6 +19,7 @@ DEFAULT_CONFIG = {
     "high_concentration_pct": HIGH_CONCENTRATION_PCT,
     "ignore_symbols": [],
     "core_holding_symbols": [],
+    "require_trade_link": False,
 }
 
 
@@ -46,6 +47,8 @@ def load_config(repo_root: Path, explicit_path: str | None) -> dict[str, Any]:
         value = section.get(key)
         if isinstance(value, list):
             config[key] = [str(item).upper() for item in value if str(item).strip()]
+    if isinstance(section.get("require_trade_link"), bool):
+        config["require_trade_link"] = section["require_trade_link"]
     return config
 
 
@@ -77,6 +80,14 @@ def to_float(value: Any) -> float | None:
         return None
 
 
+def normalized_symbol(value: Any) -> str:
+    return str(value or "").split(".", 1)[0].upper()
+
+
+def date_sort_key(record: dict[str, Any]) -> tuple[str, str]:
+    return str(record.get("date") or ""), str(record.get("created_at") or "")
+
+
 def active_signals(repo_root: Path, path: Path) -> dict[str, dict[str, Any]]:
     if not path.exists():
         return {}
@@ -86,6 +97,67 @@ def active_signals(repo_root: Path, path: Path) -> dict[str, dict[str, Any]]:
         for signal in normalize_sidecar(payload, path, repo_root)
         if signal.get("status") != "no_trade" and signal.get("symbol")
     }
+
+
+def journal_signals_by_id(repo_root: Path, journal_dir: str) -> dict[str, dict[str, Any]]:
+    records = read_jsonl(journal_path(repo_root, journal_dir, "signal"))
+    return {
+        str(record["signal_id"]): record
+        for record in records
+        if record.get("kind") == "signal" and isinstance(record.get("signal_id"), str)
+    }
+
+
+def journal_trades_by_symbol(repo_root: Path, journal_dir: str, review_date: str) -> dict[str, list[dict[str, Any]]]:
+    result: dict[str, list[dict[str, Any]]] = {}
+    for record in read_jsonl(journal_path(repo_root, journal_dir, "trade")):
+        if record.get("kind") != "trade":
+            continue
+        trade_date = record.get("date")
+        if isinstance(trade_date, str) and trade_date > review_date:
+            continue
+        symbol = normalized_symbol(record.get("symbol"))
+        if not symbol:
+            continue
+        result.setdefault(symbol, []).append(record)
+    for records in result.values():
+        records.sort(key=date_sort_key, reverse=True)
+    return result
+
+
+def latest_trade(symbol: str, trades_by_symbol: dict[str, list[dict[str, Any]]]) -> dict[str, Any] | None:
+    records = trades_by_symbol.get(symbol, [])
+    return records[0] if records else None
+
+
+def linked_signal_for_trade(trade: dict[str, Any] | None, signals_by_id: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
+    if not trade:
+        return None
+    signal_id = trade.get("source_signal_id")
+    if not isinstance(signal_id, str):
+        return None
+    return signals_by_id.get(signal_id)
+
+
+def trade_link_state(trade: dict[str, Any] | None) -> str:
+    if not trade:
+        return "no_trade_record"
+    if trade.get("source_signal_id"):
+        return "linked_to_source_signal"
+    return "trade_missing_source_signal_id"
+
+
+def estimate_r(last_price: float | None, trade: dict[str, Any] | None) -> float | None:
+    if last_price is None or not trade:
+        return None
+    entry = to_float(trade.get("entry"))
+    stop = to_float(trade.get("stop"))
+    if entry is None or stop is None or entry == stop:
+        return None
+    risk = entry - stop
+    if risk <= 0:
+        return None
+    return round((last_price - entry) / risk, 3)
 
 
 def review_id(date: str, symbol: str) -> str:
@@ -110,11 +182,16 @@ def position_review_record(
     account_snapshot: Path,
     signals_file: Path,
     config: dict[str, Any],
+    trade: dict[str, Any] | None,
+    linked_signal: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    symbol = str(position.get("symbol") or "").upper()
+    symbol = normalized_symbol(position.get("symbol"))
     last_price = to_float(position.get("last_price"))
     market_value = to_float(position.get("market_value"))
-    invalidation = to_float(signal.get("invalidation_price")) if signal else None
+    effective_signal = signal or linked_signal
+    invalidation = to_float(effective_signal.get("invalidation_price")) if effective_signal else None
+    if invalidation is None and trade:
+        invalidation = to_float(trade.get("stop"))
     concentration_pct = None
     if market_value is not None and net_liquidation and net_liquidation > 0:
         concentration_pct = round(market_value / net_liquidation * 100, 3)
@@ -127,17 +204,34 @@ def position_review_record(
     core_holding = symbol in set(config.get("core_holding_symbols", []))
     close_to_invalidation = distance_pct is not None and distance_pct <= float(config["close_to_invalidation_pct"])
     high_concentration = concentration_pct is not None and concentration_pct >= float(config["high_concentration_pct"])
-    review_required = ((not in_today_signals) and not core_holding) or close_to_invalidation or high_concentration
+    link_state = trade_link_state(trade)
+    trade_link_missing = link_state != "linked_to_source_signal"
+    review_required = (
+        ((not in_today_signals) and not core_holding)
+        or close_to_invalidation
+        or high_concentration
+        or (bool(config.get("require_trade_link")) and trade_link_missing and not core_holding)
+    )
     if close_to_invalidation:
         risk_state = "close_to_invalidation"
     elif high_concentration:
         risk_state = "high_concentration"
+    elif bool(config.get("require_trade_link")) and trade_link_missing and not core_holding:
+        risk_state = "missing_trade_link"
     elif core_holding and not in_today_signals:
         risk_state = "core_holding_not_in_plan"
     elif not in_today_signals:
         risk_state = "not_in_plan"
     else:
         risk_state = "normal"
+
+    source_signal_id = None
+    if signal and signal.get("signal_id"):
+        source_signal_id = signal.get("signal_id")
+    elif trade and trade.get("source_signal_id"):
+        source_signal_id = trade.get("source_signal_id")
+    elif linked_signal and linked_signal.get("signal_id"):
+        source_signal_id = linked_signal.get("signal_id")
 
     payload = {
         "kind": "position_review",
@@ -154,7 +248,16 @@ def position_review_record(
         "unrealized_pnl_pct": position.get("unrealized_pnl_pct"),
         "in_today_signals": in_today_signals,
         "core_holding": core_holding,
-        "setup": signal.get("setup") if signal else None,
+        "setup": effective_signal.get("setup") if effective_signal else trade.get("planned_setup") if trade else None,
+        "source_signal_id": source_signal_id,
+        "linked_trade_date": trade.get("date") if trade else None,
+        "linked_trade_status": trade.get("status") if trade else None,
+        "linked_trade_planned_setup": trade.get("planned_setup") if trade else None,
+        "trade_link_state": link_state,
+        "trade_link_missing": trade_link_missing,
+        "entry": to_float(trade.get("entry")) if trade else None,
+        "stop": to_float(trade.get("stop")) if trade else None,
+        "estimated_r": estimate_r(last_price, trade),
         "nearest_invalidation": invalidation,
         "distance_to_invalidation_pct": distance_pct,
         "concentration_pct": concentration_pct,
@@ -169,6 +272,7 @@ def position_review_record(
 def build_markdown(date: str, records: list[dict[str, Any]], summary: dict[str, Any]) -> str:
     review_required = [record for record in records if record.get("review_required")]
     cash_pct = summary.get("cash_pct")
+    trade_link_state = summary.get("trade_link_state", {})
     lines = [
         f"# 持仓风险复核（{date}）",
         "",
@@ -177,6 +281,7 @@ def build_markdown(date: str, records: list[dict[str, Any]], summary: dict[str, 
         f"- 需要人工复核：{len(review_required)}",
         f"- 今日计划信号数：{summary.get('planned_signals', 0)}",
         f"- 现金比例：{cash_pct if cash_pct is not None else '未知'}%",
+        f"- 交易关联状态：{json.dumps(trade_link_state, ensure_ascii=False, sort_keys=True)}",
         "",
     ]
     if not records:
@@ -201,6 +306,9 @@ def build_markdown(date: str, records: list[dict[str, Any]], summary: dict[str, 
                 f"### {record['symbol']}",
                 f"- 是否在今日计划：{'是' if record.get('in_today_signals') else '否'}",
                 f"- 风险状态：{record.get('risk_state')}",
+                f"- 交易关联：{record.get('trade_link_state', '未知')}",
+                f"- 来源 signal：{record.get('source_signal_id', '无')}",
+                f"- 估算 R：{record.get('estimated_r', '无')}",
                 f"- 当前价：{record.get('last_price', '未知')}",
                 f"- 失效位：{record.get('nearest_invalidation', '无')}",
                 f"- 距离失效位：{record.get('distance_to_invalidation_pct', '无')}%",
@@ -229,22 +337,32 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     signals = active_signals(repo_root, signal_path)
     config = load_config(repo_root, getattr(args, "config", None))
     ignored_symbols = set(config.get("ignore_symbols", []))
+    signals_by_id = journal_signals_by_id(repo_root, args.journal_dir)
+    trades_by_symbol = journal_trades_by_symbol(repo_root, args.journal_dir, args.date)
     net_liquidation = to_float((account.get("account") or {}).get("net_liquidation"))
     cash = to_float((account.get("account") or {}).get("cash"))
     cash_pct = round(cash / net_liquidation * 100, 3) if cash is not None and net_liquidation else None
-    records = [
-        position_review_record(
-            date=args.date,
-            position=position,
-            signal=signals.get(str(position.get("symbol") or "").upper()),
-            net_liquidation=net_liquidation,
-            account_snapshot=account_path,
-            signals_file=signal_path,
-            config=config,
+    records = []
+    for position in account.get("positions", []):
+        if not isinstance(position, dict) or not position.get("symbol"):
+            continue
+        symbol = normalized_symbol(position.get("symbol"))
+        if symbol in ignored_symbols:
+            continue
+        trade = latest_trade(symbol, trades_by_symbol)
+        records.append(
+            position_review_record(
+                date=args.date,
+                position=position,
+                signal=signals.get(symbol),
+                net_liquidation=net_liquidation,
+                account_snapshot=account_path,
+                signals_file=signal_path,
+                config=config,
+                trade=trade,
+                linked_signal=linked_signal_for_trade(trade, signals_by_id),
+            )
         )
-        for position in account.get("positions", [])
-        if isinstance(position, dict) and position.get("symbol") and str(position.get("symbol")).split(".", 1)[0].upper() not in ignored_symbols
-    ]
 
     base = output_base(repo_root, args.date, args.output)
     markdown_path = base.with_suffix(".md")
@@ -264,6 +382,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "planned_signals": len(signals),
         "empty_position_state": len(records) == 0,
         "cash_pct": cash_pct,
+        "trade_link_state": {
+            state: sum(1 for record in records if record.get("trade_link_state") == state)
+            for state in sorted({str(record.get("trade_link_state")) for record in records if record.get("trade_link_state")})
+        },
+        "trade_link_missing": sum(1 for record in records if record.get("trade_link_missing")),
     }
     payload["summary"] = summary
     markdown = build_markdown(args.date, records, summary)

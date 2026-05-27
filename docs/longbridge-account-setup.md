@@ -35,7 +35,7 @@ python3 script/trading_copilot.py account-snapshot --date <DATE>
 Review positions against the same day's structured signals:
 
 ```bash
-python3 script/trading_copilot.py position-review --date <DATE> --append
+python3 script/trading_copilot.py position-review --date <DATE> --config config/position_review.json --append
 ```
 
 The review uses:
@@ -60,7 +60,8 @@ Default config lives in `config/position_review.json`:
     "close_to_invalidation_pct": 3,
     "high_concentration_pct": 25,
     "ignore_symbols": [],
-    "core_holding_symbols": []
+    "core_holding_symbols": [],
+    "require_trade_link": false
   }
 }
 ```
@@ -69,6 +70,36 @@ Default config lives in `config/position_review.json`:
 - `high_concentration_pct`: flags single-symbol concentration relative to account net liquidation.
 - `ignore_symbols`: excludes symbols from the position review.
 - `core_holding_symbols`: allows long-term/core holdings to be marked as `core_holding_not_in_plan` instead of requiring review only because they are absent from today's signals.
+- `require_trade_link`: when `true`, non-core positions without a `trades.jsonl` record linked by `source_signal_id` require human review.
+
+## trades.jsonl Linkage
+
+Position review reads `runtime/journal/trades.jsonl` and `runtime/journal/signals.jsonl` through the local journal files. It does not call Longbridge again after the account snapshot is written.
+
+For best linkage, human-entered trade records should include:
+
+```json
+{
+  "kind": "trade",
+  "date": "2026-05-27",
+  "symbol": "MU",
+  "status": "entered",
+  "planned_setup": "breakout_pullback_continuation.md",
+  "entry": 100,
+  "stop": 95,
+  "source_signal_id": "signal-id-from-signals-jsonl"
+}
+```
+
+The position review will surface:
+
+- `trade_link_state`: `linked_to_source_signal`, `trade_missing_source_signal_id`, or `no_trade_record`
+- `source_signal_id`
+- `linked_trade_date`
+- `linked_trade_status`
+- `entry`, `stop`, and `estimated_r` when enough trade data exists
+
+These fields are review context only. They must not be converted into automatic order actions.
 
 Use an alternate config when needed:
 

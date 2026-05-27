@@ -221,6 +221,8 @@ Consumer rules:
 - Treat `review_required=true` as a prompt for human review only.
 - `summary.empty_position_state=true` means there are no reviewed positions; keep the report informational.
 - Review thresholds and core holding handling come from `config/position_review.json` unless an alternate `--config` path is passed.
+- `summary.trade_link_state` summarizes whether positions were linked to `trades.jsonl` records and their `source_signal_id`.
+- `position_reviews[].estimated_r` is an estimate from read-only position price plus human-entered `entry/stop`; it is not a broker-confirmed realized result.
 - Do not convert risk states into automatic trading actions.
 
 ## Wrapper Status JSON

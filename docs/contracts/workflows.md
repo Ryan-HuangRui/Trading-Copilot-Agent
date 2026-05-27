@@ -373,6 +373,7 @@ Inputs:
 - `runtime/account/<DATE>/account-snapshot.json`
 - `report/<DATE>/signals.json`
 - `config/position_review.json`
+- Optional `runtime/journal/trades.jsonl` and `runtime/journal/signals.jsonl` for `source_signal_id` linkage.
 - Optional `runtime/journal/position_reviews.jsonl` for duplicate detection.
 
 Output:
@@ -387,6 +388,8 @@ Required behavior:
 - Report concentration, distance to invalidation, and whether human review is required.
 - Use configurable thresholds for close-to-invalidation and high concentration.
 - Treat configured core holdings as review context, not as automatic exceptions to risk checks.
+- Link positions to the latest same-symbol trade record when available, and prefer `source_signal_id` to recover the originating signal/setup.
+- Estimate open-position R only from human-entered `entry/stop`; do not treat it as realized trade performance.
 - Do not output deterministic buy/sell instructions or automatic adjustment actions.
 
 ## workflow-smoke-test

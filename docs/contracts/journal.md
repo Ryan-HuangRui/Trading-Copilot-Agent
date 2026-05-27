@@ -98,6 +98,13 @@ Recommended fields:
 
 - `market_value`
 - `last_price`
+- `source_signal_id`
+- `linked_trade_date`
+- `linked_trade_status`
+- `trade_link_state`: `linked_to_source_signal`, `trade_missing_source_signal_id`, or `no_trade_record`.
+- `entry`
+- `stop`
+- `estimated_r`
 - `nearest_invalidation`
 - `distance_to_invalidation_pct`
 - `concentration_pct`
@@ -107,6 +114,7 @@ Consumer rules:
 
 - These records are human-review prompts only.
 - Do not treat them as order instructions.
+- `trade_link_state` reflects whether the position can be connected to `trades.jsonl` and `signals.jsonl`; it is not an execution signal.
 
 ## Append Tool
 
@@ -146,7 +154,7 @@ Use read-only account and position review workflows when account context is need
 
 ```bash
 python3 script/trading_copilot.py account-snapshot --date 2026-05-26
-python3 script/trading_copilot.py position-review --date 2026-05-26 --append
+python3 script/trading_copilot.py position-review --date 2026-05-26 --config config/position_review.json --append
 ```
 
 Use the lower-level append helper for manual entries:

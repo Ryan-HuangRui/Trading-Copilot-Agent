@@ -45,6 +45,7 @@ def build_markdown(
     outcome_summary = summarize(outcomes)
     by_status = Counter(str(signal.get("status") or "unknown") for signal in signals)
     by_trade = Counter(str(trade.get("status") or "unknown") for trade in trades)
+    by_trade_link = Counter(str(record.get("trade_link_state") or "unknown") for record in position_reviews)
     position_review_required = sum(1 for record in position_reviews if record.get("review_required"))
     not_evaluable = [item for item in outcomes if item.get("outcome") in {"not_evaluable", "no_data"}]
     ambiguous = [item for item in outcomes if item.get("outcome") == "triggered_and_invalidated"]
@@ -63,6 +64,7 @@ def build_markdown(
         f"- outcome 汇总：{json.dumps(outcome_summary['by_outcome'], ensure_ascii=False, sort_keys=True)}",
         f"- 信号状态：{json.dumps(dict(by_status), ensure_ascii=False, sort_keys=True)}",
         f"- 交易记录状态：{json.dumps(dict(by_trade), ensure_ascii=False, sort_keys=True)}",
+        f"- 持仓交易关联：{json.dumps(dict(by_trade_link), ensure_ascii=False, sort_keys=True)}",
         f"- 持仓需人工复核：{position_review_required}",
         "",
         "## 需要人工复核",

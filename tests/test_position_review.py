@@ -312,12 +312,159 @@ class PositionReviewTest(unittest.TestCase):
             self.assertIn("空仓状态", markdown)
             self.assertIn("今日计划信号数：1", markdown)
 
+    def test_position_review_links_trade_source_signal_and_estimated_r(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            account_dir = root / "runtime" / "account" / "2026-05-27"
+            account_dir.mkdir(parents=True)
+            (account_dir / "account-snapshot.json").write_text(
+                json.dumps(
+                    {
+                        "date": "2026-05-27",
+                        "account": {"net_liquidation": 100000, "cash": 90000, "currency": "USD"},
+                        "positions": [
+                            {
+                                "symbol": "MU",
+                                "last_price": 105,
+                                "market_value": 1050,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            journal = root / "runtime" / "journal"
+            journal.mkdir(parents=True)
+            (journal / "signals.jsonl").write_text(
+                json.dumps(
+                    {
+                        "kind": "signal",
+                        "signal_id": "sig-1",
+                        "date": "2026-05-26",
+                        "session": "pre-market",
+                        "symbol": "MU",
+                        "setup": "breakout_pullback_continuation.md",
+                        "invalidation_price": 95,
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (journal / "trades.jsonl").write_text(
+                json.dumps(
+                    {
+                        "kind": "trade",
+                        "date": "2026-05-26",
+                        "symbol": "MU",
+                        "status": "entered",
+                        "planned_setup": "breakout_pullback_continuation.md",
+                        "entry": 100,
+                        "stop": 95,
+                        "source_signal_id": "sig-1",
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            command = [
+                sys.executable,
+                str(ROOT / "script" / "position_review.py"),
+                "--repo-root",
+                str(root),
+                "--date",
+                "2026-05-27",
+            ]
+            proc = subprocess.run(command, check=False, text=True, capture_output=True)
+
+            self.assertEqual(proc.returncode, 0, msg=proc.stderr or proc.stdout)
+            review = json.loads((root / "report" / "2026-05-27" / "position-review.json").read_text(encoding="utf-8"))
+            record = review["position_reviews"][0]
+            self.assertEqual(record["trade_link_state"], "linked_to_source_signal")
+            self.assertEqual(record["source_signal_id"], "sig-1")
+            self.assertEqual(record["setup"], "breakout_pullback_continuation.md")
+            self.assertEqual(record["nearest_invalidation"], 95.0)
+            self.assertEqual(record["estimated_r"], 1.0)
+            self.assertEqual(review["summary"]["trade_link_state"], {"linked_to_source_signal": 1})
+            markdown = (root / "report" / "2026-05-27" / "position-review.md").read_text(encoding="utf-8")
+            self.assertIn("交易关联：linked_to_source_signal", markdown)
+
+    def test_position_review_can_require_trade_link(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_dir = root / "config"
+            config_dir.mkdir()
+            (config_dir / "position_review.json").write_text(
+                json.dumps(
+                    {
+                        "position_review": {
+                            "require_trade_link": True,
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            account_dir = root / "runtime" / "account" / "2026-05-27"
+            account_dir.mkdir(parents=True)
+            (account_dir / "account-snapshot.json").write_text(
+                json.dumps(
+                    {
+                        "date": "2026-05-27",
+                        "account": {"net_liquidation": 100000, "cash": 90000, "currency": "USD"},
+                        "positions": [{"symbol": "MU", "last_price": 110, "market_value": 1100}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            report_dir = root / "report" / "2026-05-27"
+            report_dir.mkdir(parents=True)
+            (report_dir / "signals.json").write_text(
+                json.dumps(
+                    {
+                        "date": "2026-05-27",
+                        "session": "pre-market",
+                        "signals": [
+                            {
+                                "symbol": "MU",
+                                "setup": "breakout_pullback_continuation.md",
+                                "trigger": {"price": 120},
+                                "invalidation": {"price": 95},
+                                "risk": {"max_risk_pct": 1},
+                                "status": "planned",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            command = [
+                sys.executable,
+                str(ROOT / "script" / "position_review.py"),
+                "--repo-root",
+                str(root),
+                "--date",
+                "2026-05-27",
+            ]
+            proc = subprocess.run(command, check=False, text=True, capture_output=True)
+
+            self.assertEqual(proc.returncode, 0, msg=proc.stderr or proc.stdout)
+            review = json.loads((report_dir / "position-review.json").read_text(encoding="utf-8"))
+            record = review["position_reviews"][0]
+            self.assertEqual(record["trade_link_state"], "no_trade_record")
+            self.assertEqual(record["risk_state"], "missing_trade_link")
+            self.assertTrue(record["review_required"])
+            self.assertEqual(review["summary"]["trade_link_missing"], 1)
+
     def test_load_config_uses_defaults_when_missing(self):
         with tempfile.TemporaryDirectory() as tmp:
             config = load_config(Path(tmp), None)
 
         self.assertEqual(config["close_to_invalidation_pct"], 3.0)
         self.assertEqual(config["high_concentration_pct"], 25.0)
+        self.assertFalse(config["require_trade_link"])
 
 
 if __name__ == "__main__":
