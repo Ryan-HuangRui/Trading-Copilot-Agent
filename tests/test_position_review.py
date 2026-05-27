@@ -4,12 +4,14 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "script"))
 
-from longbridge_cli_adapter import ensure_read_only_command
+from longbridge_account_snapshot import normalize_account
+from longbridge_cli_adapter import ensure_read_only_command, fetch_account_snapshot
 
 
 class PositionReviewTest(unittest.TestCase):
@@ -19,6 +21,39 @@ class PositionReviewTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             ensure_read_only_command(["watchlist", "update", "group-1"])
         self.assertEqual(ensure_read_only_command(["account", "positions", "--format", "json"]), None)
+
+    def test_fetch_account_snapshot_uses_supported_read_only_cli_commands(self):
+        calls = []
+
+        def fake_run(cli, args):
+            calls.append((cli, args))
+            return []
+
+        with patch("longbridge_cli_adapter.run_read_only_json", side_effect=fake_run):
+            self.assertEqual(fetch_account_snapshot("/bin/longbridge"), {"account": [], "positions": []})
+
+        self.assertEqual(
+            calls,
+            [
+                ("/bin/longbridge", ["assets", "--format", "json"]),
+                ("/bin/longbridge", ["positions", "--format", "json"]),
+            ],
+        )
+
+    def test_normalize_account_accepts_longbridge_assets_payload(self):
+        account = normalize_account(
+            [
+                {
+                    "net_assets": "100000.50",
+                    "total_cash": "20000.25",
+                    "currency": "USD",
+                }
+            ]
+        )
+
+        self.assertEqual(account["net_liquidation"], 100000.50)
+        self.assertEqual(account["cash"], 20000.25)
+        self.assertEqual(account["currency"], "USD")
 
     def test_account_snapshot_from_fixture_writes_normalized_runtime_file(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -68,15 +68,17 @@ def normalize_symbol(raw: Any) -> tuple[str, str | None]:
 
 
 def normalize_account(raw: Any) -> dict[str, Any]:
-    if isinstance(raw, dict):
+    if isinstance(raw, list) and raw and isinstance(raw[0], dict):
+        payload = raw[0]
+    elif isinstance(raw, dict):
         payload = raw
     else:
         payload = {}
     account = first_value(payload, ("account", "cash_info", "asset", "assets"))
     if isinstance(account, dict):
         payload = account
-    net_liquidation = first_value(payload, ("net_liquidation", "net_asset", "total_asset", "total_assets", "nav"))
-    cash = first_value(payload, ("cash", "cash_balance", "available_cash", "buying_power"))
+    net_liquidation = first_value(payload, ("net_liquidation", "net_asset", "net_assets", "total_asset", "total_assets", "nav"))
+    cash = first_value(payload, ("cash", "cash_balance", "available_cash", "buying_power", "buy_power", "total_cash"))
     currency = first_value(payload, ("currency", "cash_currency"))
     return {
         "net_liquidation": to_float(net_liquidation),

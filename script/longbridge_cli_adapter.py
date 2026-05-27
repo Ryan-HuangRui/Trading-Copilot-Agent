@@ -62,6 +62,6 @@ def run_read_only_json(cli: str, args: list[str]) -> Any:
 
 
 def fetch_account_snapshot(cli: str) -> dict[str, Any]:
-    account = run_read_only_json(cli, ["account", "balance", "--format", "json"])
-    positions = run_read_only_json(cli, ["account", "positions", "--format", "json"])
+    account = run_read_only_json(cli, ["assets", "--format", "json"])
+    positions = run_read_only_json(cli, ["positions", "--format", "json"])
     return {"account": account, "positions": positions}
