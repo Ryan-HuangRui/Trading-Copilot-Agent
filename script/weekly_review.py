@@ -62,9 +62,11 @@ def build_markdown(
     signals: list[dict[str, Any]],
     outcomes: list[dict[str, Any]],
     trades: list[dict[str, Any]],
+    position_reviews: list[dict[str, Any]],
 ) -> str:
     outcome_summary = summarize(outcomes)
     trade_status = Counter(str(trade.get("status") or "unknown") for trade in trades)
+    position_required = sum(1 for record in position_reviews if record.get("review_required"))
     result_r = [
         float(trade["result_r"])
         for trade in trades
@@ -80,6 +82,7 @@ def build_markdown(
         f"- 计划/观察信号数：{len(signals)}",
         f"- outcome 数：{len(outcomes)}",
         f"- trades 数：{len(trades)}",
+        f"- position review 数：{len(position_reviews)}",
         "",
         "## 信号表现",
         f"- outcome 汇总：{json.dumps(outcome_summary['by_outcome'], ensure_ascii=False, sort_keys=True)}",
@@ -99,6 +102,7 @@ def build_markdown(
             "## 实际执行",
             f"- trade 状态：{json.dumps(dict(trade_status), ensure_ascii=False, sort_keys=True)}",
             f"- 合计 R：{total_r if total_r is not None else '暂无 result_r'}",
+            f"- 持仓需人工复核：{position_required}",
             "",
             "## 本周纪律结论",
             "- 只把 outcomes 当作客观触达统计，不当作真实胜率。",
@@ -146,6 +150,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         for record in read_jsonl(trades_file)
         if record.get("kind") == "trade" and in_range(record.get("date"), start, end)
     ]
+    position_reviews_file = journal_path(repo_root, args.journal_dir, "position_review")
+    position_reviews = [
+        record
+        for record in read_jsonl(position_reviews_file)
+        if record.get("kind") == "position_review" and in_range(record.get("date"), start, end)
+    ]
 
     output = output_path(repo_root, args.week, args.output)
     markdown = build_markdown(
@@ -155,6 +165,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         signals=signals,
         outcomes=outcomes,
         trades=trades,
+        position_reviews=position_reviews,
     )
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(markdown, encoding="utf-8")
@@ -180,6 +191,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "summary": summarize(outcomes),
         "signals_count": len(signals),
         "trades_count": len(trades),
+        "position_reviews_count": len(position_reviews),
         "reviews_path": str(reviews_file) if args.append else None,
         "append": args.append,
         "appended": appended,

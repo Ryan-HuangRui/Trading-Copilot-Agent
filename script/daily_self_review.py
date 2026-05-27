@@ -39,11 +39,13 @@ def build_markdown(
     outcomes: list[dict[str, Any]],
     signals: list[dict[str, Any]],
     trades: list[dict[str, Any]],
+    position_reviews: list[dict[str, Any]],
     post_market_exists: bool,
 ) -> str:
     outcome_summary = summarize(outcomes)
     by_status = Counter(str(signal.get("status") or "unknown") for signal in signals)
     by_trade = Counter(str(trade.get("status") or "unknown") for trade in trades)
+    position_review_required = sum(1 for record in position_reviews if record.get("review_required"))
     not_evaluable = [item for item in outcomes if item.get("outcome") in {"not_evaluable", "no_data"}]
     ambiguous = [item for item in outcomes if item.get("outcome") == "triggered_and_invalidated"]
 
@@ -55,11 +57,13 @@ def build_markdown(
         f"- 计划/观察信号数：{len(signals)}",
         f"- 已回填 outcome 数：{len(outcomes)}",
         f"- 人工交易记录数：{len(trades)}",
+        f"- 持仓复核记录数：{len(position_reviews)}",
         "",
         "## 信号结果",
         f"- outcome 汇总：{json.dumps(outcome_summary['by_outcome'], ensure_ascii=False, sort_keys=True)}",
         f"- 信号状态：{json.dumps(dict(by_status), ensure_ascii=False, sort_keys=True)}",
         f"- 交易记录状态：{json.dumps(dict(by_trade), ensure_ascii=False, sort_keys=True)}",
+        f"- 持仓需人工复核：{position_review_required}",
         "",
         "## 需要人工复核",
     ]
@@ -131,6 +135,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         for record in read_jsonl(trades_file)
         if record.get("kind") == "trade" and record.get("date") == args.date
     ]
+    position_reviews_file = journal_path(repo_root, args.journal_dir, "position_review")
+    position_reviews = [
+        record
+        for record in read_jsonl(position_reviews_file)
+        if record.get("kind") == "position_review" and record.get("date") == args.date
+    ]
 
     post_market = repo_root / "report" / args.date / "post-market.md"
     output = Path(args.output) if args.output else report_path(repo_root, args.date)
@@ -141,6 +151,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         outcomes=outcomes,
         signals=signals,
         trades=trades,
+        position_reviews=position_reviews,
         post_market_exists=post_market.exists(),
     )
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -164,10 +175,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "signals_path": str(signals_file),
         "outcomes_path": str(outcomes_file),
         "trades_path": str(trades_file),
+        "position_reviews_path": str(position_reviews_file),
         "reviews_path": str(reviews_file) if args.append else None,
         "summary": summarize(outcomes),
         "signals_count": len(signals),
         "trades_count": len(trades),
+        "position_reviews_count": len(position_reviews),
         "append": args.append,
         "appended": appended,
         "skipped_duplicates": skipped_duplicates,

@@ -212,6 +212,29 @@ def validate_sidecar_payload(
             for field in REQUIRED_ACTIONABLE_FIELDS:
                 if signal.get(field) in (None, "", []):
                     errors.append(f"{item}: actionable signal missing {field}")
+            for field in ("trigger", "invalidation"):
+                value = signal.get(field)
+                if not isinstance(value, dict):
+                    errors.append(f"{item}: actionable signal {field} must be an object")
+                    continue
+                if value.get("price") is None:
+                    errors.append(f"{item}: {field}.price is required")
+                    continue
+                try:
+                    float(value["price"])
+                except (TypeError, ValueError):
+                    errors.append(f"{item}: {field}.price must be numeric")
+            risk = signal.get("risk")
+            if isinstance(risk, dict):
+                max_risk = risk.get("max_risk_pct")
+                risk_text_value = risk.get("text")
+                if max_risk is None and not risk_text_value:
+                    errors.append(f"{item}: risk.max_risk_pct or risk.text is required")
+                if max_risk is not None:
+                    try:
+                        float(max_risk)
+                    except (TypeError, ValueError):
+                        errors.append(f"{item}: risk.max_risk_pct must be numeric")
 
         for field in ("trigger", "invalidation"):
             value = signal.get(field)

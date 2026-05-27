@@ -14,6 +14,7 @@ runtime/journal/
 - `outcomes.jsonl`: computed signal outcome backfills from completed daily snapshots.
 - `trades.jsonl`: optional human-entered execution/outcome records.
 - `reviews.jsonl`: post-market or weekly lessons linked back to reports, signals, or setups.
+- `position_reviews.jsonl`: read-only position risk and plan-consistency review records.
 
 Each line is one JSON object. Fields are intentionally append-only so reports can be audited later.
 
@@ -82,6 +83,31 @@ Recommended fields:
 - `lesson`
 - `source_report`
 
+## `position_reviews.jsonl`
+
+Required fields:
+
+- `date`
+- `symbol`
+- `in_today_signals`
+- `risk_state`
+- `review_required`
+- `source_account_snapshot`
+
+Recommended fields:
+
+- `market_value`
+- `last_price`
+- `nearest_invalidation`
+- `distance_to_invalidation_pct`
+- `concentration_pct`
+- `source_signals`
+
+Consumer rules:
+
+- These records are human-review prompts only.
+- Do not treat them as order instructions.
+
 ## Append Tool
 
 Use the report extractor for the normal report-to-journal path:
@@ -114,6 +140,13 @@ Use monitor extraction only for observation records:
 
 ```bash
 python3 script/trading_copilot.py extract-monitor-signals --append
+```
+
+Use read-only account and position review workflows when account context is needed:
+
+```bash
+python3 script/trading_copilot.py account-snapshot --date 2026-05-26
+python3 script/trading_copilot.py position-review --date 2026-05-26 --append
 ```
 
 Use the lower-level append helper for manual entries:

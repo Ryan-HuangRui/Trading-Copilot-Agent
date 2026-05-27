@@ -3,10 +3,15 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from argparse import Namespace
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "script"))
+
+import trading_copilot
 
 GOOD_REPORT = """# 今日盘前完整报告（2026-05-26）
 
@@ -183,6 +188,134 @@ class TradingCopilotWrapperTest(unittest.TestCase):
         self.assertEqual(payload["workflow"], "backfill-signal-outcomes")
         self.assertEqual(payload["summary"]["by_outcome"], {"triggered": 1})
         self.assertEqual(len(payload["appended"]), 1)
+
+    def test_pre_market_expected_outputs_include_signals_sidecar(self):
+        proc = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=json.dumps({"report_date": "2026-05-26", "context_path": "report/2026-05-26/pre-market-context.json"}),
+            stderr="",
+        )
+        args = Namespace(
+            watchlist="config/watchlist.json",
+            interval="1day",
+            timezone="America/New_York",
+            date=None,
+            snapshot_date=None,
+            skip_non_trading_day=False,
+        )
+
+        with patch.object(trading_copilot, "run_child", return_value=proc), patch.object(
+            trading_copilot, "emit", side_effect=SystemExit
+        ) as emit:
+            with self.assertRaises(SystemExit):
+                trading_copilot.run_pre_market(args)
+
+        payload = emit.call_args.args[0]
+        self.assertIn("report/2026-05-26/signals.json", payload["expected_agent_outputs"])
+
+    def test_post_market_expected_outputs_include_signals_sidecar(self):
+        proc = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=json.dumps({"snapshot_date": "2026-05-26", "snapshot_path": "report/2026-05-26/daily-snapshot.json"}),
+            stderr="",
+        )
+        args = Namespace(
+            watchlist="config/watchlist.json",
+            interval="1day",
+            outputsize=200,
+            timezone="America/New_York",
+            date=None,
+            skip_non_trading_day=False,
+            sp500_screen=False,
+            sp500_top=100,
+            sp500_candidates=15,
+            sp500_source="ishares_ivv",
+        )
+
+        with patch.object(trading_copilot, "run_child", return_value=proc), patch.object(
+            trading_copilot, "emit", side_effect=SystemExit
+        ) as emit:
+            with self.assertRaises(SystemExit):
+                trading_copilot.run_post_market(args)
+
+        payload = emit.call_args.args[0]
+        self.assertIn("report/2026-05-26/signals.json", payload["expected_agent_outputs"])
+
+    def test_account_snapshot_wrapper_contract(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fixture = root / "account.json"
+            fixture.write_text(json.dumps({"account": {"net_liquidation": 1000}, "positions": []}), encoding="utf-8")
+
+            payload = self.run_wrapper(
+                "account-snapshot",
+                "--date",
+                "2026-05-27",
+                "--input",
+                str(fixture),
+                "--output",
+                str(root / "account-snapshot.json"),
+            )
+
+        self.assertEqual(payload["status"], "success")
+        self.assertEqual(payload["workflow"], "account-snapshot")
+        self.assertEqual(payload["date"], "2026-05-27")
+        self.assertEqual(payload["positions_count"], 0)
+
+    def test_position_review_wrapper_contract(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            account = root / "account-snapshot.json"
+            account.write_text(
+                json.dumps(
+                    {
+                        "account": {"net_liquidation": 1000},
+                        "positions": [{"symbol": "MU", "last_price": 96, "market_value": 100}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            signals = root / "signals.json"
+            signals.write_text(
+                json.dumps(
+                    {
+                        "date": "2026-05-27",
+                        "session": "pre-market",
+                        "signals": [
+                            {
+                                "symbol": "MU",
+                                "setup": "breakout_pullback_continuation.md",
+                                "trigger": {"price": 100},
+                                "invalidation": {"price": 95},
+                                "risk": {"max_risk_pct": 1},
+                                "status": "planned",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            payload = self.run_wrapper(
+                "position-review",
+                "--date",
+                "2026-05-27",
+                "--account-snapshot",
+                str(account),
+                "--signals",
+                str(signals),
+                "--output",
+                str(root / "position-review"),
+                "--append",
+                "--journal-dir",
+                str(root / "journal"),
+            )
+
+        self.assertEqual(payload["status"], "success")
+        self.assertEqual(payload["workflow"], "position-review")
+        self.assertEqual(payload["summary"]["positions"], 1)
 
 
 if __name__ == "__main__":

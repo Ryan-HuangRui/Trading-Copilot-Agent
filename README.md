@@ -49,6 +49,9 @@ python3 script/trading_copilot.py backfill-signal-outcomes --date <DATE> --appen
 python3 script/trading_copilot.py daily-self-review --date <DATE> --append
 python3 script/trading_copilot.py weekly-review --week <YYYY-Www> --append
 python3 script/trading_copilot.py extract-monitor-signals --append
+python3 script/trading_copilot.py account-snapshot --date <DATE>
+python3 script/trading_copilot.py position-review --date <DATE> --append
+python3 script/workflow_smoke_test.py --date <DATE> --week <YYYY-Www>
 ```
 
 契约文档：
@@ -87,6 +90,10 @@ python3 script/trading_copilot.py extract-monitor-signals --append
 - 日度自我复盘：`python3 script/trading_copilot.py daily-self-review --date YYYY-MM-DD --append`
 - 周度复盘：`python3 script/trading_copilot.py weekly-review --week YYYY-Www --append`
 - journal 默认写入 ignored runtime 路径：`runtime/journal/signals.jsonl`、`outcomes.jsonl`、`trades.jsonl`、`reviews.jsonl`
+- 持仓复核只读 Longbridge 账户快照，不下单、不撤单、不自动调仓：
+  - `python3 script/trading_copilot.py account-snapshot --date YYYY-MM-DD`
+  - `python3 script/trading_copilot.py position-review --date YYYY-MM-DD --append`
+  - 产物：`runtime/account/YYYY-MM-DD/account-snapshot.json`、`report/YYYY-MM-DD/position-review.md`、`report/YYYY-MM-DD/position-review.json`
 
 ## 实时盯盘
 - 支持多标的 5m 监控，默认只输出做多路径（可配置）
@@ -95,6 +102,7 @@ python3 script/trading_copilot.py extract-monitor-signals --append
 - 执行脚本：`python3 script/monitor_scan.py --state config/monitor_state.json --interval 5min`
 - 输出文件：`report/latest-monitor.json`
 - 可选写入 journal：`python3 script/trading_copilot.py extract-monitor-signals --append`
+- monitor scan 原生输出 setup/risk_quality/journal_appendable；journal 记录仍只是观察，不是执行指令
 
 ## 运行示例
 

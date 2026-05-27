@@ -13,6 +13,7 @@ JOURNAL_FILES = {
     "outcome": "outcomes.jsonl",
     "trade": "trades.jsonl",
     "review": "reviews.jsonl",
+    "position_review": "position_reviews.jsonl",
 }
 
 SIGNAL_STATUSES = {"planned", "observed", "triggered", "invalidated", "no_trade"}

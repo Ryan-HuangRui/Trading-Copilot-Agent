@@ -28,7 +28,7 @@ Every workflow run should return or report the same status fields:
 
 ## Safety Rules
 
-- Never place real trades, call broker APIs, or imply order execution.
+- Never place real trades, call broker write APIs, or imply order execution. Read-only account snapshots are allowed only through the repository's account snapshot workflow.
 - Do not output deterministic buy/sell instructions. Use scenarios, triggers, invalidation, risk, and `NO TRADE`.
 - For current or recent symbol analysis, fetch real market data first through the repository scripts or state that no concrete price conclusion can be made.
 - Use `knowledge/refined/` as the rule source for trading conclusions.
@@ -57,6 +57,9 @@ Every workflow run should return or report the same status fields:
    `python3 script/trading_copilot.py extract-report-signals --session pre-market --date <DATE> --require-validation --append`.
 6. Incrementally add focus symbols to Longbridge `今日关注`:
    `python3 script/trading_copilot.py sync-longbridge-watchlist --session pre-market --date <DATE> --group-name 今日关注 --sync-mode add --require-validation --execute --no-create`.
+7. If read-only account context is enabled, run:
+   `python3 script/trading_copilot.py account-snapshot --date <DATE>`
+   then `python3 script/trading_copilot.py position-review --date <DATE> --append`.
 
 ### Post-Market Review
 
@@ -71,7 +74,10 @@ Every workflow run should return or report the same status fields:
    `python3 script/trading_copilot.py extract-report-signals --session post-market --date <DATE> --require-validation --append`.
 7. Generate the daily self-review:
    `python3 script/trading_copilot.py daily-self-review --date <DATE> --append`.
-8. Fully replace Longbridge `今日关注` from the post-market focus list:
+8. If read-only account context is enabled, run:
+   `python3 script/trading_copilot.py account-snapshot --date <DATE>`
+   then `python3 script/trading_copilot.py position-review --date <DATE> --append`.
+9. Fully replace Longbridge `今日关注` from the post-market focus list:
    `python3 script/trading_copilot.py sync-longbridge-watchlist --session post-market --date <DATE> --group-name 今日关注 --sync-mode replace --require-validation --execute --no-create`.
 
 ### Longbridge Watchlist Sync
@@ -94,6 +100,12 @@ Every workflow run should return or report the same status fields:
 1. Run `python3 script/trading_copilot.py weekly-review --week <YYYY-Www> --append`.
 2. Read `report/weekly/<YYYY-Www>.md`.
 3. Present the weekly review as process feedback only. Do not convert signal outcomes into trading win rate unless `trades.jsonl` contains actual execution results.
+
+### Position Review
+
+1. Run `python3 script/trading_copilot.py account-snapshot --date <DATE>` to write a read-only account snapshot.
+2. Run `python3 script/trading_copilot.py position-review --date <DATE> --append`.
+3. Treat output as human-review prompts only. Do not output automatic buy/sell/adjustment instructions.
 
 ### Symbol Analysis
 
@@ -119,6 +131,7 @@ Every workflow run should return or report the same status fields:
 - Trading-day guard smoke test: `python3 script/trading_day_guard.py --date 2026-05-06 --format text`.
 - Wrapper smoke test without market-data access: `python3 script/trading_copilot.py trading-day-check --date 2026-05-06`.
 - Review smoke test without market-data access: `python3 script/trading_copilot.py weekly-review --week 2026-W22`.
+- Fixture workflow smoke test: `python3 script/workflow_smoke_test.py --date 2026-05-26 --week 2026-W22`.
 - Data-fetch smoke tests require `.env` with `TWELVE_DATA_API_KEY`.
 
 ## Output Contract

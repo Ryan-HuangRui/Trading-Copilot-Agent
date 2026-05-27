@@ -59,13 +59,28 @@ def scan_to_signal(scan: dict[str, Any], date: str, source: str, risk_pct: Any) 
     status_text = str(scan.get("status") or "")
     if status_text not in APPENDABLE_STATUSES:
         return None
+    if scan.get("journal_appendable") is False:
+        return None
     symbol = str(scan.get("symbol") or "").upper()
     if not symbol:
         return None
     trigger_price = to_float(scan.get("trigger"))
     invalidation_price = to_float(scan.get("stop"))
-    setup = "strong_breakout_trend_following.md" if status_text == "可执行" else "breakout_pullback_continuation.md"
-    signal_id = stable_signal_id(date, "monitor", symbol, f"{source}|{status_text}")
+    trigger_detail = scan.get("trigger_detail") if isinstance(scan.get("trigger_detail"), dict) else None
+    invalidation_detail = scan.get("invalidation_detail") if isinstance(scan.get("invalidation_detail"), dict) else None
+    if trigger_detail and trigger_detail.get("price") is not None:
+        trigger_price = to_float(trigger_detail.get("price"))
+    if invalidation_detail and invalidation_detail.get("price") is not None:
+        invalidation_price = to_float(invalidation_detail.get("price"))
+    setup = str(
+        scan.get("setup")
+        or ("strong_breakout_trend_following.md" if status_text == "可执行" else "breakout_pullback_continuation.md")
+    )
+    setup_files = scan.get("setup_files")
+    if not isinstance(setup_files, list):
+        setup_files = [setup]
+    identity = f"{source}|{status_text}|{trigger_price}|{scan.get('bar_timestamp') or ''}"
+    signal_id = stable_signal_id(date, "monitor", symbol, identity)
     return {
         "kind": "signal",
         "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -74,14 +89,18 @@ def scan_to_signal(scan: dict[str, Any], date: str, source: str, risk_pct: Any) 
         "session": "monitor",
         "symbol": symbol,
         "setup": setup,
-        "setup_files": [setup],
+        "setup_files": setup_files,
         "status": "observed",
         "source_report": source,
-        "trigger": f"{status_text}：{scan.get('reason')}; trigger={scan.get('trigger')}",
+        "trigger": f"{status_text}：{scan.get('reason')}; trigger={trigger_price}",
         "trigger_price": trigger_price,
-        "invalidation": scan.get("invalid") or f"stop={scan.get('stop')}",
+        "trigger_detail": trigger_detail,
+        "invalidation": scan.get("invalid") or f"stop={invalidation_price}",
         "invalidation_price": invalidation_price,
+        "invalidation_detail": invalidation_detail,
         "risk": f"监控配置单笔风险 {risk_pct}%",
+        "risk_quality": scan.get("risk_quality"),
+        "bar_timestamp": scan.get("bar_timestamp"),
         "notes": scan.get("reason"),
     }
 

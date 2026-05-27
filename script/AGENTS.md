@@ -8,6 +8,10 @@
 - `prepare_daily_context.py`: pre-market context builder that reads the previous trading day's snapshot and writes `report/<DATE>/pre-market-context.json`.
 - `pre_market_report.py`: scripted pre-market report generator.
 - `monitor_scan.py`: 5m watchlist/position scan and `report/latest-monitor.json` writer.
+- `longbridge_cli_adapter.py`: read-only Longbridge CLI guard. Do not add order/write commands.
+- `longbridge_account_snapshot.py`: read-only account/position snapshot writer under `runtime/account/`.
+- `position_review.py`: compares read-only positions with `signals.json` and writes review artifacts.
+- `workflow_smoke_test.py`: fixture-based workflow smoke test; must not fetch live market or account data.
 - `report_delivery_guard.py`: idempotent delivery-state helper.
 - `trading_copilot.py`: unified agent-facing workflow wrapper that returns `status/date/artifacts/skipped/reason`.
 - `trading_day_guard.py` and `market_calendar.py`: simple US regular trading-day guard.
@@ -23,6 +27,9 @@
 - Run unified pre-market workflow: `python3 script/trading_copilot.py pre-market-plan --watchlist config/watchlist.json --skip-non-trading-day`.
 - Run unified post-market workflow: `python3 script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day`.
 - Run unified monitor workflow: `python3 script/trading_copilot.py monitor-brief --state config/monitor_state.json --interval 5min`.
+- Run read-only account snapshot: `python3 script/trading_copilot.py account-snapshot --date 2026-05-06`.
+- Run position review: `python3 script/trading_copilot.py position-review --date 2026-05-06 --append`.
+- Run fixture workflow smoke test: `python3 script/workflow_smoke_test.py --date 2026-05-06 --week 2026-W19`.
 - Check trading day through wrapper: `python3 script/trading_copilot.py trading-day-check --date 2026-05-06`.
 - Check trading day: `python3 script/trading_day_guard.py`.
 - Generate scripted report: `python3 script/pre_market_report.py --watchlist config/watchlist.json`.
@@ -36,6 +43,7 @@
 - Load `TWELVE_DATA_API_KEY` from `.env` or the process environment; never hardcode or print secrets.
 - Preserve the 8 requests/minute default unless the data provider contract is intentionally changed.
 - Keep output writes under ignored runtime paths (`raw_data/`, `report/`, `config/rate_limit_state.json`) unless the task is metadata import.
+- Longbridge account workflows are read-only. Never add order placement, order cancellation, order replacement, or automatic position adjustment.
 - If adding a script that fetches market data, reuse `TwelveDataClient` and its shared limiter.
 - S&P 500 universe fetches may use standard-library HTTP, but per-symbol market-data screening must still use `TwelveDataClient` and the shared limiter.
 - For scheduled report scripts, support `--skip-non-trading-day` and use the market date in `America/New_York`.

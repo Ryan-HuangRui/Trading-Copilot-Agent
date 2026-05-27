@@ -126,6 +126,7 @@ def run_pre_market(args: argparse.Namespace) -> None:
         response["expected_agent_outputs"] = [
             f"report/{stdout.get('report_date')}/exec-brief.md",
             f"report/{stdout.get('report_date')}/pre-market.md",
+            f"report/{stdout.get('report_date')}/signals.json",
         ]
     emit(response)
 
@@ -172,7 +173,8 @@ def run_post_market(args: argparse.Namespace) -> None:
             stdout.get("snapshot_path"),
         ]
         response["expected_agent_outputs"] = [
-            f"report/{stdout.get('snapshot_date')}/post-market.md"
+            f"report/{stdout.get('snapshot_date')}/post-market.md",
+            f"report/{stdout.get('snapshot_date')}/signals.json",
         ]
     emit(response)
 
@@ -405,6 +407,64 @@ def run_extract_monitor_signals(args: argparse.Namespace) -> None:
     emit(response)
 
 
+def run_account_snapshot(args: argparse.Namespace) -> None:
+    command = [
+        "script/longbridge_account_snapshot.py",
+        "--timezone",
+        args.timezone,
+    ]
+    if args.date:
+        command.extend(["--date", args.date])
+    if args.input:
+        command.extend(["--input", args.input])
+    if args.output:
+        command.extend(["--output", args.output])
+    if args.longbridge_cli:
+        command.extend(["--longbridge-cli", args.longbridge_cli])
+
+    proc = run_child(command)
+    stdout = parse_json_output(proc.stdout)
+    if proc.returncode != 0:
+        emit(failed_response("account-snapshot", command, proc), 1)
+
+    response = base_response("account-snapshot", command, stdout)
+    response["date"] = (stdout or {}).get("date") or args.date
+    response["artifacts"] = [stdout["output"]] if stdout and stdout.get("output") else []
+    response["positions_count"] = (stdout or {}).get("positions_count")
+    emit(response)
+
+
+def run_position_review(args: argparse.Namespace) -> None:
+    command = [
+        "script/position_review.py",
+        "--date",
+        args.date,
+        "--journal-dir",
+        args.journal_dir,
+    ]
+    if args.account_snapshot:
+        command.extend(["--account-snapshot", args.account_snapshot])
+    if args.signals:
+        command.extend(["--signals", args.signals])
+    if args.output:
+        command.extend(["--output", args.output])
+    if args.append:
+        command.append("--append")
+
+    proc = run_child(command)
+    stdout = parse_json_output(proc.stdout)
+    if proc.returncode != 0:
+        emit(failed_response("position-review", command, proc), 1)
+
+    response = base_response("position-review", command, stdout)
+    response["date"] = args.date
+    response["artifacts"] = (stdout or {}).get("artifacts", [])
+    response["summary"] = (stdout or {}).get("summary")
+    response["appended"] = (stdout or {}).get("appended", [])
+    response["skipped_duplicates"] = (stdout or {}).get("skipped_duplicates", [])
+    emit(response)
+
+
 def run_sync_longbridge_watchlist(args: argparse.Namespace) -> None:
     validation = None
     if args.require_validation:
@@ -564,6 +624,23 @@ def build_parser() -> argparse.ArgumentParser:
     monitor_signals.add_argument("--append", action="store_true")
     monitor_signals.add_argument("--journal-dir", default="runtime/journal")
     monitor_signals.set_defaults(func=run_extract_monitor_signals)
+
+    account = sub.add_parser("account-snapshot", help="Write a read-only Longbridge account snapshot")
+    account.add_argument("--date")
+    account.add_argument("--timezone", default="America/New_York")
+    account.add_argument("--input")
+    account.add_argument("--output")
+    account.add_argument("--longbridge-cli")
+    account.set_defaults(func=run_account_snapshot)
+
+    position = sub.add_parser("position-review", help="Review read-only positions against structured signals")
+    position.add_argument("--date", required=True)
+    position.add_argument("--account-snapshot")
+    position.add_argument("--signals")
+    position.add_argument("--output")
+    position.add_argument("--append", action="store_true")
+    position.add_argument("--journal-dir", default="runtime/journal")
+    position.set_defaults(func=run_position_review)
 
     sync = sub.add_parser(
         "sync-longbridge-watchlist",

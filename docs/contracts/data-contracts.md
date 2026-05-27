@@ -163,6 +163,63 @@ Consumer rules:
 - Treat scan statuses as observations only.
 - Position actions require human review.
 - Include `NO TRADE` if data is insufficient or a setup lacks rule confirmation.
+- Setup-backed scans may include `setup`, `setup_files`, `trigger_detail`, `invalidation_detail`, `risk_quality`, `journal_appendable`, and `bar_timestamp`.
+
+## `runtime/account/<DATE>/account-snapshot.json`
+
+Producer:
+
+```bash
+python3 script/trading_copilot.py account-snapshot --date <DATE>
+```
+
+Expected top-level fields:
+
+- `date`
+- `source`
+- `generated_at`
+- `account`: net liquidation, cash, and currency when available.
+- `positions`: read-only position rows.
+- `safety_note`
+
+Expected position fields:
+
+- `symbol`
+- `market`
+- `quantity`
+- `avg_cost`
+- `last_price`
+- `market_value`
+- `unrealized_pnl`
+- `unrealized_pnl_pct`
+- `currency`
+
+Consumer rules:
+
+- This is a local ignored runtime artifact.
+- Use it only for read-only position review.
+- Do not use it to place, cancel, replace, or modify orders.
+
+## `report/<DATE>/position-review.json`
+
+Producer:
+
+```bash
+python3 script/trading_copilot.py position-review --date <DATE> --append
+```
+
+Expected top-level fields:
+
+- `date`
+- `source_account_snapshot`
+- `source_signals`
+- `position_reviews`
+- `summary`
+
+Consumer rules:
+
+- Treat `review_required=true` as a prompt for human review only.
+- Do not convert risk states into automatic trading actions.
 
 ## Wrapper Status JSON
 

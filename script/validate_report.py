@@ -241,13 +241,13 @@ def validate(args: argparse.Namespace) -> dict[str, Any]:
             signal_symbols = [
                 str(item.get("symbol")).upper()
                 for item in signals_payload.get("signals", [])
-                if isinstance(item, dict) and item.get("symbol")
+                if isinstance(item, dict) and item.get("symbol") and item.get("status") != "no_trade"
             ]
             for report in reports:
                 if not report.exists():
                     continue
                 symbols = focus_symbols(report.read_text(encoding="utf-8"), args.session)
-                if symbols and signal_symbols and symbols[: len(signal_symbols)] != signal_symbols[: len(symbols)]:
+                if symbols and symbols != signal_symbols:
                     errors.append(
                         f"{sidecar}: signal symbols {signal_symbols} do not match focus list {symbols} in {report}"
                     )

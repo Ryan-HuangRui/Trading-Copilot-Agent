@@ -5,6 +5,7 @@ This repository is a trading research workflow package for Codex/Claude/OpenClaw
 All workflows must preserve the repository safety rules:
 
 - Never place real trades or call broker APIs.
+- Read-only Longbridge account snapshots are allowed only through the account snapshot workflow; order placement, cancellation, replacement, and automatic position changes are prohibited.
 - Do not output deterministic buy/sell instructions.
 - Use scenarios, triggers, invalidation, risk, and `NO TRADE`.
 - Use `knowledge/refined/` as the only rule source for trading conclusions.
@@ -307,6 +308,7 @@ Required behavior:
 
 - Summarize planned signals, outcome distribution, setup distribution, symbol distribution, and trade records.
 - Do not convert outcome touch statistics into win rate unless trades contain actual `result_r`.
+- Include position review counts when `runtime/journal/position_reviews.jsonl` exists.
 
 ## extract-monitor-signals
 
@@ -330,6 +332,75 @@ Required behavior:
 
 - Append only actionable observation statuses such as `可执行` and `临近触发`.
 - Treat monitor entries as observations, not trade instructions.
+- Prefer setup-backed fields emitted by `monitor_scan.py`, including `setup`, `setup_files`, `trigger_detail`, `invalidation_detail`, `risk_quality`, and `journal_appendable`.
+
+## account-snapshot
+
+Purpose: write a read-only account and position snapshot for later local review.
+
+Canonical command:
+
+```bash
+python3 script/trading_copilot.py account-snapshot --date <DATE>
+```
+
+Inputs:
+
+- Longbridge CLI read-only account/position commands, or `--input` JSON fixture for tests.
+
+Output:
+
+- `runtime/account/<DATE>/account-snapshot.json`
+
+Required behavior:
+
+- Must not place, cancel, replace, modify, or submit orders.
+- Must reject non-read-only Longbridge CLI commands.
+- The snapshot is an ignored runtime artifact and should not be committed.
+
+## position-review
+
+Purpose: compare current read-only positions against the structured daily plan.
+
+Canonical command:
+
+```bash
+python3 script/trading_copilot.py position-review --date <DATE> --append
+```
+
+Inputs:
+
+- `runtime/account/<DATE>/account-snapshot.json`
+- `report/<DATE>/signals.json`
+- Optional `runtime/journal/position_reviews.jsonl` for duplicate detection.
+
+Output:
+
+- `report/<DATE>/position-review.md`
+- `report/<DATE>/position-review.json`
+- With `--append`, writes `runtime/journal/position_reviews.jsonl`.
+
+Required behavior:
+
+- Report whether each position appears in today's structured signals.
+- Report concentration, distance to invalidation, and whether human review is required.
+- Do not output deterministic buy/sell instructions or automatic adjustment actions.
+
+## workflow-smoke-test
+
+Purpose: run a fixture-based end-to-end loop without external data calls.
+
+Canonical command:
+
+```bash
+python3 script/workflow_smoke_test.py --date <DATE> --week <YYYY-Www>
+```
+
+Required behavior:
+
+- Use existing fixture artifacts under `--repo-root`.
+- Exercise validation, signal extraction, outcome backfill, daily review, weekly review, and monitor extraction.
+- Must not fetch market data or account data.
 
 ## research-note
 

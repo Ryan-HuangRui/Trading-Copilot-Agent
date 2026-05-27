@@ -71,7 +71,12 @@ Production scheduling is expected to run through cc connect. cc connect triggers
    ```bash
    python3 script/trading_copilot.py extract-report-signals --session pre-market --date <PRE_MARKET_DATE> --require-validation --append
    ```
-14. Pre-market Longbridge sync incrementally adds the generated focus symbols to `今日关注`:
+14. Optional read-only account and position review:
+   ```bash
+   python3 script/trading_copilot.py account-snapshot --date <PRE_MARKET_DATE>
+   python3 script/trading_copilot.py position-review --date <PRE_MARKET_DATE> --append
+   ```
+15. Pre-market Longbridge sync incrementally adds the generated focus symbols to `今日关注`:
    ```bash
    python3 script/trading_copilot.py sync-longbridge-watchlist --session pre-market --date <PRE_MARKET_DATE> --group-name 今日关注 --sync-mode add --require-validation --execute --no-create
    ```
@@ -107,6 +112,12 @@ python3 script/trading_copilot.py backfill-signal-outcomes --date <SNAPSHOT_DATE
 Then append the focused observation plan:
 ```bash
 python3 script/trading_copilot.py extract-report-signals --session post-market --date <SNAPSHOT_DATE> --require-validation --append
+```
+
+Optionally capture a read-only account snapshot and position review:
+```bash
+python3 script/trading_copilot.py account-snapshot --date <SNAPSHOT_DATE>
+python3 script/trading_copilot.py position-review --date <SNAPSHOT_DATE> --append
 ```
 
 Then generate the daily self-review:

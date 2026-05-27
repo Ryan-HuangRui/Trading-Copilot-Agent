@@ -91,11 +91,26 @@ def analyze_long_signal(symbol: str, bars: List[Dict]) -> Dict:
         return {
             "symbol": symbol,
             "status": "可执行",
+            "setup": "strong_breakout_trend_following.md",
+            "setup_files": ["strong_breakout_trend_following.md", "tight_range_breakout_filter.md"],
             "reason": "上升趋势+20Bar突破+放量",
             "trigger": round(c, 3),
+            "trigger_detail": {
+                "type": "break_above",
+                "price": round(c, 3),
+                "text": "上升趋势中 20Bar 突破并放量",
+            },
             "stop": round(stop, 3),
+            "invalidation_detail": {
+                "type": "break_below",
+                "price": round(stop, 3),
+                "text": "5m 收盘跌回突破位下方并失守近3根低点",
+            },
             "target1": round(target, 3),
             "invalid": "5m收盘跌回突破位下方并失守近3根低点",
+            "risk_quality": "acceptable" if risk > 0 else "invalid",
+            "journal_appendable": risk > 0,
+            "bar_timestamp": bars[-1].get("dt"),
         }
 
     near = c >= prev20_high * 0.997
@@ -103,21 +118,43 @@ def analyze_long_signal(symbol: str, bars: List[Dict]) -> Dict:
         return {
             "symbol": symbol,
             "status": "临近触发",
+            "setup": "breakout_pullback_continuation.md",
+            "setup_files": ["breakout_pullback_continuation.md", "tight_range_breakout_filter.md"],
             "reason": "趋势向上，价格接近突破位",
             "trigger": round(prev20_high, 3),
+            "trigger_detail": {
+                "type": "break_above",
+                "price": round(prev20_high, 3),
+                "text": "趋势向上，价格接近 20Bar 突破位",
+            },
             "stop": round(min(lows[-3:]), 3),
+            "invalidation_detail": {
+                "type": "break_below",
+                "price": round(min(lows[-3:]), 3),
+                "text": "突破后不能放量站稳",
+            },
             "target1": None,
             "invalid": "突破后不能放量站稳",
+            "risk_quality": "watch_only",
+            "journal_appendable": True,
+            "bar_timestamp": bars[-1].get("dt"),
         }
 
     return {
         "symbol": symbol,
         "status": "观察中",
+        "setup": "NO VALID SETUP",
+        "setup_files": [],
         "reason": "结构未完成或量能不足",
         "trigger": round(prev20_high, 3),
+        "trigger_detail": {"type": "watch", "price": round(prev20_high, 3), "text": "观察突破位"},
         "stop": round(min(lows[-3:]), 3),
+        "invalidation_detail": {"type": "none", "price": round(min(lows[-3:]), 3), "text": "无可执行失效位"},
         "target1": None,
         "invalid": "无",
+        "risk_quality": "insufficient_setup",
+        "journal_appendable": False,
+        "bar_timestamp": bars[-1].get("dt"),
     }
 
 
