@@ -42,7 +42,7 @@ Every workflow run should return or report the same status fields:
 - `knowledge/refined/`: approved trading rules.
 - `docs/`: runbooks for automation and human operation.
 - `config/`: watchlists and local runtime state paths.
-- `raw_data/`, `report/`, and `config/rate_limit_state.json`: generated or local runtime data, ignored by git.
+- `raw_data/`, `report/`, `config/rate_limit_state.json`, and `config/longbridge_rate_limit_state.json`: generated or local runtime data, ignored by git.
 
 ## Core Workflows
 
@@ -146,7 +146,7 @@ Use `python3 script/trading_copilot.py learning-review --lookback-days 20` to ag
 - Wrapper smoke test without market-data access: `python3 script/trading_copilot.py trading-day-check --date 2026-05-06`.
 - Review smoke test without market-data access: `python3 script/trading_copilot.py weekly-review --week 2026-W22`.
 - Fixture workflow smoke test: `python3 script/workflow_smoke_test.py --date 2026-05-26 --week 2026-W22`.
-- Data-fetch smoke tests require `.env` with `TWELVE_DATA_API_KEY`.
+- Data-fetch smoke tests use Longbridge CLI by default. Twelve Data fallback tests require `.env` with `TWELVE_DATA_API_KEY`.
 
 ## Output Contract
 

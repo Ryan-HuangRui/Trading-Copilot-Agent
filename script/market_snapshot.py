@@ -5,7 +5,8 @@ import os
 from pathlib import Path
 from statistics import mean
 
-from twelve_data_client import TwelveDataClient, save_json
+from market_data_provider import build_market_data_client
+from twelve_data_client import save_json
 from sp500_universe import (
     fetch_sp500_holdings,
     score_candidate,
@@ -134,7 +135,7 @@ def merge_symbols(primary: list[str], secondary: list[str]) -> list[str]:
 
 
 def fetch_symbol_snapshot(
-    client: TwelveDataClient,
+    client,
     symbol: str,
     interval: str,
     outputsize: int,
@@ -147,7 +148,7 @@ def fetch_symbol_snapshot(
 
 
 def build_sp500_screen(
-    client: TwelveDataClient,
+    client,
     repo_root: Path,
     snapshot_date: str,
     interval: str,
@@ -215,14 +216,21 @@ def build_market_snapshot(
     sp500_candidates: int = 15,
     sp500_source: str = "ishares_ivv",
     extra_symbols: list[str] | None = None,
+    market_data_source: str = "longbridge",
+    fallback_market_data_source: str = "twelve",
+    longbridge_cli: str | None = None,
+    longbridge_default_market: str = "US",
 ) -> tuple[dict, Path]:
     load_env(repo_root)
     watch = json.loads((repo_root / watchlist_path).read_text(encoding="utf-8"))
     watchlist_symbols = merge_symbols(watch.get("symbols", []), [])
 
-    client = TwelveDataClient(
-        max_calls_per_minute=8,
-        state_file=str(repo_root / "config" / "rate_limit_state.json"),
+    client = build_market_data_client(
+        repo_root=repo_root,
+        primary=market_data_source,
+        fallback=fallback_market_data_source,
+        longbridge_cli=longbridge_cli,
+        longbridge_default_market=longbridge_default_market,
     )
 
     raw_dir = raw_data_dir(repo_root, snapshot_date, interval)
@@ -272,6 +280,9 @@ def build_market_snapshot(
         "outputsize": outputsize,
         "watchlist_path": watchlist_path,
         "watchlist_symbols": watchlist_symbols,
+        "market_data_source": getattr(client, "name", market_data_source),
+        "primary_market_data_source": market_data_source,
+        "fallback_market_data_source": fallback_market_data_source,
         "trading_day": trading_day,
         "dynamic_universe_enabled": sp500_screen,
         "dynamic_universe_symbols": dynamic_symbols,

@@ -8,7 +8,21 @@ from pathlib import Path
 from typing import Any
 
 
-READ_ONLY_ROOTS = {"account", "asset", "assets", "position", "positions", "portfolio", "quote", "market"}
+READ_ONLY_ROOTS = {
+    "account",
+    "asset",
+    "assets",
+    "position",
+    "positions",
+    "portfolio",
+    "quote",
+    "market",
+    "market-status",
+    "kline",
+    "intraday",
+    "static",
+    "trading",
+}
 WRITE_TOKENS = {
     "order",
     "submit",

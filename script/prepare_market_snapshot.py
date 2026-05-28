@@ -68,6 +68,10 @@ def main() -> None:
     parser.add_argument("--extra-symbol", action="append", default=[], help="Extra symbol to force into the snapshot.")
     parser.add_argument("--include-journal-signals", action="store_true", help="Force symbols from journal signals targeting this snapshot date into the snapshot.")
     parser.add_argument("--include-position-symbols", action="store_true", help="Force symbols from runtime account snapshot positions into the snapshot.")
+    parser.add_argument("--market-data-source", default="longbridge", choices=["longbridge", "twelve"], help="Primary market data provider.")
+    parser.add_argument("--fallback-market-data-source", default="twelve", choices=["twelve", "longbridge", "none"], help="Fallback market data provider.")
+    parser.add_argument("--longbridge-cli", help="Explicit Longbridge CLI path.")
+    parser.add_argument("--longbridge-default-market", default="US", help="Market suffix for bare symbols when using Longbridge.")
     args = parser.parse_args()
 
     repo_root = Path(__file__).resolve().parents[1]
@@ -96,6 +100,10 @@ def main() -> None:
         sp500_candidates=args.sp500_candidates,
         sp500_source=args.sp500_source,
         extra_symbols=extra_symbols,
+        market_data_source=args.market_data_source,
+        fallback_market_data_source=args.fallback_market_data_source,
+        longbridge_cli=args.longbridge_cli,
+        longbridge_default_market=args.longbridge_default_market,
     )
 
     print(json.dumps(
@@ -106,6 +114,9 @@ def main() -> None:
             "watchlist_symbols": len(snapshot.get("watchlist_symbols", [])),
             "dynamic_universe_symbols": len(snapshot.get("dynamic_universe_symbols", [])),
             "extra_symbols": snapshot.get("extra_symbols", []),
+            "market_data_source": snapshot.get("market_data_source"),
+            "primary_market_data_source": snapshot.get("primary_market_data_source"),
+            "fallback_market_data_source": snapshot.get("fallback_market_data_source"),
             "candidate_universe_path": snapshot.get("candidate_universe_path"),
             "errors": len(snapshot["errors"]),
             "latest_bar_dates": snapshot.get("latest_bar_dates", []),

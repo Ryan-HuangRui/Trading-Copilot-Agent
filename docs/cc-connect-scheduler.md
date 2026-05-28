@@ -10,7 +10,7 @@ Use this split:
 - Codex: execute the repository workflow using the repo prompts, scripts, and contracts.
 - Trading-Copilot-Agent: data preparation, report artifacts, validation, journal append, outcome backfill, self-review, weekly review.
 
-Do not run the same production pre-market or post-market workflow from both cc connect and Codex App automation. Duplicate schedulers can duplicate reports, journal records, Longbridge sync, Twelve Data calls, and Feishu messages.
+Do not run the same production pre-market or post-market workflow from both cc connect and Codex App automation. Duplicate schedulers can duplicate reports, journal records, Longbridge sync, market-data calls, and Feishu messages.
 
 ## Server Update Checklist
 
@@ -48,6 +48,7 @@ Update the configured cc connect prompts so they require the new artifacts and g
 
 - Pre-market generation must write `exec-brief.md`, `pre-market.md`, and `pre-market-signals.json`.
 - Post-market generation must write `post-market.md` and `post-market-signals.json`.
+- Market-data preparation should use the repo default provider stack: Longbridge CLI primary, Twelve Data fallback.
 - Both workflows must run `validate-report` and `validate-trade-plan` before journal append or Longbridge sync.
 - Any `extract-report-signals --require-validation` failure must stop journal append.
 - Any `sync-longbridge-watchlist --require-validation` failure must stop watchlist sync.
@@ -75,6 +76,7 @@ raw_data/
 report/
 runtime/
 config/rate_limit_state.json
+config/longbridge_rate_limit_state.json
 ```
 
 Confirm server secrets and local state are not committed:
@@ -85,6 +87,7 @@ runtime/
 report/
 raw_data/
 config/rate_limit_state.json
+config/longbridge_rate_limit_state.json
 ```
 
 ### 5. Server Acceptance Check

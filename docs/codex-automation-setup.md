@@ -10,18 +10,23 @@ This runbook is for setting up legacy Codex App automations on a new machine. Fo
    source .venv/bin/activate
    pip install -r requirements.txt
    ```
-3. Create `.env` from `.env.example` and set:
+3. Ensure Longbridge CLI is installed and authenticated for primary market data:
+   ```bash
+   longbridge auth status
+   longbridge check
+   ```
+4. Create `.env` from `.env.example` and set a Twelve Data fallback key when needed:
    ```bash
    TWELVE_DATA_API_KEY=<your-api-key>
    ```
-4. Verify deterministic scripts:
+5. Verify deterministic scripts:
    ```bash
    python3 -m py_compile script/*.py
    python3 script/trading_day_guard.py --format text
    python3 script/sp500_universe.py --top 5
    ```
 
-Do not copy generated `raw_data/`, `report/`, or `config/rate_limit_state.json` between machines unless intentionally restoring local runtime history.
+Do not copy generated `raw_data/`, `report/`, `config/rate_limit_state.json`, or `config/longbridge_rate_limit_state.json` between machines unless intentionally restoring local runtime history.
 
 ## Automation shape
 Create two Codex App automations against this repository root.
@@ -131,10 +136,10 @@ The Longbridge sync is additive before market open and must not remove existing 
 - Confirm `longbridge auth status` is valid before enabling `--execute` watchlist sync.
 
 ## Failure handling
-- Missing `TWELVE_DATA_API_KEY`: fix `.env`; do not commit secrets.
+- Longbridge market-data failure: fix CLI login/connectivity with `longbridge auth login` and `longbridge check`; if Twelve Data fallback is intended, verify `.env` has `TWELVE_DATA_API_KEY`.
 - `stale_data=true` after market close: wait and rerun the post-market automation later.
 - S&P 500 screener failure: the snapshot continues with the fixed watchlist and records the screener error in `candidate-universe.json`.
 - Missing pre-market source snapshot: run the post-market snapshot workflow for the previous completed trading day first.
 - Report or trade-plan validation failure: fix the generated report and session signal sidecar so every actionable candidate has setup, structured trigger price, structured invalidation price, risk framing, and complete Trade Plan Card fields when marked `conditional_executable`; rerun validation before Longbridge sync.
-- Rate limiting: the repo uses the shared 8 requests/minute limiter in `config/rate_limit_state.json`; full S&P 500 top 100 screening can take more than ten minutes.
+- Rate limiting: Longbridge market data uses `config/longbridge_rate_limit_state.json`; Twelve Data fallback uses the shared 8 requests/minute limiter in `config/rate_limit_state.json`.
 - Longbridge watchlist sync failure: keep the generated report, fix CLI login/connectivity with `longbridge auth login` and `longbridge check`, then rerun only the `sync-longbridge-watchlist` command for that report date.

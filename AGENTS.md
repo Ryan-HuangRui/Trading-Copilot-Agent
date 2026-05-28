@@ -8,12 +8,12 @@
 - `knowledge/refined/`: approved trading rules. Use this for trading conclusions.
 - `knowledge/source/`: raw/imported reference material. Treat as research input, not production rule authority.
 - `config/`: watchlists and local runtime state paths. Secrets live in `.env`, never in tracked files.
-- Generated runtime data belongs in ignored `raw_data/`, `report/`, `runtime/`, and `config/rate_limit_state.json`.
+- Generated runtime data belongs in ignored `raw_data/`, `report/`, `runtime/`, `config/rate_limit_state.json`, and `config/longbridge_rate_limit_state.json`.
 
 ## Component map
 | Area | Path | Owns | Primary commands | Nested guidance |
 |---|---|---|---|---|
-| Scripts | `script/` | Twelve Data client, trading-day guard, daily snapshot generation, report context generation, monitor scan | `python3 script/prepare_market_snapshot.py --watchlist config/watchlist.json --skip-non-trading-day` | `script/AGENTS.md` |
+| Scripts | `script/` | market data providers, trading-day guard, daily snapshot generation, report context generation, monitor scan | `python3 script/prepare_market_snapshot.py --watchlist config/watchlist.json --skip-non-trading-day` | `script/AGENTS.md` |
 | Agent prompts | `agent/` | Daily report generation prompts used by automation | Read/edit Markdown prompts | `agent/AGENTS.md` |
 | Docs | `docs/` | Automation runbooks and operation notes | Read Markdown docs | none |
 | Knowledge base | `knowledge/` | Refined trading rules and source imports | `python3 script/import_priceactions_knowledge.py` | `knowledge/AGENTS.md` |
@@ -23,8 +23,8 @@
 - This repo supports research and process discipline only; do not present output as investment advice.
 - Longbridge account workflows must be read-only. Never place orders, cancel orders, replace orders, or automatically adjust positions.
 - Do not output deterministic buy/sell instructions. Use scenarios, triggers, invalidation, risk, and `NO TRADE` where appropriate.
-- For current/recent symbol analysis, fetch real market data first through Twelve Data or clearly state that no concrete price conclusion can be made.
-- Batch data fetches must respect the shared 8 requests/minute limiter in `config/rate_limit_state.json`.
+- For current/recent symbol analysis, fetch real market data first through the repository market-data provider stack or clearly state that no concrete price conclusion can be made.
+- Batch data fetches must respect provider rate-limit state files. Longbridge is the primary source; Twelve Data is the fallback source.
 - S&P 500 dynamic candidates are an observation universe only; they must not be treated as trading recommendations or written back to the fixed watchlist.
 - Do not invent prices, indicators, setup rules, or market state when data or refined rules are missing.
 
@@ -54,7 +54,7 @@
   - Produces generated report files and raw market data under ignored runtime directories.
 - Monitoring flow:
   - `python3 script/monitor_scan.py --state config/monitor_state.json --interval 5min`
-  - Uses Twelve Data and writes `report/latest-monitor.json`.
+  - Uses Longbridge market data by default, falls back to Twelve Data when configured, and writes `report/latest-monitor.json`.
 - Read-only position review flow:
   - `python3 script/trading_copilot.py account-snapshot --date <DATE>`
   - `python3 script/trading_copilot.py position-review --date <DATE> --append`
@@ -67,7 +67,7 @@
 - Install: `python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt`.
 - Syntax check: `python3 -m py_compile script/*.py`.
 - Trading-day guard smoke test: `python3 script/trading_day_guard.py --date 2026-05-06 --format text`.
-- Data-fetch smoke tests require `.env` with `TWELVE_DATA_API_KEY`.
+- Data-fetch smoke tests use Longbridge CLI by default. Twelve Data fallback tests require `.env` with `TWELVE_DATA_API_KEY`.
 - Prefer quiet first runs. When debugging a specific symbol or script, re-run the narrow command with fewer symbols or smaller `--outputsize`.
 
 ## Global conventions

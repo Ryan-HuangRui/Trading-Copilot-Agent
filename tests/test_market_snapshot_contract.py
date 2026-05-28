@@ -6,6 +6,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "script"))
 
+from market_data_provider import (
+    FallbackMarketDataClient,
+    longbridge_symbol,
+    normalize_longbridge_kline,
+)
 from market_snapshot import build_symbol_snapshot, latest_bar_dates, merge_symbols, snapshot_filename
 
 
@@ -16,6 +21,11 @@ class MarketSnapshotContractTest(unittest.TestCase):
 
     def test_merge_symbols_uppercases_and_deduplicates(self):
         self.assertEqual(merge_symbols(["mu", "NVDA"], ["MU", "pltr"]), ["MU", "NVDA", "PLTR"])
+
+    def test_longbridge_symbol_adds_market_suffix_without_mangling_share_class(self):
+        self.assertEqual(longbridge_symbol("MU"), "MU.US")
+        self.assertEqual(longbridge_symbol("BRK.B"), "BRK.B.US")
+        self.assertEqual(longbridge_symbol("700.HK"), "700.HK")
 
     def test_build_symbol_snapshot_computes_core_metrics(self):
         data = {
@@ -43,6 +53,49 @@ class MarketSnapshotContractTest(unittest.TestCase):
         ]
 
         self.assertEqual(latest_bar_dates(symbols), ["2026-05-05", "2026-05-06"])
+
+    def test_normalize_longbridge_kline_matches_snapshot_contract(self):
+        payload = normalize_longbridge_kline(
+            "MU.US",
+            "1day",
+            [
+                {"time": "2026-05-05 04:00:00", "open": "96", "high": "102", "low": "95", "close": "100", "volume": "1000"},
+                {"time": "2026-05-06 04:00:00", "open": "100", "high": "110", "low": "99", "close": "108", "volume": "1200"},
+            ],
+        )
+
+        self.assertEqual(payload["meta"]["symbol"], "MU")
+        self.assertEqual(payload["meta"]["provider"], "longbridge")
+        self.assertEqual(payload["values"][0]["datetime"], "2026-05-06")
+        self.assertEqual(payload["values"][1]["datetime"], "2026-05-05")
+
+    def test_fallback_client_uses_twelve_data_when_longbridge_fails(self):
+        class FailingPrimary:
+            name = "longbridge"
+
+            def time_series(self, **kwargs):
+                raise RuntimeError("no permission")
+
+        class Fallback:
+            name = "twelve_data"
+
+            def time_series(self, **kwargs):
+                return {
+                    "meta": {"symbol": kwargs["symbol"]},
+                    "values": [
+                        {"datetime": "2026-05-06", "open": "100", "high": "110", "low": "99", "close": "108", "volume": "1200"}
+                    ],
+                }
+
+        payload = FallbackMarketDataClient(FailingPrimary(), Fallback()).time_series(
+            symbol="MU",
+            interval="1day",
+            outputsize=200,
+        )
+
+        self.assertEqual(payload["meta"]["provider"], "twelve_data")
+        self.assertEqual(payload["meta"]["fallback_from"], "longbridge")
+        self.assertIn("no permission", payload["meta"]["primary_error"])
 
 
 if __name__ == "__main__":

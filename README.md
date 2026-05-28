@@ -21,12 +21,13 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
-# 编辑 .env，填入 TWELVE_DATA_API_KEY
+# 默认使用已登录的 Longbridge CLI 获取行情；如需 Twelve Data fallback，编辑 .env 填入 TWELVE_DATA_API_KEY
 ```
 
 ## 职责分层
 
 - `script/`：只做确定性数据工作，包括交易日判断、行情拉取、限频、缓存、context 生成。
+- `script/market_data_provider.py`：行情源入口，默认 Longbridge CLI，Twelve Data 作为 fallback。
 - `script/trading_copilot.py`：面向 agent 的统一 workflow wrapper，返回 `status/date/artifacts/skipped/reason`。
 - `agent/`：Codex App 自动化生成报告时实际读取的 Prompt，目前只保留盘前和盘后两个执行 Prompt。
 - `knowledge/refined/`：唯一交易规则源。

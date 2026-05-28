@@ -142,7 +142,15 @@ def run_post_market(args: argparse.Namespace) -> None:
         str(args.outputsize),
         "--timezone",
         args.timezone,
+        "--market-data-source",
+        args.market_data_source,
+        "--fallback-market-data-source",
+        args.fallback_market_data_source,
     ]
+    if args.longbridge_cli:
+        command.extend(["--longbridge-cli", args.longbridge_cli])
+    if args.longbridge_default_market:
+        command.extend(["--longbridge-default-market", args.longbridge_default_market])
     if args.date:
         command.extend(["--date", args.date])
     if args.skip_non_trading_day:
@@ -194,7 +202,15 @@ def run_monitor(args: argparse.Namespace) -> None:
         args.interval,
         "--output",
         args.output,
+        "--market-data-source",
+        args.market_data_source,
+        "--fallback-market-data-source",
+        args.fallback_market_data_source,
     ]
+    if args.longbridge_cli:
+        command.extend(["--longbridge-cli", args.longbridge_cli])
+    if args.longbridge_default_market:
+        command.extend(["--longbridge-default-market", args.longbridge_default_market])
     proc = run_child(command)
     stdout = parse_json_output(proc.stdout)
     if proc.returncode != 0:
@@ -737,12 +753,20 @@ def build_parser() -> argparse.ArgumentParser:
     post.add_argument("--extra-symbol", action="append", default=[])
     post.add_argument("--include-journal-signals", action="store_true")
     post.add_argument("--include-position-symbols", action="store_true")
+    post.add_argument("--market-data-source", choices=["longbridge", "twelve"], default="longbridge")
+    post.add_argument("--fallback-market-data-source", choices=["twelve", "longbridge", "none"], default="twelve")
+    post.add_argument("--longbridge-cli")
+    post.add_argument("--longbridge-default-market", default="US")
     post.set_defaults(func=run_post_market)
 
     monitor = sub.add_parser("monitor-brief", help="Run intraday monitor scan")
     monitor.add_argument("--state", default="config/monitor_state.json")
     monitor.add_argument("--interval", default="5min")
     monitor.add_argument("--output", default="report/latest-monitor.json")
+    monitor.add_argument("--market-data-source", choices=["longbridge", "twelve"], default="longbridge")
+    monitor.add_argument("--fallback-market-data-source", choices=["twelve", "longbridge", "none"], default="twelve")
+    monitor.add_argument("--longbridge-cli")
+    monitor.add_argument("--longbridge-default-market", default="US")
     monitor.set_defaults(func=run_monitor)
 
     day = sub.add_parser("trading-day-check", help="Check regular US market trading-day status")

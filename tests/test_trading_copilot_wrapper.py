@@ -545,6 +545,13 @@ class TradingCopilotWrapperTest(unittest.TestCase):
             sp500_top=100,
             sp500_candidates=15,
             sp500_source="ishares_ivv",
+            extra_symbol=[],
+            include_journal_signals=False,
+            include_position_symbols=False,
+            market_data_source="longbridge",
+            fallback_market_data_source="twelve",
+            longbridge_cli=None,
+            longbridge_default_market="US",
         )
 
         with patch.object(trading_copilot, "run_child", return_value=proc), patch.object(

@@ -7,7 +7,7 @@ from pathlib import Path
 from statistics import mean
 from typing import Dict, List, Optional
 
-from twelve_data_client import TwelveDataClient
+from market_data_provider import build_market_data_client
 
 
 @dataclass
@@ -184,16 +184,22 @@ def main():
     ap.add_argument("--state", default="config/monitor_state.json")
     ap.add_argument("--interval", default="5min")
     ap.add_argument("--output", default="report/latest-monitor.json")
+    ap.add_argument("--market-data-source", default="longbridge", choices=["longbridge", "twelve"])
+    ap.add_argument("--fallback-market-data-source", default="twelve", choices=["twelve", "longbridge", "none"])
+    ap.add_argument("--longbridge-cli")
+    ap.add_argument("--longbridge-default-market", default="US")
     args = ap.parse_args()
 
     root = Path(__file__).resolve().parent.parent
     load_env(root / ".env")
     state = load_state(root / args.state)
 
-    client = TwelveDataClient(
-        api_key=os.getenv("TWELVE_DATA_API_KEY"),
-        max_calls_per_minute=8,
-        state_file=str(root / "config/rate_limit_state.json"),
+    client = build_market_data_client(
+        repo_root=root,
+        primary=args.market_data_source,
+        fallback=args.fallback_market_data_source,
+        longbridge_cli=args.longbridge_cli,
+        longbridge_default_market=args.longbridge_default_market,
     )
 
     symbols = state.get("symbols", [])
@@ -226,6 +232,9 @@ def main():
         "mode": state.get("mode", "long_only"),
         "risk_per_trade_pct": state.get("risk_per_trade_pct", 2),
         "interval": args.interval,
+        "market_data_source": getattr(client, "name", args.market_data_source),
+        "primary_market_data_source": args.market_data_source,
+        "fallback_market_data_source": args.fallback_market_data_source,
         "scans": scans,
         "positions": position_updates,
     }

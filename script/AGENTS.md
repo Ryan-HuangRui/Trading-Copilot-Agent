@@ -1,7 +1,8 @@
 # Agent instructions (scope: script/)
 
 ## Scope and layout
-- `twelve_data_client.py`: Twelve Data HTTP client, API-key lookup, and cross-process rate limiter.
+- `market_data_provider.py`: provider stack for Longbridge primary market data with Twelve Data fallback.
+- `twelve_data_client.py`: Twelve Data HTTP client, API-key lookup, and cross-process rate limiter used for fallback.
 - `fetch_daily.py`: generic batch fetch into `raw_data/<DATE>/<INTERVAL>/`.
 - `prepare_market_snapshot.py`: canonical daily snapshot builder, writes `raw_data/<DATE>/<INTERVAL>/` and `report/<DATE>/daily-snapshot.json`.
 - `sp500_universe.py`: S&P 500 holdings fetcher and deterministic dynamic-candidate scorer. Default source is iShares IVV holdings CSV.
@@ -50,19 +51,19 @@
 ## Conventions
 - Run commands from the repository root unless a script explicitly documents otherwise.
 - Keep scripts compatible with the standard library and `requirements.txt`.
-- Load `TWELVE_DATA_API_KEY` from `.env` or the process environment; never hardcode or print secrets.
-- Preserve the 8 requests/minute default unless the data provider contract is intentionally changed.
-- Keep output writes under ignored runtime paths (`raw_data/`, `report/`, `config/rate_limit_state.json`) unless the task is metadata import.
+- Load `TWELVE_DATA_API_KEY` from `.env` or the process environment only for Twelve Data fallback; never hardcode or print secrets.
+- Preserve provider rate limits unless the data provider contract is intentionally changed. Longbridge uses `config/longbridge_rate_limit_state.json`; Twelve Data fallback uses `config/rate_limit_state.json`.
+- Keep output writes under ignored runtime paths (`raw_data/`, `report/`, `config/rate_limit_state.json`, `config/longbridge_rate_limit_state.json`) unless the task is metadata import.
 - Longbridge account workflows are read-only. Never add order placement, order cancellation, order replacement, or automatic position adjustment.
-- If adding a script that fetches market data, reuse `TwelveDataClient` and its shared limiter.
-- S&P 500 universe fetches may use standard-library HTTP, but per-symbol market-data screening must still use `TwelveDataClient` and the shared limiter.
+- If adding a script that fetches market data, reuse `build_market_data_client()` so Longbridge remains primary and Twelve Data remains fallback.
+- S&P 500 universe fetches may use standard-library HTTP, but per-symbol market-data screening must still use the shared market-data provider stack.
 - For scheduled report scripts, support `--skip-non-trading-day` and use the market date in `America/New_York`.
 - Agent-facing wrapper responses should keep the shared fields `status`, `workflow`, `date`, `artifacts`, `skipped`, and `reason`.
 - Snapshot builders should continue after per-symbol fetch failures and record failures in `errors`; same-day cache fallback must be marked with `used_cache`.
 - Dynamic S&P 500 candidates should be written to `report/<DATE>/candidate-universe.json` and merged into the snapshot only for that date; do not mutate `config/watchlist.json`.
 
 ## Common pitfalls
-- Twelve Data returns newest bars first; reverse only in code paths that need oldest-to-newest series.
+- The normalized market-data contract returns newest bars first. Longbridge raw K-line data returns oldest first and must be normalized before snapshot or monitor analysis.
 - Daily snapshots use `raw_data/<SNAPSHOT_DATE>/<INTERVAL>/<SYMBOL>.json` and `report/<SNAPSHOT_DATE>/daily-snapshot.json`.
 - Pre-market context uses `report/<PRE_MARKET_DATE>/pre-market-context.json` and references the previous trading day's snapshot.
 - The trading-day guard covers standard NYSE full-day holidays, not special one-off closures or early closes.

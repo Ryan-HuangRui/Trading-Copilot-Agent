@@ -22,6 +22,7 @@ class PositionReviewTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             ensure_read_only_command(["watchlist", "update", "group-1"])
         self.assertEqual(ensure_read_only_command(["account", "positions", "--format", "json"]), None)
+        self.assertEqual(ensure_read_only_command(["kline", "MU.US", "--period", "day", "--format", "json"]), None)
 
     def test_fetch_account_snapshot_uses_supported_read_only_cli_commands(self):
         calls = []

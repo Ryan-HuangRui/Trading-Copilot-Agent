@@ -1,6 +1,6 @@
 # Trading Copilot Data Contracts
 
-Generated runtime artifacts live under ignored runtime paths, primarily `raw_data/`, `report/`, and `config/rate_limit_state.json`. These files are inputs to agent analysis, not source code.
+Generated runtime artifacts live under ignored runtime paths, primarily `raw_data/`, `report/`, `config/rate_limit_state.json`, and `config/longbridge_rate_limit_state.json`. These files are inputs to agent analysis, not source code.
 
 ## Shared Conventions
 
@@ -32,6 +32,9 @@ Expected top-level fields:
 - `watchlist_path`: source watchlist path.
 - `symbols`: per-symbol market summaries.
 - `watchlist_symbols`: fixed watchlist symbols included in the snapshot.
+- `market_data_source`: effective provider stack, normally `longbridge_with_twelve_data_fallback`.
+- `primary_market_data_source`: primary provider requested by the workflow, default `longbridge`.
+- `fallback_market_data_source`: fallback provider requested by the workflow, default `twelve`.
 - `dynamic_universe_symbols`: temporary dynamic candidates included for this snapshot only.
 - `candidate_universe_path`: optional path to `candidate-universe.json`.
 - `latest_bar_dates`: latest completed bar dates seen across symbols.
@@ -41,6 +44,7 @@ Expected top-level fields:
 Consumer rules:
 
 - Treat `errors` and `stale_data=true` as report limitations.
+- Treat per-symbol `meta.fallback_from` as a data-source limitation worth disclosing when it affects a focused symbol.
 - Do not infer recommendations from `dynamic_universe_symbols`; they are an observation universe.
 - Do not invent missing indicators when a symbol summary lacks data.
 

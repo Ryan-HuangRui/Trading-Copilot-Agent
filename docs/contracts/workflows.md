@@ -80,7 +80,7 @@ python3 script/trading_copilot.py post-market-review --watchlist config/watchlis
 Inputs:
 
 - `config/watchlist.json`
-- Twelve Data market data via `.env` or `TWELVE_DATA_API_KEY`
+- Longbridge CLI market data by default, with Twelve Data fallback via `.env` or `TWELVE_DATA_API_KEY`
 - Optional S&P 500 dynamic universe flags
 - Optional journal signal and position-symbol merge flags for outcome/position coverage
 - `knowledge/refined/`
@@ -115,7 +115,7 @@ python3 script/trading_copilot.py monitor-brief --state config/monitor_state.jso
 Inputs:
 
 - `config/monitor_state.json` if present, otherwise the script default state
-- Twelve Data intraday data via `.env` or `TWELVE_DATA_API_KEY`
+- Longbridge CLI intraday K-line data by default, with Twelve Data fallback via `.env` or `TWELVE_DATA_API_KEY`
 - `knowledge/refined/`
 
 Deterministic output:
