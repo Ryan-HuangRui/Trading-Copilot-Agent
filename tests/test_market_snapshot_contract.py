@@ -1,6 +1,7 @@
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -8,6 +9,8 @@ sys.path.insert(0, str(ROOT / "script"))
 
 from market_data_provider import (
     FallbackMarketDataClient,
+    LongbridgeMarketDataClient,
+    longbridge_period,
     longbridge_symbol,
     normalize_longbridge_kline,
 )
@@ -25,7 +28,17 @@ class MarketSnapshotContractTest(unittest.TestCase):
     def test_longbridge_symbol_adds_market_suffix_without_mangling_share_class(self):
         self.assertEqual(longbridge_symbol("MU"), "MU.US")
         self.assertEqual(longbridge_symbol("BRK.B"), "BRK.B.US")
+        self.assertEqual(longbridge_symbol("00700", default_market="HK"), "00700.HK")
         self.assertEqual(longbridge_symbol("700.HK"), "700.HK")
+
+    def test_longbridge_period_maps_supported_intervals(self):
+        self.assertEqual(longbridge_period("1day"), "day")
+        self.assertEqual(longbridge_period("5min"), "5m")
+        self.assertEqual(longbridge_period("1h"), "1h")
+
+    def test_longbridge_period_rejects_unsupported_interval(self):
+        with self.assertRaises(ValueError):
+            longbridge_period("2min")
 
     def test_build_symbol_snapshot_computes_core_metrics(self):
         data = {
@@ -114,6 +127,26 @@ class MarketSnapshotContractTest(unittest.TestCase):
         self.assertEqual(payload["meta"]["provider"], "twelve_data")
         self.assertEqual(payload["meta"]["fallback_from"], "longbridge")
         self.assertIn("no permission", payload["meta"]["primary_error"])
+
+    def test_longbridge_client_uses_safe_kline_command(self):
+        rows = [
+            {"time": "2026-05-05 13:30:00", "open": "100", "high": "101", "low": "99", "close": "100.5", "volume": "1000"},
+            {"time": "2026-05-05 13:35:00", "open": "100.5", "high": "102", "low": "100", "close": "101.5", "volume": "1200"},
+        ]
+
+        with patch("market_data_provider.run_read_only_json", return_value=rows) as run:
+            payload = LongbridgeMarketDataClient(cli="/bin/longbridge", state_file=None).time_series(
+                symbol="MU",
+                interval="5min",
+                outputsize=2,
+            )
+
+        run.assert_called_once_with(
+            "/bin/longbridge",
+            ["kline", "MU.US", "--period", "5m", "--count", "2", "--format", "json"],
+        )
+        self.assertEqual(payload["values"][0]["datetime"], "2026-05-05 13:35:00")
+        self.assertEqual(payload["meta"]["provider"], "longbridge")
 
 
 if __name__ == "__main__":

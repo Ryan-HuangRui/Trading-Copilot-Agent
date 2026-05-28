@@ -40,6 +40,7 @@
   - Agent reads `agent/post_market_analysis_prompt.md`, `knowledge/refined/`, and `report/<SNAPSHOT_DATE>/daily-snapshot.json`.
   - Agent writes `report/<SNAPSHOT_DATE>/post-market.md` and `report/<SNAPSHOT_DATE>/post-market-signals.json`.
   - Run `python3 script/trading_copilot.py validate-trade-plan --session post-market --date <SNAPSHOT_DATE>` before journal append or sync.
+  - Run `python3 script/trading_copilot.py data-quality --date <SNAPSHOT_DATE>` before Feishu summary so focused-symbol fallback and stale data are disclosed.
   - Run account/position review before `plan-review` when account context is enabled, so plan review can include position discipline.
   - Run `python3 script/trading_copilot.py plan-review --date <SNAPSHOT_DATE> --append-lessons` after outcomes, signals, and optional position review are appended.
   - Run `python3 script/trading_copilot.py learning-review --lookback-days 20` to aggregate repeated candidate lessons. Only promote with `promote-lesson --apply` after explicit human approval.

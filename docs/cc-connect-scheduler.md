@@ -50,6 +50,7 @@ Update the configured cc connect prompts so they require the new artifacts and g
 - Post-market generation must write `post-market.md` and `post-market-signals.json`.
 - Market-data preparation should use the repo default provider stack: Longbridge CLI primary, Twelve Data fallback.
 - Both workflows must run `validate-report` and `validate-trade-plan` before journal append or Longbridge sync.
+- Post-market should run `data-quality --date <DATE>` before `feishu-summary` so focused-symbol fallback and stale-data warnings are disclosed.
 - Any `extract-report-signals --require-validation` failure must stop journal append.
 - Any `sync-longbridge-watchlist --require-validation` failure must stop watchlist sync.
 - Post-market must run account/position review before `plan-review --append-lessons` when account context is enabled, so plan review can include position discipline.
@@ -177,6 +178,7 @@ python3 script/trading_copilot.py validate-trade-plan --session pre-market --dat
 python3 script/trading_copilot.py extract-report-signals --session pre-market --date <DATE> --require-validation --append
 python3 script/trading_copilot.py account-snapshot --date <DATE>
 python3 script/trading_copilot.py position-review --date <DATE> --config config/position_review.json --append
+python3 script/trading_copilot.py data-quality --date <DATE>
 python3 script/trading_copilot.py feishu-summary --session pre-market --date <DATE>
 ```
 
@@ -209,6 +211,7 @@ python3 script/trading_copilot.py position-review --date <DATE> --config config/
 python3 script/trading_copilot.py plan-review --date <DATE> --append-lessons
 python3 script/trading_copilot.py learning-review --lookback-days 20
 python3 script/trading_copilot.py daily-self-review --date <DATE> --append
+python3 script/trading_copilot.py data-quality --date <DATE>
 python3 script/trading_copilot.py feishu-summary --session post-market --date <DATE>
 ```
 
@@ -251,6 +254,7 @@ The final Feishu message should be a concise summary with artifact paths:
 - position review count and human-review count, if account snapshot was enabled
 - self-review or weekly-review summary
 - plan-review position discipline summary and learning-review candidate count, when available
+- data-quality status and focused-symbol fallback, when available
 - data limitations, if `stale_data=true` or any fetch errors exist
 
 The full Markdown reports should remain in `report/<DATE>/` or `report/weekly/` and can be attached or linked by the cc connect integration.

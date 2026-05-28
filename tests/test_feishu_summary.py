@@ -81,6 +81,24 @@ class FeishuSummaryTest(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            (report_dir / "data-quality.json").write_text(
+                json.dumps(
+                    {
+                        "status": "warn",
+                        "stale_data": False,
+                        "focused_fallback_symbols": [
+                            {
+                                "symbol": "MU",
+                                "provider": "twelve_data",
+                                "fallback_from": "longbridge",
+                                "primary_error": "permission denied",
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
             learning = root / "runtime" / "learning"
             learning.mkdir(parents=True)
             (learning / "daily_lessons.jsonl").write_text(
@@ -129,6 +147,10 @@ class FeishuSummaryTest(unittest.TestCase):
             self.assertIn("【NO TRADE】", markdown)
             self.assertIn("SNOW", markdown)
             self.assertIn("持仓复核摘要", markdown)
+            self.assertIn("数据质量", markdown)
+            self.assertIn("MU 使用 twelve_data fallback", markdown)
+            self.assertEqual(payload["summary"]["data_quality_status"], "warn")
+            self.assertEqual(payload["summary"]["focused_fallback_symbols"], 1)
             self.assertIn("需人工复核：1", markdown)
             self.assertIn("昨日计划复盘", markdown)
             self.assertIn("今日新增 lesson", markdown)

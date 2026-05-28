@@ -133,6 +133,35 @@ Output rules:
 - Include data freshness and rule limitations.
 - Use `NO TRADE` when setup quality, data quality, or risk framing is insufficient.
 
+## data-quality
+
+Purpose: generate market-data quality artifacts for the completed daily snapshot.
+
+Canonical command:
+
+```bash
+python3 script/trading_copilot.py data-quality --date <DATE>
+```
+
+Inputs:
+
+- `report/<DATE>/daily-snapshot.json`
+- Optional `report/<DATE>/pre-market-signals.json` and `report/<DATE>/post-market-signals.json`
+- Optional `runtime/account/<DATE>/account-snapshot.json`
+
+Output:
+
+- `report/<DATE>/data-quality.json`
+- `report/<DATE>/data-quality.md`
+
+Required behavior:
+
+- Check `stale_data`, `latest_bar_dates`, snapshot errors, provider distribution, and abnormal single-day moves.
+- Flag focused symbols that are missing from the snapshot.
+- Flag focused symbols using fallback data, including `fallback_from` and `primary_error`.
+- Flag account last-price vs snapshot close deltas above the configured threshold.
+- Feishu summaries should disclose focused-symbol fallback and quality warnings when the artifact exists.
+
 ## validate-report
 
 Purpose: enforce quality gates on generated report artifacts before delivery or Longbridge watchlist sync.

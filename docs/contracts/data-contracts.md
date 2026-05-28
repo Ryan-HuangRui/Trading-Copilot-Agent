@@ -98,6 +98,37 @@ Consumer rules:
 - If `snapshot.stale_data` is true, surface it in the report.
 - If the source snapshot is missing, the workflow should fail before report writing.
 
+## `report/<DATE>/data-quality.json`
+
+Producer:
+
+```bash
+python3 script/trading_copilot.py data-quality --date <DATE>
+```
+
+Expected top-level fields:
+
+- `date`
+- `status`: `pass`, `warn`, or `fail`.
+- `snapshot_path`
+- `signal_sources`
+- `market_data_source`, `primary_market_data_source`, and `fallback_market_data_source`
+- `stale_data`, `stale_reason`, and `latest_bar_dates`
+- `provider_summary`
+- `focused_symbols`
+- `missing_focused_symbols`
+- `fallback_symbols`
+- `focused_fallback_symbols`
+- `account_price_deltas`
+- `abnormal_moves`
+- `snapshot_errors`
+
+Consumer rules:
+
+- Treat `missing_focused_symbols` as blocking data-quality failure.
+- Disclose `focused_fallback_symbols` in Feishu summaries and focused reports.
+- Treat `status=warn` as deliverable only with explicit data-quality disclosure.
+
 ## `report/<DATE>/<SESSION>-signals.json`
 
 Producer:

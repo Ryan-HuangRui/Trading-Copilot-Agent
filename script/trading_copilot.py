@@ -488,6 +488,41 @@ def run_feishu_summary(args: argparse.Namespace) -> None:
     emit(response)
 
 
+def run_data_quality(args: argparse.Namespace) -> None:
+    command = [
+        "script/data_quality.py",
+        "--date",
+        args.date,
+        "--session",
+        args.session,
+        "--account-delta-threshold-pct",
+        str(args.account_delta_threshold_pct),
+        "--abnormal-move-threshold-pct",
+        str(args.abnormal_move_threshold_pct),
+    ]
+    if args.snapshot:
+        command.extend(["--snapshot", args.snapshot])
+    if args.account_snapshot:
+        command.extend(["--account-snapshot", args.account_snapshot])
+    if args.output_json:
+        command.extend(["--output-json", args.output_json])
+    if args.output_md:
+        command.extend(["--output-md", args.output_md])
+
+    proc = run_child(command)
+    stdout = parse_json_output(proc.stdout)
+    if proc.returncode != 0:
+        emit(failed_response("data-quality", command, proc), 1)
+
+    response = base_response("data-quality", command, stdout)
+    response["date"] = args.date
+    response["artifacts"] = (stdout or {}).get("artifacts", [])
+    response["quality_status"] = (stdout or {}).get("quality_status")
+    response["focused_fallback_symbols"] = (stdout or {}).get("focused_fallback_symbols", [])
+    response["missing_focused_symbols"] = (stdout or {}).get("missing_focused_symbols", [])
+    emit(response)
+
+
 def run_promote_lesson(args: argparse.Namespace) -> None:
     command = [
         "script/promote_lesson.py",
@@ -839,6 +874,17 @@ def build_parser() -> argparse.ArgumentParser:
     feishu_summary.add_argument("--output")
     feishu_summary.add_argument("--learning-dir", default="runtime/learning")
     feishu_summary.set_defaults(func=run_feishu_summary)
+
+    data_quality = sub.add_parser("data-quality", help="Generate market-data quality artifacts")
+    data_quality.add_argument("--date", required=True)
+    data_quality.add_argument("--session", choices=["pre-market", "post-market", "all"], default="all")
+    data_quality.add_argument("--snapshot")
+    data_quality.add_argument("--account-snapshot")
+    data_quality.add_argument("--output-json")
+    data_quality.add_argument("--output-md")
+    data_quality.add_argument("--account-delta-threshold-pct", type=float, default=5.0)
+    data_quality.add_argument("--abnormal-move-threshold-pct", type=float, default=20.0)
+    data_quality.set_defaults(func=run_data_quality)
 
     promote_lesson = sub.add_parser("promote-lesson", help="Promote a pattern candidate into validated lessons")
     promote_lesson.add_argument("--pattern-id", required=True)

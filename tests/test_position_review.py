@@ -21,6 +21,8 @@ class PositionReviewTest(unittest.TestCase):
             ensure_read_only_command(["order", "submit", "--symbol", "MU"])
         with self.assertRaises(ValueError):
             ensure_read_only_command(["watchlist", "update", "group-1"])
+        with self.assertRaises(ValueError):
+            ensure_read_only_command(["trading", "days", "US", "--format", "json"])
         self.assertEqual(ensure_read_only_command(["account", "positions", "--format", "json"]), None)
         self.assertEqual(ensure_read_only_command(["kline", "MU.US", "--period", "day", "--format", "json"]), None)
 

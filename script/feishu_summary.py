@@ -85,6 +85,7 @@ def build_markdown(
     signals: list[dict[str, Any]],
     position_review: dict[str, Any],
     plan_review: dict[str, Any],
+    data_quality: dict[str, Any],
     lessons: list[dict[str, Any]],
 ) -> str:
     title_prefix = session_title(session)
@@ -117,6 +118,25 @@ def build_markdown(
         lines.append("- 无。")
     for signal in no_trade:
         lines.append(f"- {signal_symbol(signal)}：{signal_note(signal)}")
+
+    focused_fallback = data_quality.get("focused_fallback_symbols")
+    lines.extend(
+        [
+            "",
+            "【数据质量】",
+            f"- 状态：{data_quality.get('status', 'unknown')}",
+            f"- stale_data：{data_quality.get('stale_data', 'unknown')}",
+        ]
+    )
+    if isinstance(focused_fallback, list) and focused_fallback:
+        for row in focused_fallback:
+            if isinstance(row, dict):
+                lines.append(
+                    f"- {row.get('symbol')} 使用 {row.get('provider')} fallback；"
+                    f"primary={row.get('fallback_from')}；原因：{row.get('primary_error')}"
+                )
+    else:
+        lines.append("- 重点标的无 fallback 记录。")
 
     lines.extend(
         [
@@ -165,6 +185,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     signals = payload.get("signals") if isinstance(payload.get("signals"), list) else []
     position_review = artifact_json(repo_root, args.position_review, repo_root / "report" / args.date / "position-review.json")
     plan_review = artifact_json(repo_root, args.plan_review, repo_root / "report" / args.date / "plan-review.json")
+    data_quality = artifact_json(repo_root, None, repo_root / "report" / args.date / "data-quality.json")
     lessons = lessons_for_date(repo_root, args.date, args.learning_dir)
     output = output_path(repo_root, args.date, args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -175,6 +196,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             signals=signals,
             position_review=position_review,
             plan_review=plan_review,
+            data_quality=data_quality,
             lessons=lessons,
         ),
         encoding="utf-8",
@@ -191,6 +213,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "watch_only": len(watch),
             "no_trade": len(no_trade),
             "lessons": len(lessons),
+            "data_quality_status": data_quality.get("status"),
+            "focused_fallback_symbols": len(data_quality.get("focused_fallback_symbols", []))
+            if isinstance(data_quality.get("focused_fallback_symbols"), list)
+            else 0,
         },
     }
 

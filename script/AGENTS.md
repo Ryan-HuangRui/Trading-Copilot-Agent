@@ -12,6 +12,7 @@
 - `longbridge_cli_adapter.py`: read-only Longbridge CLI guard. Do not add order/write commands.
 - `longbridge_account_snapshot.py`: read-only account/position snapshot writer under `runtime/account/`.
 - `position_review.py`: compares read-only positions with a session-specific signal sidecar and writes review artifacts.
+- `data_quality.py`: checks daily snapshot data source/freshness, focused-symbol fallback, account price deltas, and abnormal moves.
 - `validate_trade_plan.py`: structured Trade Plan Card validator for session sidecars.
 - `plan_review.py`: plan-quality review and candidate lesson writer under `runtime/learning/`.
 - `learning_review.py`: aggregates repeated daily lessons into `pattern_candidates.jsonl`.
@@ -35,6 +36,7 @@
 - Run unified monitor workflow: `python3 script/trading_copilot.py monitor-brief --state config/monitor_state.json --interval 5min`.
 - Run read-only account snapshot: `python3 script/trading_copilot.py account-snapshot --date 2026-05-06`.
 - Run position review: `python3 script/trading_copilot.py position-review --date 2026-05-06 --append`.
+- Run data quality review: `python3 script/trading_copilot.py data-quality --date 2026-05-06`.
 - Validate trade plan sidecars: `python3 script/trading_copilot.py validate-trade-plan --session pre-market --date 2026-05-06`.
 - Review generated plans: `python3 script/trading_copilot.py plan-review --date 2026-05-06 --append-lessons`.
 - Aggregate candidate lessons: `python3 script/trading_copilot.py learning-review --lookback-days 20`.

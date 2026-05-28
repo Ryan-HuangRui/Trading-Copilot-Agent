@@ -563,6 +563,44 @@ class TradingCopilotWrapperTest(unittest.TestCase):
         payload = emit.call_args.args[0]
         self.assertIn("report/2026-05-26/post-market-signals.json", payload["expected_agent_outputs"])
 
+    def test_data_quality_wrapper_contract(self):
+        proc = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "status": "success",
+                    "date": "2026-05-26",
+                    "quality_status": "warn",
+                    "artifacts": ["report/2026-05-26/data-quality.json", "report/2026-05-26/data-quality.md"],
+                    "focused_fallback_symbols": [{"symbol": "MU"}],
+                    "missing_focused_symbols": [],
+                }
+            ),
+            stderr="",
+        )
+        args = Namespace(
+            date="2026-05-26",
+            session="all",
+            snapshot=None,
+            account_snapshot=None,
+            output_json=None,
+            output_md=None,
+            account_delta_threshold_pct=5.0,
+            abnormal_move_threshold_pct=20.0,
+        )
+
+        with patch.object(trading_copilot, "run_child", return_value=proc), patch.object(
+            trading_copilot, "emit", side_effect=SystemExit
+        ) as emit:
+            with self.assertRaises(SystemExit):
+                trading_copilot.run_data_quality(args)
+
+        payload = emit.call_args.args[0]
+        self.assertEqual(payload["workflow"], "data-quality")
+        self.assertEqual(payload["quality_status"], "warn")
+        self.assertEqual(payload["focused_fallback_symbols"], [{"symbol": "MU"}])
+
     def test_account_snapshot_wrapper_contract(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

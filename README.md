@@ -50,6 +50,7 @@ python3 script/trading_copilot.py extract-report-signals --session pre-market --
 python3 script/trading_copilot.py backfill-signal-outcomes --date <DATE> --append
 python3 script/trading_copilot.py plan-review --date <DATE> --append-lessons
 python3 script/trading_copilot.py learning-review --lookback-days 20
+python3 script/trading_copilot.py data-quality --date <DATE>
 python3 script/trading_copilot.py feishu-summary --session pre-market --date <DATE>
 python3 script/trading_copilot.py promote-lesson --pattern-id <PATTERN_ID> --dry-run
 python3 script/trading_copilot.py daily-self-review --date <DATE> --append
@@ -88,6 +89,7 @@ python3 script/workflow_smoke_test.py --date <DATE> --week <YYYY-Www>
   - `report/YYYY-MM-DD/pre-market-signals.json`
 - 报告校验：`python3 script/trading_copilot.py validate-report --session pre-market --date YYYY-MM-DD`
 - 交易计划校验：`python3 script/trading_copilot.py validate-trade-plan --session pre-market --date YYYY-MM-DD`
+- 行情质量检查：`python3 script/trading_copilot.py data-quality --date YYYY-MM-DD`
 - 信号入 journal：`python3 script/trading_copilot.py extract-report-signals --session pre-market --date YYYY-MM-DD --require-validation --append`
 - `--require-validation` 会同时跑报告校验和交易计划校验，任一失败都不应继续入 journal 或同步 Longbridge。
 - 分析过程由 Agent 完成，脚本只做交易日判断、数据准备、指标摘要与限频控制

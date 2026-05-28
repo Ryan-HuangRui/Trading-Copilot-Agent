@@ -16,12 +16,10 @@ READ_ONLY_ROOTS = {
     "positions",
     "portfolio",
     "quote",
-    "market",
     "market-status",
     "kline",
     "intraday",
     "static",
-    "trading",
 }
 WRITE_TOKENS = {
     "order",
