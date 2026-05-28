@@ -10,6 +10,70 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ReviewWorkflowsTest(unittest.TestCase):
+    def test_plan_review_writes_plan_report_and_learning_lesson(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            journal = root / "runtime" / "journal"
+            journal.mkdir(parents=True)
+            (journal / "signals.jsonl").write_text(
+                json.dumps(
+                    {
+                        "kind": "signal",
+                        "signal_id": "sig-1",
+                        "date": "2026-05-26",
+                        "session": "pre-market",
+                        "symbol": "MU",
+                        "setup": "breakout_pullback_continuation.md",
+                        "plan_type": "trade_plan",
+                        "execution_status": "conditional_executable",
+                        "entry": {"trigger_price": 100},
+                        "stop": {"initial_stop": 95},
+                        "risk_detail": {"max_account_risk_pct": 1, "risk_per_share": 5},
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (journal / "outcomes.jsonl").write_text(
+                json.dumps(
+                    {
+                        "kind": "outcome",
+                        "outcome_id": "out-1",
+                        "signal_id": "sig-1",
+                        "review_date": "2026-05-26",
+                        "symbol": "MU",
+                        "outcome": "triggered",
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            command = [
+                sys.executable,
+                str(ROOT / "script" / "plan_review.py"),
+                "--repo-root",
+                str(root),
+                "--date",
+                "2026-05-26",
+                "--append-lessons",
+            ]
+            proc = subprocess.run(command, check=False, text=True, capture_output=True)
+
+            self.assertEqual(proc.returncode, 0, msg=proc.stderr or proc.stdout)
+            payload = json.loads(proc.stdout)
+            self.assertEqual(payload["summary"]["plans"], 1)
+            self.assertEqual(payload["summary"]["quality"]["incomplete_trade_plan"], 1)
+            self.assertEqual(payload["summary"]["outcomes"], {"triggered": 1})
+            self.assertTrue((root / "report" / "2026-05-26" / "plan-review.md").exists())
+            review = json.loads((root / "report" / "2026-05-26" / "plan-review.json").read_text(encoding="utf-8"))
+            self.assertEqual(review["plan_reviews"][0]["quality_state"], "incomplete_trade_plan")
+            lessons = (root / "runtime" / "learning" / "daily_lessons.jsonl").read_text(encoding="utf-8").splitlines()
+            self.assertEqual(len(lessons), 1)
+            self.assertIn("missing_take_profit", lessons[0])
+
     def test_daily_self_review_writes_markdown_and_dedupes_review_append(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -57,10 +57,48 @@ class ValidateReportTest(unittest.TestCase):
             "source_report": "report/2026-05-26/exec-brief.md",
             "signals": signals,
         }
-        (root / "report" / "2026-05-26" / "signals.json").write_text(
+        (root / "report" / "2026-05-26" / "pre-market-signals.json").write_text(
             json.dumps(sidecar, ensure_ascii=False),
             encoding="utf-8",
         )
+
+    def trade_plan_signal(self, **overrides):
+        signal = {
+            "symbol": "MU",
+            "setup": "breakout_pullback_continuation.md",
+            "direction": "long",
+            "trigger": {"type": "break_above", "price": 100, "text": "突破 100"},
+            "invalidation": {"type": "break_below", "price": 95, "text": "跌破 95"},
+            "risk": {
+                "max_risk_pct": 1,
+                "max_account_risk_pct": 1,
+                "risk_per_share": 5,
+                "min_rr": 2,
+            },
+            "status": "planned",
+            "plan_type": "trade_plan",
+            "execution_status": "conditional_executable",
+            "entry": {
+                "type": "breakout_pullback",
+                "trigger_price": 100,
+                "confirmation": "5m/15m close above trigger, pullback holds",
+                "no_chase_rule": "skip if entry would be >2R from stop",
+            },
+            "stop": {
+                "initial_stop": 95,
+                "invalidation": "breaks below 95 and fails to reclaim",
+            },
+            "take_profit": {
+                "tp1": 112,
+                "management": "at +1R consider partial or move stop to breakeven",
+            },
+            "execution_rules": {
+                "valid_time_window": "first 90 minutes or after clean pullback",
+                "skip_conditions": ["market turns risk-off"],
+            },
+        }
+        signal.update(overrides)
+        return signal
 
     def test_passes_good_report(self):
         temp, root = self.make_repo(GOOD_REPORT)
@@ -119,7 +157,7 @@ class ValidateReportTest(unittest.TestCase):
             payload = validate(args)
 
         self.assertEqual(payload["status"], "pass")
-        self.assertTrue(payload["checked_signals"].endswith("signals.json"))
+        self.assertTrue(payload["checked_signals"].endswith("pre-market-signals.json"))
 
     def test_default_session_fails_missing_signals_sidecar(self):
         temp, root = self.make_repo(GOOD_REPORT)
@@ -202,6 +240,50 @@ class ValidateReportTest(unittest.TestCase):
 
         self.assertEqual(payload["status"], "fail")
         self.assertTrue(any("do not match focus list" in error for error in payload["errors"]))
+
+    def test_conditional_executable_trade_plan_requires_complete_plan_card(self):
+        temp, root = self.make_repo(GOOD_REPORT)
+        with temp:
+            self.write_sidecar(root, [self.trade_plan_signal(take_profit={})])
+            args = argparse.Namespace(repo_root=str(root), date="2026-05-26", session="pre-market", report=None, signals=None)
+            payload = validate(args)
+
+        self.assertEqual(payload["status"], "fail")
+        self.assertTrue(any("take_profit.tp1 is required" in error for error in payload["errors"]))
+
+    def test_conditional_executable_trade_plan_requires_minimum_rr(self):
+        temp, root = self.make_repo(GOOD_REPORT)
+        with temp:
+            self.write_sidecar(root, [self.trade_plan_signal(take_profit={"tp1": 104})])
+            args = argparse.Namespace(repo_root=str(root), date="2026-05-26", session="pre-market", report=None, signals=None)
+            payload = validate(args)
+
+        self.assertEqual(payload["status"], "fail")
+        self.assertTrue(any("reward_risk_ratio must be >= 2" in error for error in payload["errors"]))
+
+    def test_watch_only_plan_does_not_require_full_trade_plan_card(self):
+        temp, root = self.make_repo(GOOD_REPORT)
+        with temp:
+            self.write_sidecar(
+                root,
+                [
+                    {
+                        "symbol": "MU",
+                        "setup": "breakout_pullback_continuation.md",
+                        "direction": "long",
+                        "trigger": {"type": "break_above", "price": 100, "text": "突破 100"},
+                        "invalidation": {"type": "break_below", "price": 95, "text": "跌破 95"},
+                        "risk": {"max_risk_pct": 1},
+                        "status": "planned",
+                        "plan_type": "watch_only",
+                        "execution_status": "watch_only",
+                    }
+                ],
+            )
+            args = argparse.Namespace(repo_root=str(root), date="2026-05-26", session="pre-market", report=None, signals=None)
+            payload = validate(args)
+
+        self.assertEqual(payload["status"], "pass")
 
 
 if __name__ == "__main__":

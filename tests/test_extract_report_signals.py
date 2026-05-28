@@ -85,10 +85,16 @@ class ExtractReportSignalsTest(unittest.TestCase):
                         "invalidation": {"type": "break_below", "price": 95, "text": "跌破 95"},
                         "risk": {"max_risk_pct": 1},
                         "status": "planned",
+                        "plan_type": "trade_plan",
+                        "execution_status": "conditional_executable",
+                        "entry": {"trigger_price": 100, "confirmation": "pullback holds"},
+                        "stop": {"initial_stop": 95},
+                        "take_profit": {"tp1": 112},
+                        "execution_rules": {"skip_conditions": ["market turns risk-off"]},
                     }
                 ],
             }
-            (report_dir / "signals.json").write_text(json.dumps(sidecar, ensure_ascii=False), encoding="utf-8")
+            (report_dir / "pre-market-signals.json").write_text(json.dumps(sidecar, ensure_ascii=False), encoding="utf-8")
 
             command = [
                 sys.executable,
@@ -107,7 +113,10 @@ class ExtractReportSignalsTest(unittest.TestCase):
             self.assertEqual([signal["symbol"] for signal in payload["signals"]], ["MU"])
             self.assertEqual(payload["signals"][0]["trigger_price"], 100.0)
             self.assertEqual(payload["signals"][0]["invalidation_price"], 95.0)
-            self.assertEqual(payload["source_signals"], "report/2026-05-26/signals.json")
+            self.assertEqual(payload["signals"][0]["plan_type"], "trade_plan")
+            self.assertEqual(payload["signals"][0]["execution_status"], "conditional_executable")
+            self.assertEqual(payload["signals"][0]["entry"]["trigger_price"], 100)
+            self.assertEqual(payload["source_signals"], "report/2026-05-26/pre-market-signals.json")
 
     def test_cli_append_deduplicates_signal_ids(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -2,12 +2,14 @@
 
 【硬性要求】
 1) 分析顺序固定：市场环境 → 结构 → 关键位 → 价格行为 → 交易逻辑（候选，不是指令）
-2) 每个标的必须包含：主场景、备选场景、失效条件、风险约束（单笔<=1%）
-3) 每个“可执行候选”必须补充：
+2) 每个标的必须先归类为：条件化交易计划 / 观察候选 / NO TRADE
+3) 每个“条件化交易计划”必须补充完整 Trade Plan Card：
    - 参考 setup 文件（必须写文件名）
-   - 触发条件
-   - 失效位
-   - 风险（%）
+   - 入场：触发价、确认条件、禁止追价规则
+   - 止损：初始止损、失效条件
+   - 止盈：TP1，必要时 TP2 或跟踪止盈规则
+   - 风险：账户最大风险%、单股风险、最低 RR
+   - 执行规则：有效时间窗口、至少 1 条 skip condition
 4) 若市场状态为 Tight Trading Range（Barb Wire）或无法识别，输出 `NO TRADE`（并说明原因）
 5) 不输出确定性结论，不输出“必须买/卖”
 6) 输出简体中文，结构化 markdown
@@ -40,6 +42,7 @@
 - 来自 report/<PRE_MARKET_DATE>/pre-market-context.json（由脚本预先生成）
 - context 中的 `source_snapshot_date` 是上一个已完成交易日；`snapshot` 是该交易日收盘后的同一份 daily snapshot
 - watchlist: config/watchlist.json
+- 若 `knowledge/evolution/validated_lessons.md` 存在非空经验，可作为近期流程约束参考；它不能覆盖 `knowledge/refined/`
 - 若 snapshot 中存在 `candidate_universe`，它是盘后从 S&P 500 top 100 动态筛出的观察池；分析范围为固定 watchlist + 动态候选去重后的 merged universe
 - 不得把动态候选视为交易建议；它们只代表“值得盘前观察”的流动性/权重/量价结构候选
 
@@ -49,7 +52,7 @@
 2) 完整报告（用于附件发送）
    - report/<PRE_MARKET_DATE>/pre-market.md
 3) 机器可读信号 sidecar（用于校验、journal、复盘）
-   - report/<PRE_MARKET_DATE>/signals.json
+   - report/<PRE_MARKET_DATE>/pre-market-signals.json
 
 【精简执行版模板】
 # 今日盘前执行简版（<PRE_MARKET_DATE>）
@@ -57,14 +60,25 @@
 - 市场状态：
 - 今日最多3个重点标的：
 
-## 执行清单（逐标的）
+## 今日可执行交易计划
 ### <SYMBOL>
 - 参考 setup：<setup-file.md>
-- 分水岭/关键位：
-- 主场景：
-- 备选场景：
-- 失效条件：
-- 执行要点（1行）：
+- 方向：
+- 状态：conditional_executable / waiting_trigger
+- 入场：<触发价 + 确认条件 + 回踩条件>
+- 止损：<初始止损 + 失效条件>
+- 止盈：<TP1 + TP2/跟踪规则>
+- 风险：<单笔账户风险 <=1%，单股风险，最低 RR>
+- 禁止执行：<至少一条 skip condition>
+
+## 观察候选
+### <SYMBOL>
+- 参考 setup：
+- 观察条件：
+- 未升级为交易计划的原因：
+
+## NO TRADE
+- <SYMBOL>：<原因>
 
 ## 组合风控
 - 当日总风险上限：
@@ -75,8 +89,8 @@
 沿用当前完整版结构输出到 report/<PRE_MARKET_DATE>/pre-market.md，并对每个标的增加一行：
 - 参考 setup：<setup-file.md>
 
-【signals.json 模板】
-必须与精简执行版里的「今日最多3个重点标的」一致；若没有可执行候选，`signals` 输出空数组或 `status=no_trade` 的观察记录。
+【pre-market-signals.json 模板】
+必须与精简执行版里的「今日最多3个重点标的」一致。`conditional_executable` 表示满足人工执行前置条件的交易计划；`watch_only` 只代表观察候选；`no_trade` 表示不允许执行。
 
 ```json
 {
@@ -89,6 +103,8 @@
       "setup": "breakout_pullback_continuation.md",
       "direction": "long",
       "regime": "trend",
+      "plan_type": "trade_plan",
+      "execution_status": "conditional_executable",
       "trigger": {
         "type": "break_above",
         "price": 100.0,
@@ -101,7 +117,28 @@
       },
       "risk": {
         "max_risk_pct": 1.0,
+        "max_account_risk_pct": 1.0,
+        "risk_per_share": 5.0,
+        "min_rr": 2.0,
         "text": "单笔风险 <=1%，止损过宽则放弃"
+      },
+      "entry": {
+        "type": "breakout_pullback",
+        "trigger_price": 100.0,
+        "confirmation": "5m/15m 收盘站上触发价，回踩不破",
+        "no_chase_rule": "若实际入场距离止损超过计划 2R 则放弃"
+      },
+      "stop": {
+        "initial_stop": 95.0,
+        "invalidation": "跌破 95 且无法收回"
+      },
+      "take_profit": {
+        "tp1": 112.0,
+        "management": "达到 +1R 后考虑减仓或上移止损"
+      },
+      "execution_rules": {
+        "valid_time_window": "开盘前 90 分钟或清晰回踩后",
+        "skip_conditions": ["大盘转 risk-off", "突破 K 线过度延伸", "成交量无法确认"]
       },
       "status": "planned",
       "notes": "只做确认，不追第一波"
@@ -113,6 +150,8 @@
 【质量门槛】
 - 未标注 setup 文件名 -> 该标的分析视为无效
 - 未给失效位或风险约束 -> 该标的分析视为无效
-- 可执行候选未写入 signals.json，或 signals.json 与 Markdown 重点标的不一致 -> 视为无效
-- signals.json 中 actionable signal 必须有结构化 trigger.price / invalidation.price / risk
+- 可执行候选未写入 pre-market-signals.json，或 pre-market-signals.json 与 Markdown 重点标的不一致 -> 视为无效
+- pre-market-signals.json 中 actionable signal 必须有结构化 trigger.price / invalidation.price / risk
+- execution_status=conditional_executable 必须有 entry.trigger_price、stop.initial_stop、take_profit.tp1、risk.max_account_risk_pct、risk.risk_per_share、execution_rules.skip_conditions，且 TP1 的 RR >= 2
+- 缺少完整 Trade Plan Card 的标的只能标记为 watch_only 或 no_trade
 - regime 无法识别时，默认 NO TRADE

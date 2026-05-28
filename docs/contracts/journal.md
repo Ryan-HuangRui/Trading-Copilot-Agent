@@ -34,13 +34,16 @@ Recommended fields:
 - `regime`: market regime used for setup selection.
 - `trigger`: trigger price or textual trigger condition.
 - `trigger_price`: numeric trigger price when available.
-- `trigger_detail`: structured trigger object from `signals.json` when available.
+- `trigger_detail`: structured trigger object from the session signal sidecar when available.
 - `invalidation`: invalidation price or textual abandonment condition.
 - `invalidation_price`: numeric invalidation price when available.
-- `invalidation_detail`: structured invalidation object from `signals.json` when available.
+- `invalidation_detail`: structured invalidation object from the session signal sidecar when available.
 - `risk_r`: planned risk in R units when available.
 - `risk`: textual risk limit.
-- `risk_detail`: structured risk object from `signals.json` when available.
+- `risk_detail`: structured risk object from the session signal sidecar when available.
+- `plan_type`: `trade_plan`, `watch_only`, or `no_trade` when provided by the sidecar.
+- `execution_status`: `conditional_executable`, `waiting_trigger`, `watch_only`, or `no_trade` when provided by the sidecar.
+- `entry`, `stop`, `take_profit`, `execution_rules`: copied from complete Trade Plan Cards when present.
 - `notes`: concise context.
 
 Example:
@@ -127,7 +130,17 @@ python3 script/trading_copilot.py extract-report-signals --date 2026-05-22 --ses
 
 The extractor records at most 3 focused candidates by default. It uses a stable `signal_id`, so rerunning the same extraction skips duplicate records in `signals.jsonl`.
 
-The extractor prefers `report/<DATE>/signals.json` and only falls back to Markdown parsing when the sidecar is absent. New production reports should generate both Markdown and `signals.json`.
+The extractor prefers `report/<DATE>/pre-market-signals.json` or `report/<DATE>/post-market-signals.json` and only falls back to Markdown parsing when the sidecar is absent. New production reports should generate both Markdown and the session signal sidecar.
+
+## Plan Review Learning
+
+`plan-review` reads `signals.jsonl`, `outcomes.jsonl`, and optional `trades.jsonl`, then writes:
+
+- `report/<DATE>/plan-review.md`
+- `report/<DATE>/plan-review.json`
+- `runtime/learning/daily_lessons.jsonl` when `--append-lessons` is used.
+
+Learning lessons are candidate process improvements only. They must not be treated as approved trading rules or promoted into `knowledge/refined/` without human review.
 
 Use the outcome backfill after the completed daily snapshot is available:
 

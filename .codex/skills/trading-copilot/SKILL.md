@@ -50,34 +50,40 @@ Every workflow run should return or report the same status fields:
 
 1. Run `python3 script/trading_copilot.py pre-market-plan --watchlist config/watchlist.json --skip-non-trading-day`.
 2. Read `agent/daily_analysis_prompt.md`, `knowledge/refined/`, and `report/<DATE>/pre-market-context.json`.
-3. Write `report/<DATE>/exec-brief.md`, `report/<DATE>/pre-market.md`, and `report/<DATE>/signals.json`.
+3. Write `report/<DATE>/exec-brief.md`, `report/<DATE>/pre-market.md`, and `report/<DATE>/pre-market-signals.json`.
 4. Validate both generated reports:
    `python3 script/trading_copilot.py validate-report --session pre-market --date <DATE>`.
-5. After validation passes, append the focused plan to the local journal:
+5. Validate the structured Trade Plan Cards:
+   `python3 script/trading_copilot.py validate-trade-plan --session pre-market --date <DATE>`.
+6. After validation passes, append the focused plan to the local journal:
    `python3 script/trading_copilot.py extract-report-signals --session pre-market --date <DATE> --require-validation --append`.
-6. Incrementally add focus symbols to Longbridge `今日关注`:
+7. Incrementally add focus symbols to Longbridge `今日关注`:
    `python3 script/trading_copilot.py sync-longbridge-watchlist --session pre-market --date <DATE> --group-name 今日关注 --sync-mode add --require-validation --execute --no-create`.
-7. If read-only account context is enabled, run:
+8. If read-only account context is enabled, run:
    `python3 script/trading_copilot.py account-snapshot --date <DATE>`
    then `python3 script/trading_copilot.py position-review --date <DATE> --append`.
 
 ### Post-Market Review
 
-1. Run `python3 script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day`.
+1. Run `python3 script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day --include-journal-signals --include-position-symbols`.
 2. Read `agent/post_market_analysis_prompt.md`, `knowledge/refined/`, and `report/<DATE>/daily-snapshot.json`.
-3. Write `report/<DATE>/post-market.md` and `report/<DATE>/signals.json`.
+3. Write `report/<DATE>/post-market.md` and `report/<DATE>/post-market-signals.json`.
 4. Validate the generated report:
    `python3 script/trading_copilot.py validate-report --session post-market --date <DATE>`.
-5. After validation passes, backfill outcomes for plans targeting the completed snapshot date:
+5. Validate the structured Trade Plan Cards:
+   `python3 script/trading_copilot.py validate-trade-plan --session post-market --date <DATE>`.
+6. After validation passes, backfill outcomes for plans targeting the completed snapshot date:
    `python3 script/trading_copilot.py backfill-signal-outcomes --date <DATE> --append`.
-6. Append the focused observation plan to the local journal:
+7. Append the focused observation plan to the local journal:
    `python3 script/trading_copilot.py extract-report-signals --session post-market --date <DATE> --require-validation --append`.
-7. Generate the daily self-review:
+8. Generate the plan review and candidate learning lessons:
+   `python3 script/trading_copilot.py plan-review --date <DATE> --append-lessons`.
+9. Generate the daily self-review:
    `python3 script/trading_copilot.py daily-self-review --date <DATE> --append`.
-8. If read-only account context is enabled, run:
+10. If read-only account context is enabled, run:
    `python3 script/trading_copilot.py account-snapshot --date <DATE>`
    then `python3 script/trading_copilot.py position-review --date <DATE> --append`.
-9. Fully replace Longbridge `今日关注` from the post-market focus list:
+11. Fully replace Longbridge `今日关注` from the post-market focus list:
    `python3 script/trading_copilot.py sync-longbridge-watchlist --session post-market --date <DATE> --group-name 今日关注 --sync-mode replace --require-validation --execute --no-create`.
 
 ### Longbridge Watchlist Sync

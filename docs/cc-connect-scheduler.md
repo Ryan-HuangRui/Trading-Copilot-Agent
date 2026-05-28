@@ -67,8 +67,8 @@ Recommended cc connect instruction:
 
 ```text
 Run Trading-Copilot-Agent pre-market workflow for today:
-prepare the pre-market context, generate exec-brief.md, pre-market.md, and signals.json,
-validate the artifacts, extract report signals into the journal, optionally run read-only account snapshot
+prepare the pre-market context, generate exec-brief.md, pre-market.md, and pre-market-signals.json,
+validate the artifacts and Trade Plan Cards, extract report signals into the journal, optionally run read-only account snapshot
 and position review, and return a Feishu-ready summary.
 Do not place trades or output deterministic buy/sell instructions.
 ```
@@ -77,8 +77,9 @@ Repository workflow stages:
 
 ```bash
 python3 script/trading_copilot.py pre-market-plan --watchlist config/watchlist.json --skip-non-trading-day
-# Codex generates report/<DATE>/exec-brief.md, report/<DATE>/pre-market.md, report/<DATE>/signals.json
+# Codex generates report/<DATE>/exec-brief.md, report/<DATE>/pre-market.md, report/<DATE>/pre-market-signals.json
 python3 script/trading_copilot.py validate-report --session pre-market --date <DATE>
+python3 script/trading_copilot.py validate-trade-plan --session pre-market --date <DATE>
 python3 script/trading_copilot.py extract-report-signals --session pre-market --date <DATE> --require-validation --append
 python3 script/trading_copilot.py account-snapshot --date <DATE>
 python3 script/trading_copilot.py position-review --date <DATE> --config config/position_review.json --append
@@ -90,9 +91,9 @@ Recommended cc connect instruction:
 
 ```text
 Run Trading-Copilot-Agent post-market close workflow for today:
-prepare the completed daily snapshot, generate post-market.md and signals.json,
-validate artifacts, backfill signal outcomes, extract post-market observation signals,
-optionally run read-only account snapshot and position review, generate daily self-review,
+prepare the completed daily snapshot, generate post-market.md and post-market-signals.json,
+validate artifacts and Trade Plan Cards, backfill signal outcomes, extract post-market observation signals,
+generate plan-review lessons, optionally run read-only account snapshot and position review, generate daily self-review,
 and return a Feishu-ready summary.
 Do not place trades or output deterministic buy/sell instructions.
 ```
@@ -100,11 +101,13 @@ Do not place trades or output deterministic buy/sell instructions.
 Repository workflow stages:
 
 ```bash
-python3 script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day
-# Codex generates report/<DATE>/post-market.md and report/<DATE>/signals.json
+python3 script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day --include-journal-signals --include-position-symbols
+# Codex generates report/<DATE>/post-market.md and report/<DATE>/post-market-signals.json
 python3 script/trading_copilot.py validate-report --session post-market --date <DATE>
+python3 script/trading_copilot.py validate-trade-plan --session post-market --date <DATE>
 python3 script/trading_copilot.py backfill-signal-outcomes --date <DATE> --append
 python3 script/trading_copilot.py extract-report-signals --session post-market --date <DATE> --require-validation --append
+python3 script/trading_copilot.py plan-review --date <DATE> --append-lessons
 python3 script/trading_copilot.py account-snapshot --date <DATE>
 python3 script/trading_copilot.py position-review --date <DATE> --config config/position_review.json --append
 python3 script/trading_copilot.py daily-self-review --date <DATE> --append

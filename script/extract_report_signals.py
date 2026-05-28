@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from journal_append import append_jsonl, journal_path
-from signal_artifacts import default_signals_path, normalize_sidecar, read_json
+from signal_artifacts import normalize_sidecar, read_json, resolve_signals_path
 
 
 REPORT_FILES = {
@@ -55,11 +55,8 @@ def report_path(repo_root: Path, report_date: str, session: str, explicit_report
     return repo_root / "report" / report_date / REPORT_FILES[session]
 
 
-def signals_path(repo_root: Path, report_date: str, explicit_signals: str | None) -> Path:
-    if explicit_signals:
-        path = Path(explicit_signals)
-        return path if path.is_absolute() else repo_root / path
-    return default_signals_path(repo_root, report_date)
+def signals_path(repo_root: Path, report_date: str, session: str, explicit_signals: str | None) -> Path:
+    return resolve_signals_path(repo_root, report_date, explicit_signals, session)
 
 
 def split_symbol_sections(markdown: str) -> dict[str, str]:
@@ -290,7 +287,7 @@ def validate_report(repo_root: Path, date: str, session: str, report: Path | Non
 def extract(args: argparse.Namespace) -> dict[str, Any]:
     repo_root = Path(args.repo_root).resolve()
     report = report_path(repo_root, args.date, args.session, args.report)
-    sidecar = signals_path(repo_root, args.date, args.signals)
+    sidecar = signals_path(repo_root, args.date, args.session, args.signals)
     if args.require_validation:
         validate_report(repo_root, args.date, args.session, report if args.report else None, sidecar if args.signals else None)
 
@@ -347,7 +344,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--date", required=True)
     parser.add_argument("--session", choices=["pre-market", "post-market"], required=True)
     parser.add_argument("--report")
-    parser.add_argument("--signals", help="Structured signals.json sidecar path. Defaults to report/<DATE>/signals.json.")
+    parser.add_argument("--signals", help="Structured signal sidecar path. Defaults to report/<DATE>/<SESSION>-signals.json.")
     parser.add_argument("--max-signals", type=int, default=3)
     parser.add_argument("--append", action="store_true", help="Append extracted signals to runtime journal JSONL.")
     parser.add_argument("--journal-dir", default="runtime/journal")

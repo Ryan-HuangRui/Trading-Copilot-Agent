@@ -10,7 +10,14 @@ from typing import Any
 
 SIGNAL_STATUSES = {"planned", "observed", "triggered", "invalidated", "no_trade"}
 SIGNAL_SESSIONS = {"pre-market", "post-market", "monitor"}
+PLAN_TYPES = {"trade_plan", "watch_only", "no_trade"}
+EXECUTION_STATUSES = {"conditional_executable", "waiting_trigger", "watch_only", "no_trade"}
 REQUIRED_ACTIONABLE_FIELDS = ("trigger", "invalidation", "risk")
+SESSION_SIGNAL_FILENAMES = {
+    "pre-market": "pre-market-signals.json",
+    "post-market": "post-market-signals.json",
+    "monitor": "monitor-signals.json",
+}
 
 
 def read_json(path: Path) -> dict[str, Any]:
@@ -25,8 +32,31 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def default_signals_path(repo_root: Path, date: str) -> Path:
+def default_signals_path(repo_root: Path, date: str, session: str | None = None) -> Path:
+    filename = SESSION_SIGNAL_FILENAMES.get(session or "", "signals.json")
+    return repo_root / "report" / date / filename
+
+
+def legacy_signals_path(repo_root: Path, date: str) -> Path:
     return repo_root / "report" / date / "signals.json"
+
+
+def resolve_signals_path(
+    repo_root: Path,
+    date: str,
+    explicit_path: str | None = None,
+    session: str | None = None,
+    *,
+    legacy_fallback: bool = True,
+) -> Path:
+    if explicit_path:
+        path = Path(explicit_path)
+        return path if path.is_absolute() else repo_root / path
+    path = default_signals_path(repo_root, date, session)
+    legacy = legacy_signals_path(repo_root, date)
+    if legacy_fallback and session and not path.exists() and legacy.exists():
+        return legacy
+    return path
 
 
 def sidecar_source(signals_path: Path, repo_root: Path) -> str:
@@ -85,6 +115,27 @@ def risk_text(value: Any) -> str | None:
     return str(value)
 
 
+def nested_float(value: Any, *keys: str) -> float | None:
+    current = value
+    for key in keys:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    try:
+        return float(current)
+    except (TypeError, ValueError):
+        return None
+
+
+def nested_value(value: Any, *keys: str) -> Any:
+    current = value
+    for key in keys:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return current
+
+
 def normalize_sidecar_signal(
     *,
     signal: dict[str, Any],
@@ -125,9 +176,56 @@ def normalize_sidecar_signal(
         "invalidation_price": field_price(invalidation),
         "risk": risk_text(risk),
         "risk_detail": risk if isinstance(risk, dict) else None,
+        "plan_type": signal.get("plan_type"),
+        "execution_status": signal.get("execution_status"),
+        "entry": signal.get("entry") if isinstance(signal.get("entry"), dict) else None,
+        "stop": signal.get("stop") if isinstance(signal.get("stop"), dict) else None,
+        "take_profit": signal.get("take_profit") if isinstance(signal.get("take_profit"), dict) else None,
+        "execution_rules": signal.get("execution_rules") if isinstance(signal.get("execution_rules"), dict) else None,
         "notes": signal.get("notes"),
     }
     return {key: value for key, value in payload.items() if value not in (None, [], "")}
+
+
+def validate_conditional_trade_plan(signal: dict[str, Any], item: str) -> list[str]:
+    errors: list[str] = []
+    entry_price = nested_float(signal, "entry", "trigger_price")
+    stop_price = nested_float(signal, "stop", "initial_stop")
+    tp1 = nested_float(signal, "take_profit", "tp1")
+    account_risk = nested_float(signal, "risk", "max_account_risk_pct")
+    risk_per_share = nested_float(signal, "risk", "risk_per_share")
+    skip_conditions = nested_value(signal, "execution_rules", "skip_conditions")
+
+    if entry_price is None:
+        errors.append(f"{item}: conditional_executable trade_plan entry.trigger_price is required")
+    if stop_price is None:
+        errors.append(f"{item}: conditional_executable trade_plan stop.initial_stop is required")
+    if tp1 is None:
+        errors.append(f"{item}: conditional_executable trade_plan take_profit.tp1 is required")
+    if account_risk is None:
+        errors.append(f"{item}: conditional_executable trade_plan risk.max_account_risk_pct is required")
+    if risk_per_share is None or risk_per_share <= 0:
+        errors.append(f"{item}: conditional_executable trade_plan risk.risk_per_share must be > 0")
+    if not isinstance(skip_conditions, list) or not skip_conditions:
+        errors.append(f"{item}: conditional_executable trade_plan execution_rules.skip_conditions must contain at least one item")
+
+    if entry_price is None or stop_price is None or tp1 is None:
+        return errors
+
+    direction = str(signal.get("direction") or "long").lower()
+    if direction == "short":
+        risk = stop_price - entry_price
+        reward = entry_price - tp1
+    else:
+        risk = entry_price - stop_price
+        reward = tp1 - entry_price
+    if risk <= 0:
+        errors.append(f"{item}: conditional_executable trade_plan entry/stop risk must be > 0")
+        return errors
+    reward_risk_ratio = reward / risk
+    if reward_risk_ratio < 2:
+        errors.append(f"{item}: conditional_executable tradePlan reward_risk_ratio must be >= 2")
+    return errors
 
 
 def normalize_sidecar(payload: dict[str, Any], signals_path: Path, repo_root: Path) -> list[dict[str, Any]]:
@@ -206,6 +304,12 @@ def validate_sidecar_payload(
         status = signal.get("status", "planned")
         if status not in SIGNAL_STATUSES:
             errors.append(f"{item}: unsupported status: {status}")
+        plan_type = signal.get("plan_type")
+        if plan_type is not None and plan_type not in PLAN_TYPES:
+            errors.append(f"{item}: unsupported plan_type: {plan_type}")
+        execution_status = signal.get("execution_status")
+        if execution_status is not None and execution_status not in EXECUTION_STATUSES:
+            errors.append(f"{item}: unsupported execution_status: {execution_status}")
 
         actionable = status != "no_trade" and setup != "NO VALID SETUP"
         if actionable:
@@ -243,6 +347,9 @@ def validate_sidecar_payload(
                     float(value["price"])
                 except (TypeError, ValueError):
                     errors.append(f"{item}: {field}.price must be numeric")
+
+        if plan_type == "trade_plan" and execution_status == "conditional_executable":
+            errors.extend(validate_conditional_trade_plan(signal, item))
 
     if len(seen_symbols) != len([s for s in signals if isinstance(s, dict) and s.get("symbol")]):
         warnings.append(f"{label}: duplicate symbols in signals array")

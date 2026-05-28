@@ -50,6 +50,14 @@ def build_markdown(
     not_evaluable = [item for item in outcomes if item.get("outcome") in {"not_evaluable", "no_data"}]
     ambiguous = [item for item in outcomes if item.get("outcome") == "triggered_and_invalidated"]
 
+    no_data = [item for item in outcomes if item.get("outcome") == "no_data"]
+    not_evaluable_only = [item for item in outcomes if item.get("outcome") == "not_evaluable"]
+    touched = [
+        item
+        for item in outcomes
+        if item.get("outcome") in {"triggered", "invalidated", "triggered_and_invalidated", "not_triggered"}
+    ]
+
     lines = [
         f"# 日度自我复盘（{date}）",
         "",
@@ -60,10 +68,21 @@ def build_markdown(
         f"- 人工交易记录数：{len(trades)}",
         f"- 持仓复核记录数：{len(position_reviews)}",
         "",
-        "## 信号结果",
-        f"- outcome 汇总：{json.dumps(outcome_summary['by_outcome'], ensure_ascii=False, sort_keys=True)}",
+        "## 计划质量复盘",
         f"- 信号状态：{json.dumps(dict(by_status), ensure_ascii=False, sort_keys=True)}",
+        f"- 可回填信号数：{len(outcomes) - len(no_data) - len(not_evaluable_only)}",
+        f"- 缺行情信号数：{len(no_data)}",
+        f"- 结构不可评估信号数：{len(not_evaluable_only)}",
+        "",
+        "## 市场触达复盘",
+        f"- outcome 汇总：{json.dumps(outcome_summary['by_outcome'], ensure_ascii=False, sort_keys=True)}",
+        f"- 已进行价格触达判断：{len(touched)}",
+        "- 价格触达只基于日线 high/low，不代表真实入场、成交或策略收益。",
+        "",
+        "## 真实执行复盘",
         f"- 交易记录状态：{json.dumps(dict(by_trade), ensure_ascii=False, sort_keys=True)}",
+        f"- 人工交易记录数：{len(trades)}",
+        f"- 真实执行层：{'暂无 trade record，本日不能评价真实交易表现。' if not trades else '仅按 trades.jsonl 中的人工记录评价真实执行。'}",
         f"- 持仓交易关联：{json.dumps(dict(by_trade_link), ensure_ascii=False, sort_keys=True)}",
         f"- 持仓需人工复核：{position_review_required}",
         "",

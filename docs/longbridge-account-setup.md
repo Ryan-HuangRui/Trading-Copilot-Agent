@@ -41,7 +41,7 @@ python3 script/trading_copilot.py position-review --date <DATE> --config config/
 The review uses:
 
 - `runtime/account/<DATE>/account-snapshot.json`
-- `report/<DATE>/signals.json`
+- `report/<DATE>/pre-market-signals.json` by default, or an explicit `--signals` sidecar path
 - `config/position_review.json`
 
 Outputs:

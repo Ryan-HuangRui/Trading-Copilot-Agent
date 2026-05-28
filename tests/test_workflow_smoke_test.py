@@ -31,7 +31,7 @@ class WorkflowSmokeTest(unittest.TestCase):
 """
             (report_dir / "exec-brief.md").write_text(markdown, encoding="utf-8")
             (report_dir / "pre-market.md").write_text(markdown, encoding="utf-8")
-            (report_dir / "signals.json").write_text(
+            (report_dir / "pre-market-signals.json").write_text(
                 json.dumps(
                     {
                         "date": "2026-05-26",
@@ -138,6 +138,7 @@ class WorkflowSmokeTest(unittest.TestCase):
             self.assertIn("account-snapshot", payload["steps"])
             self.assertIn("position-review", payload["steps"])
             self.assertTrue((root / "report" / "2026-05-26" / "self-review.md").exists())
+            self.assertTrue((root / "report" / "2026-05-26" / "plan-review.md").exists())
             self.assertTrue((root / "report" / "2026-05-26" / "position-review.json").exists())
             self.assertTrue((root / "report" / "weekly" / "2026-W22.md").exists())
 
