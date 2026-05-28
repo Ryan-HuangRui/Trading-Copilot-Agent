@@ -121,21 +121,22 @@ Then append the focused observation plan:
 python3 script/trading_copilot.py extract-report-signals --session post-market --date <SNAPSHOT_DATE> --require-validation --append
 ```
 
-Then review plans and aggregate repeated lessons:
-```bash
-python3 script/trading_copilot.py plan-review --date <SNAPSHOT_DATE> --append-lessons
-python3 script/trading_copilot.py learning-review --lookback-days 20
-```
-
 Optionally capture a read-only account snapshot and position review:
 ```bash
 python3 script/trading_copilot.py account-snapshot --date <SNAPSHOT_DATE>
 python3 script/trading_copilot.py position-review --date <SNAPSHOT_DATE> --append
 ```
 
-Then generate the daily self-review:
+Then review plans and aggregate repeated lessons:
+```bash
+python3 script/trading_copilot.py plan-review --date <SNAPSHOT_DATE> --append-lessons
+python3 script/trading_copilot.py learning-review --lookback-days 20
+```
+
+Then generate the daily self-review and Feishu summary:
 ```bash
 python3 script/trading_copilot.py daily-self-review --date <SNAPSHOT_DATE> --append
+python3 script/trading_copilot.py feishu-summary --session post-market --date <SNAPSHOT_DATE>
 ```
 
 Then run:
@@ -164,6 +165,13 @@ python3 script/trading_copilot.py validate-trade-plan --session pre-market --dat
 Only after both validations pass, append the focused pre-market plan:
 ```bash
 python3 script/trading_copilot.py extract-report-signals --session pre-market --date <PRE_MARKET_DATE> --require-validation --append
+```
+
+Optionally capture a read-only account snapshot and position review, then build the Feishu summary:
+```bash
+python3 script/trading_copilot.py account-snapshot --date <PRE_MARKET_DATE>
+python3 script/trading_copilot.py position-review --date <PRE_MARKET_DATE> --append
+python3 script/trading_copilot.py feishu-summary --session pre-market --date <PRE_MARKET_DATE>
 ```
 
 Then run:

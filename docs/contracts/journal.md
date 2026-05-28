@@ -142,11 +142,13 @@ The extractor prefers `report/<DATE>/pre-market-signals.json` or `report/<DATE>/
 
 ## Plan Review Learning
 
-`plan-review` reads `signals.jsonl`, `outcomes.jsonl`, and optional `trades.jsonl`, then writes:
+`plan-review` reads `signals.jsonl`, `outcomes.jsonl`, optional `trades.jsonl`, and optional `position_reviews.jsonl`, then writes:
 
 - `report/<DATE>/plan-review.md`
 - `report/<DATE>/plan-review.json`
 - `runtime/learning/daily_lessons.jsonl` when `--append-lessons` is used.
+
+When position reviews exist, `plan-review` adds a position-discipline section covering planned symbols without trade records, positions outside the plan, missing trade links, missing `source_signal_id`, and positions near invalidation without complete trade linkage.
 
 Learning lessons are candidate process improvements only. They must not be treated as approved trading rules or promoted into `knowledge/refined/` without human review.
 

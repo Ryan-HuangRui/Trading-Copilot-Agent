@@ -9,6 +9,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from journal_append import journal_path
 from journal_review import read_jsonl
 
 
@@ -66,6 +67,16 @@ def selected_lessons(records: list[dict[str, Any]], end_date: date, lookback_day
     return result
 
 
+def selected_records(records: list[dict[str, Any]], end_date: date, lookback_days: int, date_key: str) -> list[dict[str, Any]]:
+    start_date = end_date - timedelta(days=max(lookback_days, 1) - 1)
+    result = []
+    for record in records:
+        record_date = parse_date(str(record.get(date_key) or ""))
+        if record_date and start_date <= record_date <= end_date:
+            result.append(record)
+    return result
+
+
 def choose_end_date(records: list[dict[str, Any]], explicit_end_date: str | None) -> date:
     if explicit_end_date:
         parsed = parse_date(explicit_end_date)
@@ -75,6 +86,71 @@ def choose_end_date(records: list[dict[str, Any]], explicit_end_date: str | None
     dates = [parse_date(str(record.get("date") or "")) for record in records]
     valid_dates = [item for item in dates if item is not None]
     return max(valid_dates) if valid_dates else datetime.now(timezone.utc).date()
+
+
+def position_lesson(record: dict[str, Any]) -> dict[str, Any] | None:
+    symbol = str(record.get("symbol") or "").upper()
+    if not symbol:
+        return None
+    if not record.get("in_today_signals"):
+        problem = "position_without_plan"
+        suggested = "positions should either link to an active plan or be explicitly classified as core/watch"
+    elif record.get("trade_link_state") == "trade_missing_source_signal_id":
+        problem = "position_missing_source_signal_id"
+        suggested = "trade records should include source_signal_id when they come from a plan"
+    elif record.get("trade_link_state") == "no_trade_record":
+        problem = "position_no_trade_record"
+        suggested = "positions should have a matching trade record or explicit core/watch classification"
+    elif record.get("risk_state") == "close_to_invalidation":
+        problem = "position_close_to_invalidation"
+        suggested = "positions near invalidation should have an explicit human review note"
+    else:
+        return None
+    return {
+        "kind": "daily_lesson",
+        "date": record.get("date"),
+        "lesson_type": "position_discipline",
+        "symbol": symbol,
+        "setup": str(record.get("setup") or "position_discipline"),
+        "problem": problem,
+        "evidence": [f"{symbol}: {problem}; risk_state={record.get('risk_state')}; trade_link_state={record.get('trade_link_state')}"],
+        "suggested_constraint": suggested,
+        "status": "candidate",
+    }
+
+
+def enrich_lessons_with_journal_context(
+    lessons: list[dict[str, Any]],
+    outcomes: list[dict[str, Any]],
+    trades: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    outcomes_by_key = {
+        (str(record.get("review_date") or ""), str(record.get("symbol") or "").upper()): record
+        for record in outcomes
+        if record.get("symbol")
+    }
+    trades_by_key: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for trade in trades:
+        key = (str(trade.get("date") or ""), str(trade.get("symbol") or "").split(".", 1)[0].upper())
+        if key[0] and key[1]:
+            trades_by_key[key].append(trade)
+
+    enriched = []
+    for lesson in lessons:
+        item = dict(lesson)
+        evidence = item.get("evidence") if isinstance(item.get("evidence"), list) else []
+        evidence = [str(value) for value in evidence if value]
+        key = (str(item.get("date") or ""), str(item.get("symbol") or "").upper())
+        outcome = outcomes_by_key.get(key)
+        if outcome:
+            evidence.append(f"{key[1]} outcome={outcome.get('outcome')}")
+        symbol_trades = trades_by_key.get(key, [])
+        if symbol_trades:
+            statuses = ",".join(sorted({str(trade.get("status") or "unknown") for trade in symbol_trades}))
+            evidence.append(f"{key[1]} trade_status={statuses}")
+        item["evidence"] = evidence
+        enriched.append(item)
+    return enriched
 
 
 def most_common(values: list[str]) -> str | None:
@@ -169,9 +245,18 @@ def build_markdown(end_date: date, lookback_days: int, candidates: list[dict[str
 def run(args: argparse.Namespace) -> dict[str, Any]:
     repo_root = Path(args.repo_root).resolve()
     records = read_jsonl(lessons_path(repo_root, args.learning_dir))
-    end_date = choose_end_date(records, args.end_date)
+    position_records_all = read_jsonl(journal_path(repo_root, args.journal_dir, "position_review"))
+    outcome_records_all = read_jsonl(journal_path(repo_root, args.journal_dir, "outcome"))
+    trade_records_all = read_jsonl(journal_path(repo_root, args.journal_dir, "trade"))
+    end_date = choose_end_date(records + position_records_all, args.end_date)
     lessons = selected_lessons(records, end_date, args.lookback_days)
-    candidates = build_candidates(lessons, args.min_count)
+    position_records = selected_records(position_records_all, end_date, args.lookback_days, "date")
+    outcome_records = selected_records(outcome_records_all, end_date, args.lookback_days, "review_date")
+    trade_records = selected_records(trade_records_all, end_date, args.lookback_days, "date")
+    lessons = enrich_lessons_with_journal_context(lessons, outcome_records, trade_records)
+    synthetic_position_lessons = [lesson for lesson in (position_lesson(record) for record in position_records) if lesson]
+    learning_events = lessons + synthetic_position_lessons
+    candidates = build_candidates(learning_events, args.min_count)
 
     candidate_path = candidates_path(repo_root, args.learning_dir)
     write_jsonl(candidate_path, candidates)
@@ -182,6 +267,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "lookback_days": args.lookback_days,
         "summary": {
             "daily_lessons": len(lessons),
+            "outcomes": len(outcome_records),
+            "trades": len(trade_records),
+            "position_reviews": len(position_records),
+            "learning_events": len(learning_events),
             "pattern_candidates": len(candidates),
             "min_count": args.min_count,
         },
@@ -200,6 +289,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--end-date")
     parser.add_argument("--output", help="Output base path without extension")
     parser.add_argument("--learning-dir", default="runtime/learning")
+    parser.add_argument("--journal-dir", default="runtime/journal")
     parser.add_argument("--repo-root", default=str(Path(__file__).resolve().parents[1]))
     return parser
 

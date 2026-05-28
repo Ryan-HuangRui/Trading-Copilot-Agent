@@ -74,6 +74,102 @@ class ReviewWorkflowsTest(unittest.TestCase):
             self.assertEqual(len(lessons), 1)
             self.assertIn("missing_take_profit", lessons[0])
 
+    def test_plan_review_includes_position_discipline(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            journal = root / "runtime" / "journal"
+            journal.mkdir(parents=True)
+            (journal / "signals.jsonl").write_text(
+                json.dumps(
+                    {
+                        "kind": "signal",
+                        "signal_id": "sig-1",
+                        "date": "2026-05-26",
+                        "session": "pre-market",
+                        "symbol": "MU",
+                        "setup": "breakout_pullback_continuation.md",
+                        "plan_type": "trade_plan",
+                        "execution_status": "conditional_executable",
+                        "entry": {"trigger_price": 100},
+                        "stop": {"initial_stop": 95},
+                        "take_profit": {"tp1": 112},
+                        "risk_detail": {"max_account_risk_pct": 1, "risk_per_share": 5},
+                        "execution_rules": {"skip_conditions": ["market turns risk-off"]},
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (journal / "position_reviews.jsonl").write_text(
+                "\n".join(
+                    json.dumps(record, ensure_ascii=False)
+                    for record in [
+                        {
+                            "kind": "position_review",
+                            "position_review_id": "position:2026-05-26:MU",
+                            "date": "2026-05-26",
+                            "symbol": "MU",
+                            "in_today_signals": True,
+                            "review_required": False,
+                            "trade_link_state": "linked_to_source_signal",
+                            "risk_state": "normal",
+                            "source_signal_id": "sig-1",
+                        },
+                        {
+                            "kind": "position_review",
+                            "position_review_id": "position:2026-05-26:TSLA",
+                            "date": "2026-05-26",
+                            "symbol": "TSLA",
+                            "in_today_signals": False,
+                            "review_required": True,
+                            "trade_link_state": "no_trade_record",
+                            "risk_state": "not_in_plan",
+                        },
+                        {
+                            "kind": "position_review",
+                            "position_review_id": "position:2026-05-26:NVDA",
+                            "date": "2026-05-26",
+                            "symbol": "NVDA",
+                            "in_today_signals": False,
+                            "review_required": True,
+                            "trade_link_state": "trade_missing_source_signal_id",
+                            "risk_state": "close_to_invalidation",
+                            "distance_to_invalidation_pct": 1.5,
+                        },
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            command = [
+                sys.executable,
+                str(ROOT / "script" / "plan_review.py"),
+                "--repo-root",
+                str(root),
+                "--date",
+                "2026-05-26",
+                "--append-lessons",
+            ]
+            proc = subprocess.run(command, check=False, text=True, capture_output=True)
+
+            self.assertEqual(proc.returncode, 0, msg=proc.stderr or proc.stdout)
+            payload = json.loads(proc.stdout)
+            discipline = payload["summary"]["position_discipline"]
+            self.assertEqual(discipline["position_reviews"], 3)
+            self.assertEqual(discipline["positions_without_plan"], 2)
+            self.assertEqual(discipline["missing_trade_link"], 2)
+            self.assertEqual(discipline["missing_source_signal_id"], 1)
+            self.assertEqual(discipline["close_to_invalidation_without_trade_record"], 1)
+            review = json.loads((root / "report" / "2026-05-26" / "plan-review.json").read_text(encoding="utf-8"))
+            self.assertEqual(review["position_discipline"]["positions_without_plan"], ["NVDA", "TSLA"])
+            markdown = (root / "report" / "2026-05-26" / "plan-review.md").read_text(encoding="utf-8")
+            self.assertIn("## 持仓纪律复盘", markdown)
+            self.assertIn("有持仓但无计划：NVDA, TSLA", markdown)
+            lessons = (root / "runtime" / "learning" / "daily_lessons.jsonl").read_text(encoding="utf-8")
+            self.assertIn("position_without_plan", lessons)
+
     def test_daily_self_review_writes_markdown_and_dedupes_review_append(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

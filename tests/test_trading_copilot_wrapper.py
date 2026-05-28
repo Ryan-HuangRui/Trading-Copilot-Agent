@@ -459,6 +459,49 @@ class TradingCopilotWrapperTest(unittest.TestCase):
         self.assertEqual(payload["workflow"], "promote-lesson")
         self.assertTrue(payload["applied"])
 
+    def test_feishu_summary_wrapper_contract(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            report_dir = root / "report" / "2026-05-26"
+            report_dir.mkdir(parents=True)
+            signals = report_dir / "pre-market-signals.json"
+            signals.write_text(
+                json.dumps(
+                    {
+                        "date": "2026-05-26",
+                        "session": "pre-market",
+                        "signals": [
+                            {
+                                "symbol": "MU",
+                                "setup": "breakout_pullback_continuation.md",
+                                "status": "planned",
+                                "plan_type": "watch_only",
+                                "execution_status": "watch_only",
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            payload = self.run_wrapper(
+                "feishu-summary",
+                "--date",
+                "2026-05-26",
+                "--session",
+                "pre-market",
+                "--signals",
+                str(signals),
+                "--output",
+                str(root / "feishu-summary.md"),
+            )
+
+        self.assertEqual(payload["status"], "success")
+        self.assertEqual(payload["workflow"], "feishu-summary")
+        self.assertEqual(payload["summary"]["watch_only"], 1)
+        self.assertTrue(payload["artifacts"][0].endswith("feishu-summary.md"))
+
     def test_pre_market_expected_outputs_include_signals_sidecar(self):
         proc = subprocess.CompletedProcess(
             args=[],

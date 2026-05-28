@@ -40,8 +40,10 @@
   - Agent reads `agent/post_market_analysis_prompt.md`, `knowledge/refined/`, and `report/<SNAPSHOT_DATE>/daily-snapshot.json`.
   - Agent writes `report/<SNAPSHOT_DATE>/post-market.md` and `report/<SNAPSHOT_DATE>/post-market-signals.json`.
   - Run `python3 script/trading_copilot.py validate-trade-plan --session post-market --date <SNAPSHOT_DATE>` before journal append or sync.
-  - Run `python3 script/trading_copilot.py plan-review --date <SNAPSHOT_DATE> --append-lessons` after outcomes are backfilled and signals are appended.
+  - Run account/position review before `plan-review` when account context is enabled, so plan review can include position discipline.
+  - Run `python3 script/trading_copilot.py plan-review --date <SNAPSHOT_DATE> --append-lessons` after outcomes, signals, and optional position review are appended.
   - Run `python3 script/trading_copilot.py learning-review --lookback-days 20` to aggregate repeated candidate lessons. Only promote with `promote-lesson --apply` after explicit human approval.
+  - Run `python3 script/trading_copilot.py feishu-summary --session post-market --date <SNAPSHOT_DATE>` for concise Feishu delivery.
 - Pre-market plan flow:
   - `python3 script/prepare_daily_context.py --watchlist config/watchlist.json --skip-non-trading-day`
   - Agent reads `agent/daily_analysis_prompt.md`, `knowledge/refined/`, and `report/<PRE_MARKET_DATE>/pre-market-context.json`.

@@ -73,6 +73,65 @@ def trades_by_symbol(trades: list[dict[str, Any]]) -> dict[str, list[dict[str, A
     return result
 
 
+def position_discipline(position_reviews: list[dict[str, Any]], plan_reviews: list[dict[str, Any]]) -> tuple[dict[str, Any], dict[str, list[str]]]:
+    planned_without_trade_record = sorted(
+        {
+            str(review.get("symbol")).upper()
+            for review in plan_reviews
+            if review.get("symbol") and review.get("trade_state") == "no_trade_record"
+        }
+    )
+    positions_without_plan = sorted(
+        {
+            str(record.get("symbol")).upper()
+            for record in position_reviews
+            if record.get("symbol") and not record.get("in_today_signals")
+        }
+    )
+    missing_trade_link = sorted(
+        {
+            str(record.get("symbol")).upper()
+            for record in position_reviews
+            if record.get("symbol") and record.get("trade_link_state") != "linked_to_source_signal"
+        }
+    )
+    missing_source_signal_id = sorted(
+        {
+            str(record.get("symbol")).upper()
+            for record in position_reviews
+            if record.get("symbol") and record.get("trade_link_state") == "trade_missing_source_signal_id"
+        }
+    )
+    close_without_trade = sorted(
+        {
+            str(record.get("symbol")).upper()
+            for record in position_reviews
+            if record.get("symbol")
+            and record.get("risk_state") == "close_to_invalidation"
+            and record.get("trade_link_state") != "linked_to_source_signal"
+        }
+    )
+    details = {
+        "planned_without_trade_record": planned_without_trade_record,
+        "positions_without_plan": positions_without_plan,
+        "missing_trade_link": missing_trade_link,
+        "missing_source_signal_id": missing_source_signal_id,
+        "close_to_invalidation_without_trade_record": close_without_trade,
+    }
+    summary = {
+        "position_reviews": len(position_reviews),
+        "review_required": sum(1 for record in position_reviews if record.get("review_required")),
+        "planned_without_trade_record": len(planned_without_trade_record),
+        "positions_without_plan": len(positions_without_plan),
+        "missing_trade_link": len(missing_trade_link),
+        "missing_source_signal_id": len(missing_source_signal_id),
+        "close_to_invalidation_without_trade_record": len(close_without_trade),
+        "trade_link_state": dict(Counter(str(record.get("trade_link_state") or "unknown") for record in position_reviews)),
+        "risk_state": dict(Counter(str(record.get("risk_state") or "unknown") for record in position_reviews)),
+    }
+    return summary, details
+
+
 def build_plan_review(
     signal: dict[str, Any],
     outcome: dict[str, Any] | None,
@@ -134,16 +193,64 @@ def lesson_for_review(date: str, review: dict[str, Any]) -> dict[str, Any] | Non
     }
 
 
-def summarize(reviews: list[dict[str, Any]]) -> dict[str, Any]:
+def position_lesson(date: str, record: dict[str, Any]) -> dict[str, Any] | None:
+    symbol = str(record.get("symbol") or "").upper()
+    if not symbol:
+        return None
+    if not record.get("in_today_signals"):
+        problem = "position_without_plan"
+        suggested = "trading positions should link to an active plan or be classified as core/watch"
+    elif record.get("trade_link_state") == "trade_missing_source_signal_id":
+        problem = "position_missing_source_signal_id"
+        suggested = "trade records should include source_signal_id when linked to a plan"
+    elif record.get("trade_link_state") == "no_trade_record":
+        problem = "position_no_trade_record"
+        suggested = "positions should have a matching trade record or explicit core/watch classification"
+    elif record.get("risk_state") == "close_to_invalidation":
+        problem = "position_close_to_invalidation"
+        suggested = "positions near invalidation should have an explicit human review note"
+    else:
+        return None
+
+    return {
+        "kind": "daily_lesson",
+        "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "date": date,
+        "lesson_type": "position_discipline",
+        "symbol": symbol,
+        "setup": str(record.get("setup") or "position_discipline"),
+        "problem": problem,
+        "evidence": [f"{symbol}: {problem}; risk_state={record.get('risk_state')}; trade_link_state={record.get('trade_link_state')}"],
+        "suggested_constraint": suggested,
+        "status": "candidate",
+    }
+
+
+def summarize(reviews: list[dict[str, Any]], position_summary: dict[str, Any] | None = None) -> dict[str, Any]:
     return {
         "plans": len(reviews),
         "quality": dict(Counter(str(item.get("quality_state")) for item in reviews)),
         "outcomes": dict(Counter(str(item.get("outcome")) for item in reviews)),
         "trade_state": dict(Counter(str(item.get("trade_state")) for item in reviews)),
+        "position_discipline": position_summary or {
+            "position_reviews": 0,
+            "review_required": 0,
+            "planned_without_trade_record": 0,
+            "positions_without_plan": 0,
+            "missing_trade_link": 0,
+            "missing_source_signal_id": 0,
+            "close_to_invalidation_without_trade_record": 0,
+            "trade_link_state": {},
+            "risk_state": {},
+        },
     }
 
 
-def build_markdown(date: str, reviews: list[dict[str, Any]], summary: dict[str, Any]) -> str:
+def csv_or_none(values: list[str]) -> str:
+    return ", ".join(values) if values else "无"
+
+
+def build_markdown(date: str, reviews: list[dict[str, Any]], summary: dict[str, Any], position_details: dict[str, list[str]]) -> str:
     lines = [
         f"# 日度交易计划复盘（{date}）",
         "",
@@ -169,6 +276,21 @@ def build_markdown(date: str, reviews: list[dict[str, Any]], summary: dict[str, 
                 "",
             ]
         )
+    discipline = summary["position_discipline"]
+    lines.extend(
+        [
+            "## 持仓纪律复盘",
+            f"- 持仓复核记录数：{discipline['position_reviews']}",
+            f"- 需人工复核：{discipline['review_required']}",
+            f"- 有计划但无交易记录：{csv_or_none(position_details.get('planned_without_trade_record', []))}",
+            f"- 有持仓但无计划：{csv_or_none(position_details.get('positions_without_plan', []))}",
+            f"- 持仓缺 trade/source link：{csv_or_none(position_details.get('missing_trade_link', []))}",
+            f"- 有持仓但缺 source_signal_id：{csv_or_none(position_details.get('missing_source_signal_id', []))}",
+            f"- 接近失效位但无完整交易关联：{csv_or_none(position_details.get('close_to_invalidation_without_trade_record', []))}",
+            f"- 持仓交易关联：{json.dumps(discipline.get('trade_link_state', {}), ensure_ascii=False, sort_keys=True)}",
+            "",
+        ]
+    )
     lines.extend(
         [
             "## 边界",
@@ -196,6 +318,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         for record in read_jsonl(journal_path(repo_root, args.journal_dir, "trade"))
         if record.get("kind") == "trade" and record.get("date") == args.date
     ]
+    position_reviews = [
+        record
+        for record in read_jsonl(journal_path(repo_root, args.journal_dir, "position_review"))
+        if record.get("kind") == "position_review" and record.get("date") == args.date
+    ]
     trade_map = trades_by_symbol(trades)
 
     reviews = []
@@ -204,18 +331,21 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         symbol = str(signal.get("symbol") or "").split(".", 1)[0].upper()
         reviews.append(build_plan_review(signal, outcomes_by_signal.get(sid), trade_map.get(symbol, [])))
 
-    summary = summarize(reviews)
+    position_summary, position_details = position_discipline(position_reviews, reviews)
+    summary = summarize(reviews, position_summary)
     markdown_path, json_path = output_paths(repo_root, args.date, args.output)
     markdown_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "date": args.date,
         "plan_reviews": reviews,
+        "position_discipline": position_details,
         "summary": summary,
     }
-    markdown_path.write_text(build_markdown(args.date, reviews, summary), encoding="utf-8")
+    markdown_path.write_text(build_markdown(args.date, reviews, summary, position_details), encoding="utf-8")
     json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
     lessons = [lesson for lesson in (lesson_for_review(args.date, review) for review in reviews) if lesson]
+    lessons.extend(lesson for lesson in (position_lesson(args.date, record) for record in position_reviews) if lesson)
     lessons_path = learning_path(repo_root, args.learning_dir)
     if args.append_lessons:
         for lesson in lessons:

@@ -420,6 +420,8 @@ def run_learning_review(args: argparse.Namespace) -> None:
         str(args.min_count),
         "--learning-dir",
         args.learning_dir,
+        "--journal-dir",
+        args.journal_dir,
     ]
     if args.end_date:
         command.extend(["--end-date", args.end_date])
@@ -436,6 +438,37 @@ def run_learning_review(args: argparse.Namespace) -> None:
     response["artifacts"] = (stdout or {}).get("artifacts", [])
     response["summary"] = (stdout or {}).get("summary")
     response["pattern_candidates"] = (stdout or {}).get("pattern_candidates", [])
+    emit(response)
+
+
+def run_feishu_summary(args: argparse.Namespace) -> None:
+    command = [
+        "script/feishu_summary.py",
+        "--date",
+        args.date,
+        "--session",
+        args.session,
+        "--learning-dir",
+        args.learning_dir,
+    ]
+    if args.signals:
+        command.extend(["--signals", args.signals])
+    if args.position_review:
+        command.extend(["--position-review", args.position_review])
+    if args.plan_review:
+        command.extend(["--plan-review", args.plan_review])
+    if args.output:
+        command.extend(["--output", args.output])
+
+    proc = run_child(command)
+    stdout = parse_json_output(proc.stdout)
+    if proc.returncode != 0:
+        emit(failed_response("feishu-summary", command, proc), 1)
+
+    response = base_response("feishu-summary", command, stdout)
+    response["date"] = args.date
+    response["artifacts"] = [stdout["output"]] if stdout and stdout.get("output") else []
+    response["summary"] = (stdout or {}).get("summary")
     emit(response)
 
 
@@ -770,7 +803,18 @@ def build_parser() -> argparse.ArgumentParser:
     learning_review.add_argument("--end-date")
     learning_review.add_argument("--output")
     learning_review.add_argument("--learning-dir", default="runtime/learning")
+    learning_review.add_argument("--journal-dir", default="runtime/journal")
     learning_review.set_defaults(func=run_learning_review)
+
+    feishu_summary = sub.add_parser("feishu-summary", help="Build a concise Feishu-ready execution summary")
+    feishu_summary.add_argument("--date", required=True)
+    feishu_summary.add_argument("--session", choices=["pre-market", "post-market"], required=True)
+    feishu_summary.add_argument("--signals")
+    feishu_summary.add_argument("--position-review")
+    feishu_summary.add_argument("--plan-review")
+    feishu_summary.add_argument("--output")
+    feishu_summary.add_argument("--learning-dir", default="runtime/learning")
+    feishu_summary.set_defaults(func=run_feishu_summary)
 
     promote_lesson = sub.add_parser("promote-lesson", help="Promote a pattern candidate into validated lessons")
     promote_lesson.add_argument("--pattern-id", required=True)
