@@ -162,7 +162,7 @@ Output:
 Required behavior:
 
 - A failed validation must stop delivery and Longbridge sync.
-- `sync-longbridge-watchlist --require-validation` must run this gate before extracting and syncing report focus symbols.
+- `extract-report-signals --require-validation` and `sync-longbridge-watchlist --require-validation` must run this gate before journal append or watchlist sync.
 - Full-session validation requires `report/<DATE>/pre-market-signals.json` or `report/<DATE>/post-market-signals.json`. Single-report validation through `--report` keeps sidecar validation optional for ad-hoc checks.
 - Markdown focus symbols must match the symbols in the session signal sidecar.
 
@@ -187,6 +187,8 @@ Required behavior:
 - `execution_status=conditional_executable` requires a complete Trade Plan Card: `entry.trigger_price`, `stop.initial_stop`, `take_profit.tp1`, `risk.max_account_risk_pct`, `risk.risk_per_share`, and at least one `execution_rules.skip_conditions` item.
 - TP1 reward/risk must be at least 2R.
 - Incomplete plans must be downgraded by the agent to `watch_only` or `no_trade` before delivery.
+- `extract-report-signals --require-validation` and `sync-longbridge-watchlist --require-validation` must run this gate as well as `validate-report`.
+- With `--require-validation`, a missing session sidecar is blocking even when `--report` points to a valid Markdown file.
 
 ## extract-report-signals
 
@@ -215,6 +217,7 @@ Output:
 Required behavior:
 
 - Prefer the session signal sidecar over Markdown parsing.
+- With `--require-validation`, run both `validate-report` and `validate-trade-plan` before extracting. Any failure must stop journal append.
 - Extract at most 3 focused candidates by default.
 - Prefer explicit focus lists such as `今日最多3个重点标的` and `明日观察清单`.
 - Include `signal_id`, `symbol`, `setup`, `setup_files`, `trigger`, `invalidation`, `risk`, `status`, and `source_report` when available.
@@ -268,7 +271,59 @@ Required behavior:
 - Separate plan quality, price touch outcome, and real execution.
 - Lessons are candidate process improvements only; they must not mutate `knowledge/refined/`.
 
+## learning-review
+
+Purpose: aggregate repeated `daily_lessons.jsonl` entries into candidate process patterns for human review.
+
+Canonical command:
+
+```bash
+python3 script/trading_copilot.py learning-review --lookback-days 20 --min-count 3
+```
+
+Inputs:
+
+- `runtime/learning/daily_lessons.jsonl`
+
+Outputs:
+
+- `runtime/learning/pattern_candidates.jsonl`
+- `report/learning/pattern-review.md`
+- `report/learning/pattern-review.json`
+
 Required behavior:
+
+- Group repeated lessons by problem, setup, and lesson type.
+- Only emit candidates that meet the repeat threshold.
+- Mark emitted candidates as `promotion_status=needs_human_review`.
+- Do not mutate `knowledge/refined/`.
+
+## promote-lesson
+
+Purpose: promote one repeated pattern candidate into prompt-readable validated lessons after human review.
+
+Canonical commands:
+
+```bash
+python3 script/trading_copilot.py promote-lesson --pattern-id <PATTERN_ID> --dry-run
+python3 script/trading_copilot.py promote-lesson --pattern-id <PATTERN_ID> --apply
+```
+
+Inputs:
+
+- `runtime/learning/pattern_candidates.jsonl`
+
+Output:
+
+- `knowledge/evolution/validated_lessons.md`
+
+Required behavior:
+
+- `--dry-run` must show the exact Markdown block without writing.
+- `--apply` may append to `knowledge/evolution/validated_lessons.md`.
+- Promotion is still process guidance only; it must not edit `knowledge/refined/`.
+
+Required behavior for outcome backfill:
 
 - Pre-market signals target the same date as the signal.
 - Post-market signals target the next regular trading day after the signal date.

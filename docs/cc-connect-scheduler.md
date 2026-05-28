@@ -12,6 +12,95 @@ Use this split:
 
 Do not run the same production pre-market or post-market workflow from both cc connect and Codex App automation. Duplicate schedulers can duplicate reports, journal records, Longbridge sync, Twelve Data calls, and Feishu messages.
 
+## Server Update Checklist
+
+Apply these changes on the server that runs cc connect before enabling the upgraded workflow.
+
+### 1. Deploy Repository Code
+
+On the Trading-Copilot-Agent checkout used by cc connect:
+
+```bash
+git fetch origin
+git checkout master
+git pull --ff-only
+python3 -m py_compile script/*.py
+python3 -m unittest discover tests
+python3 script/trading_day_guard.py --date 2026-05-06 --format text
+```
+
+Expected smoke result:
+
+```text
+TRADING_DAY 2026-05-06 regular_session
+```
+
+If the server does not run the full test suite in production, at minimum run:
+
+```bash
+python3 -m py_compile script/*.py
+python3 script/trading_copilot.py trading-day-check --date 2026-05-06
+```
+
+### 2. Update cc connect Production Prompts
+
+Update the configured cc connect prompts so they require the new artifacts and gates:
+
+- Pre-market generation must write `exec-brief.md`, `pre-market.md`, and `pre-market-signals.json`.
+- Post-market generation must write `post-market.md` and `post-market-signals.json`.
+- Both workflows must run `validate-report` and `validate-trade-plan` before journal append or Longbridge sync.
+- Any `extract-report-signals --require-validation` failure must stop journal append.
+- Any `sync-longbridge-watchlist --require-validation` failure must stop watchlist sync.
+- Post-market must include `learning-review --lookback-days 20` after `plan-review --append-lessons`.
+- `promote-lesson --apply` must not be scheduled automatically; run it only after human approval of a specific `pattern_id`.
+
+### 3. Update Failure Policy
+
+Configure cc connect failure handling with these rules:
+
+- `pre-market-plan` or `post-market-review` returns `skipped=true`: send a concise skipped/status message and stop that workflow.
+- `daily-snapshot.json` has `stale_data=true`: do not generate a formal post-market review; send a data-not-ready status message.
+- `validate-report` or `validate-trade-plan` fails: do not send the report as production output, do not append journal signals, and do not sync Longbridge. Send the validation errors as the Feishu status.
+- `backfill-signal-outcomes`, `plan-review`, `learning-review`, `account-snapshot`, `position-review`, or `daily-self-review` fails: continue the main report delivery only if validation already passed, and include the failed step and reason in Feishu.
+- Longbridge sync failure: keep the generated report and journal records, include the sync failure in Feishu, and rerun only `sync-longbridge-watchlist` after fixing Longbridge CLI/login/connectivity.
+
+### 4. Confirm Runtime Paths
+
+Confirm the cc connect job uses the same repository root and writable ignored runtime paths:
+
+```text
+raw_data/
+report/
+runtime/
+config/rate_limit_state.json
+```
+
+Confirm server secrets and local state are not committed:
+
+```text
+.env
+runtime/
+report/
+raw_data/
+config/rate_limit_state.json
+```
+
+### 5. Server Acceptance Check
+
+After updating the prompts, run one dry validation cycle against an existing report date that already has the required generated artifacts:
+
+```bash
+python3 script/trading_copilot.py validate-report --session pre-market --date <DATE>
+python3 script/trading_copilot.py validate-trade-plan --session pre-market --date <DATE>
+python3 script/trading_copilot.py extract-report-signals --session pre-market --date <DATE> --require-validation
+
+python3 script/trading_copilot.py validate-report --session post-market --date <DATE>
+python3 script/trading_copilot.py validate-trade-plan --session post-market --date <DATE>
+python3 script/trading_copilot.py learning-review --lookback-days 20
+```
+
+Do not add `--append` or `--execute` during the acceptance check unless you intentionally want to mutate the journal or Longbridge watchlist.
+
 ## Required cc connect Prompt Updates
 
 If cc connect was configured before the read-only position review workflow was added, update the existing production prompts as follows.
@@ -85,6 +174,8 @@ python3 script/trading_copilot.py account-snapshot --date <DATE>
 python3 script/trading_copilot.py position-review --date <DATE> --config config/position_review.json --append
 ```
 
+`extract-report-signals --require-validation` runs both `validate-report` and `validate-trade-plan`; if either gate fails, do not append journal records or continue to Longbridge sync. `sync-longbridge-watchlist --require-validation` repeats both gates before any watchlist update.
+
 ### Task B: Post-Market Review + Daily Self-Review
 
 Recommended cc connect instruction:
@@ -108,6 +199,7 @@ python3 script/trading_copilot.py validate-trade-plan --session post-market --da
 python3 script/trading_copilot.py backfill-signal-outcomes --date <DATE> --append
 python3 script/trading_copilot.py extract-report-signals --session post-market --date <DATE> --require-validation --append
 python3 script/trading_copilot.py plan-review --date <DATE> --append-lessons
+python3 script/trading_copilot.py learning-review --lookback-days 20
 python3 script/trading_copilot.py account-snapshot --date <DATE>
 python3 script/trading_copilot.py position-review --date <DATE> --config config/position_review.json --append
 python3 script/trading_copilot.py daily-self-review --date <DATE> --append

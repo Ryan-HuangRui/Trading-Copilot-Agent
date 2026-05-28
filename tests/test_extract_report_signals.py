@@ -149,6 +149,119 @@ class ExtractReportSignalsTest(unittest.TestCase):
             lines = (root / "runtime" / "journal" / "signals.jsonl").read_text(encoding="utf-8").splitlines()
             self.assertEqual(len(lines), 3)
 
+    def test_require_validation_requires_default_trade_plan_sidecar(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            setup_dir = root / "knowledge" / "refined" / "setups"
+            setup_dir.mkdir(parents=True)
+            (setup_dir / "breakout_pullback_continuation.md").write_text("# setup\n", encoding="utf-8")
+            report_dir = root / "report" / "2026-05-26"
+            report_dir.mkdir(parents=True)
+            report = report_dir / "exec-brief.md"
+            report.write_text(
+                """# 今日盘前执行简版（2026-05-26）
+## 总览
+- 今日最多3个重点标的：MU
+## 执行清单（逐标的）
+### MU
+- 参考 setup：breakout_pullback_continuation.md
+- 主场景：突破 100 后回踩站稳。
+- 失效条件：跌破 95。
+- 风险约束：单笔风险 <=1%。
+""",
+                encoding="utf-8",
+            )
+
+            command = [
+                sys.executable,
+                str(ROOT / "script" / "extract_report_signals.py"),
+                "--repo-root",
+                str(root),
+                "--date",
+                "2026-05-26",
+                "--session",
+                "pre-market",
+                "--report",
+                str(report),
+                "--require-validation",
+            ]
+            proc = subprocess.run(command, check=False, text=True, capture_output=True)
+
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertIn("missing structured signal sidecar", proc.stdout)
+
+    def test_require_validation_fails_invalid_trade_plan_sidecar(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            setup_dir = root / "knowledge" / "refined" / "setups"
+            setup_dir.mkdir(parents=True)
+            (setup_dir / "breakout_pullback_continuation.md").write_text("# setup\n", encoding="utf-8")
+            report_dir = root / "report" / "2026-05-26"
+            report_dir.mkdir(parents=True)
+            report = report_dir / "exec-brief.md"
+            report.write_text(
+                """# 今日盘前执行简版（2026-05-26）
+## 总览
+- 今日最多3个重点标的：MU
+## 执行清单（逐标的）
+### MU
+- 参考 setup：breakout_pullback_continuation.md
+- 主场景：突破 100 后回踩站稳。
+- 失效条件：跌破 95。
+- 风险约束：单笔风险 <=1%。
+""",
+                encoding="utf-8",
+            )
+            sidecar = report_dir / "pre-market-signals.json"
+            sidecar.write_text(
+                json.dumps(
+                    {
+                        "date": "2026-05-26",
+                        "session": "pre-market",
+                        "signals": [
+                            {
+                                "symbol": "MU",
+                                "setup": "breakout_pullback_continuation.md",
+                                "direction": "long",
+                                "trigger": {"type": "break_above", "price": 100, "text": "突破 100"},
+                                "invalidation": {"type": "break_below", "price": 95, "text": "跌破 95"},
+                                "risk": {
+                                    "max_risk_pct": 1,
+                                    "max_account_risk_pct": 1,
+                                    "risk_per_share": 5,
+                                },
+                                "status": "planned",
+                                "plan_type": "trade_plan",
+                                "execution_status": "conditional_executable",
+                                "entry": {"trigger_price": 100, "confirmation": "pullback holds"},
+                                "stop": {"initial_stop": 95},
+                                "execution_rules": {"skip_conditions": ["market turns risk-off"]},
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            command = [
+                sys.executable,
+                str(ROOT / "script" / "extract_report_signals.py"),
+                "--repo-root",
+                str(root),
+                "--date",
+                "2026-05-26",
+                "--session",
+                "pre-market",
+                "--report",
+                str(report),
+                "--require-validation",
+            ]
+            proc = subprocess.run(command, check=False, text=True, capture_output=True)
+
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertIn("take_profit.tp1", proc.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

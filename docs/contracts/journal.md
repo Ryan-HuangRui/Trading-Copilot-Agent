@@ -8,6 +8,12 @@ Default location:
 runtime/journal/
 ```
 
+Learning artifacts live under:
+
+```bash
+runtime/learning/
+```
+
 ## Files
 
 - `signals.jsonl`: planned or observed setup candidates extracted from reports or monitor scans.
@@ -15,6 +21,8 @@ runtime/journal/
 - `trades.jsonl`: optional human-entered execution/outcome records.
 - `reviews.jsonl`: post-market or weekly lessons linked back to reports, signals, or setups.
 - `position_reviews.jsonl`: read-only position risk and plan-consistency review records.
+- `runtime/learning/daily_lessons.jsonl`: candidate process lessons emitted by `plan-review --append-lessons`.
+- `runtime/learning/pattern_candidates.jsonl`: repeated lesson patterns emitted by `learning-review`; these require human review before promotion.
 
 Each line is one JSON object. Fields are intentionally append-only so reports can be audited later.
 

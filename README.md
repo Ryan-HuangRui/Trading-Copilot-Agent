@@ -48,6 +48,8 @@ python3 script/trading_copilot.py validate-trade-plan --session pre-market --dat
 python3 script/trading_copilot.py extract-report-signals --session pre-market --date <DATE> --require-validation --append
 python3 script/trading_copilot.py backfill-signal-outcomes --date <DATE> --append
 python3 script/trading_copilot.py plan-review --date <DATE> --append-lessons
+python3 script/trading_copilot.py learning-review --lookback-days 20
+python3 script/trading_copilot.py promote-lesson --pattern-id <PATTERN_ID> --dry-run
 python3 script/trading_copilot.py daily-self-review --date <DATE> --append
 python3 script/trading_copilot.py weekly-review --week <YYYY-Www> --append
 python3 script/trading_copilot.py extract-monitor-signals --append
@@ -83,15 +85,18 @@ python3 script/workflow_smoke_test.py --date <DATE> --week <YYYY-Www>
   - `report/YYYY-MM-DD/pre-market.md`
   - `report/YYYY-MM-DD/pre-market-signals.json`
 - 报告校验：`python3 script/trading_copilot.py validate-report --session pre-market --date YYYY-MM-DD`
-- 信号入 journal：`python3 script/trading_copilot.py extract-report-signals --session pre-market --date YYYY-MM-DD --require-validation --append`
 - 交易计划校验：`python3 script/trading_copilot.py validate-trade-plan --session pre-market --date YYYY-MM-DD`
+- 信号入 journal：`python3 script/trading_copilot.py extract-report-signals --session pre-market --date YYYY-MM-DD --require-validation --append`
+- `--require-validation` 会同时跑报告校验和交易计划校验，任一失败都不应继续入 journal 或同步 Longbridge。
 - 分析过程由 Agent 完成，脚本只做交易日判断、数据准备、指标摘要与限频控制
 - 详细 runbook：`docs/daily-report-workflow.md`
 
 ## 复盘闭环
-- 盘后复盘：Agent 生成 `post-market.md` 与 `post-market-signals.json` 后，先跑 `validate-report`
+- 盘后复盘：Agent 生成 `post-market.md` 与 `post-market-signals.json` 后，先跑 `validate-report` 和 `validate-trade-plan`
 - outcome 回填：`python3 script/trading_copilot.py backfill-signal-outcomes --date YYYY-MM-DD --append`
 - 交易计划复盘：`python3 script/trading_copilot.py plan-review --date YYYY-MM-DD --append-lessons`
+- 候选规律聚合：`python3 script/trading_copilot.py learning-review --lookback-days 20`
+- 人工晋升预览：`python3 script/trading_copilot.py promote-lesson --pattern-id <PATTERN_ID> --dry-run`
 - 日度自我复盘：`python3 script/trading_copilot.py daily-self-review --date YYYY-MM-DD --append`
 - 周度复盘：`python3 script/trading_copilot.py weekly-review --week YYYY-Www --append`
 - journal 默认写入 ignored runtime 路径：`runtime/journal/signals.jsonl`、`outcomes.jsonl`、`trades.jsonl`、`reviews.jsonl`

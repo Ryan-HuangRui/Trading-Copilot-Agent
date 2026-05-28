@@ -86,6 +86,10 @@ Every workflow run should return or report the same status fields:
 11. Fully replace Longbridge `今日关注` from the post-market focus list:
    `python3 script/trading_copilot.py sync-longbridge-watchlist --session post-market --date <DATE> --group-name 今日关注 --sync-mode replace --require-validation --execute --no-create`.
 
+`--require-validation` runs both `validate-report` and `validate-trade-plan`; if either fails, stop before journal append or Longbridge sync.
+
+Use `python3 script/trading_copilot.py learning-review --lookback-days 20` to aggregate repeated daily lessons into `pattern_candidates.jsonl`. Use `promote-lesson --pattern-id <PATTERN_ID> --dry-run` for review, and only use `--apply` when the user explicitly approves the promotion into `knowledge/evolution/validated_lessons.md`.
+
 ### Longbridge Watchlist Sync
 
 - Default target group is `今日关注`.
