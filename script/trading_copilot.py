@@ -126,7 +126,7 @@ def run_pre_market(args: argparse.Namespace) -> None:
         response["expected_agent_outputs"] = [
             f"report/{stdout.get('report_date')}/exec-brief.md",
             f"report/{stdout.get('report_date')}/pre-market.md",
-            f"report/{stdout.get('report_date')}/signals.json",
+            f"report/{stdout.get('report_date')}/pre-market-signals.json",
         ]
     emit(response)
 
@@ -152,6 +152,12 @@ def run_post_market(args: argparse.Namespace) -> None:
         command.extend(["--sp500-top", str(args.sp500_top)])
         command.extend(["--sp500-candidates", str(args.sp500_candidates)])
         command.extend(["--sp500-source", args.sp500_source])
+    for symbol in getattr(args, "extra_symbol", []) or []:
+        command.extend(["--extra-symbol", symbol])
+    if getattr(args, "include_journal_signals", False):
+        command.append("--include-journal-signals")
+    if getattr(args, "include_position_symbols", False):
+        command.append("--include-position-symbols")
 
     proc = run_child(command)
     stdout = parse_json_output(proc.stdout)
@@ -174,7 +180,7 @@ def run_post_market(args: argparse.Namespace) -> None:
         ]
         response["expected_agent_outputs"] = [
             f"report/{stdout.get('snapshot_date')}/post-market.md",
-            f"report/{stdout.get('snapshot_date')}/signals.json",
+            f"report/{stdout.get('snapshot_date')}/post-market-signals.json",
         ]
     emit(response)
 
@@ -252,6 +258,29 @@ def run_validate_report(args: argparse.Namespace) -> None:
     response = base_response("validate-report", command, stdout)
     response["date"] = args.date
     response["artifacts"] = (stdout or {}).get("checked_reports", [])
+    response["validation"] = stdout
+    emit(response)
+
+
+def run_validate_trade_plan(args: argparse.Namespace) -> None:
+    command = [
+        "script/validate_trade_plan.py",
+        "--date",
+        args.date,
+        "--session",
+        args.session,
+    ]
+    if args.signals:
+        command.extend(["--signals", args.signals])
+
+    proc = run_child(command)
+    stdout = parse_json_output(proc.stdout)
+    if proc.returncode != 0:
+        emit(failed_response("validate-trade-plan", command, proc), 1)
+
+    response = base_response("validate-trade-plan", command, stdout)
+    response["date"] = args.date
+    response["artifacts"] = (stdout or {}).get("checked_artifacts", [])
     response["validation"] = stdout
     emit(response)
 
@@ -345,6 +374,35 @@ def run_daily_self_review(args: argparse.Namespace) -> None:
     response["summary"] = (stdout or {}).get("summary")
     response["appended"] = (stdout or {}).get("appended", [])
     response["skipped_duplicates"] = (stdout or {}).get("skipped_duplicates", [])
+    emit(response)
+
+
+def run_plan_review(args: argparse.Namespace) -> None:
+    command = [
+        "script/plan_review.py",
+        "--date",
+        args.date,
+        "--journal-dir",
+        args.journal_dir,
+        "--learning-dir",
+        args.learning_dir,
+    ]
+    if args.output:
+        command.extend(["--output", args.output])
+    if args.append_lessons:
+        command.append("--append-lessons")
+
+    proc = run_child(command)
+    stdout = parse_json_output(proc.stdout)
+    if proc.returncode != 0:
+        emit(failed_response("plan-review", command, proc), 1)
+
+    response = base_response("plan-review", command, stdout)
+    response["date"] = args.date
+    response["artifacts"] = (stdout or {}).get("artifacts", [])
+    response["summary"] = (stdout or {}).get("summary")
+    response["lessons"] = (stdout or {}).get("lessons", [])
+    response["lessons_path"] = (stdout or {}).get("lessons_path")
     emit(response)
 
 
@@ -446,6 +504,10 @@ def run_position_review(args: argparse.Namespace) -> None:
         command.extend(["--account-snapshot", args.account_snapshot])
     if args.signals:
         command.extend(["--signals", args.signals])
+    if args.session:
+        command.extend(["--session", args.session])
+    if args.snapshot:
+        command.extend(["--snapshot", args.snapshot])
     if args.config:
         command.extend(["--config", args.config])
     if args.output:
@@ -565,6 +627,9 @@ def build_parser() -> argparse.ArgumentParser:
     post.add_argument("--sp500-top", type=int, default=100)
     post.add_argument("--sp500-candidates", type=int, default=15)
     post.add_argument("--sp500-source", choices=["ishares_ivv", "slickcharts"], default="ishares_ivv")
+    post.add_argument("--extra-symbol", action="append", default=[])
+    post.add_argument("--include-journal-signals", action="store_true")
+    post.add_argument("--include-position-symbols", action="store_true")
     post.set_defaults(func=run_post_market)
 
     monitor = sub.add_parser("monitor-brief", help="Run intraday monitor scan")
@@ -584,6 +649,12 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument("--report")
     validate.add_argument("--signals")
     validate.set_defaults(func=run_validate_report)
+
+    validate_plan = sub.add_parser("validate-trade-plan", help="Validate structured trade-plan sidecar quality gates")
+    validate_plan.add_argument("--date", required=True)
+    validate_plan.add_argument("--session", choices=["pre-market", "post-market"], required=True)
+    validate_plan.add_argument("--signals")
+    validate_plan.set_defaults(func=run_validate_trade_plan)
 
     signals = sub.add_parser("extract-report-signals", help="Extract focused report candidates into journal signal records")
     signals.add_argument("--date", required=True)
@@ -610,6 +681,14 @@ def build_parser() -> argparse.ArgumentParser:
     daily_review.add_argument("--output")
     daily_review.add_argument("--journal-dir", default="runtime/journal")
     daily_review.set_defaults(func=run_daily_self_review)
+
+    plan_review = sub.add_parser("plan-review", help="Review generated trade plans and record learning lessons")
+    plan_review.add_argument("--date", required=True)
+    plan_review.add_argument("--output")
+    plan_review.add_argument("--append-lessons", action="store_true")
+    plan_review.add_argument("--journal-dir", default="runtime/journal")
+    plan_review.add_argument("--learning-dir", default="runtime/learning")
+    plan_review.set_defaults(func=run_plan_review)
 
     weekly_review = sub.add_parser("weekly-review", help="Generate a weekly review from journal outcomes and trades")
     weekly_review.add_argument("--week", required=True)
@@ -639,6 +718,8 @@ def build_parser() -> argparse.ArgumentParser:
     position.add_argument("--date", required=True)
     position.add_argument("--account-snapshot")
     position.add_argument("--signals")
+    position.add_argument("--session", choices=["pre-market", "post-market"], default="pre-market")
+    position.add_argument("--snapshot")
     position.add_argument("--config")
     position.add_argument("--output")
     position.add_argument("--append", action="store_true")

@@ -87,6 +87,56 @@ class TradingCopilotWrapperTest(unittest.TestCase):
         self.assertEqual(payload["validation"]["status"], "pass")
         self.assertEqual(payload["artifacts"], [str(report)])
 
+    def test_validate_trade_plan_wrapper_contract(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            sidecar = Path(tmp) / "pre-market-signals.json"
+            sidecar.write_text(
+                json.dumps(
+                    {
+                        "date": "2026-05-26",
+                        "session": "pre-market",
+                        "signals": [
+                            {
+                                "symbol": "MU",
+                                "setup": "breakout_pullback_continuation.md",
+                                "direction": "long",
+                                "trigger": {"type": "break_above", "price": 100, "text": "突破 100"},
+                                "invalidation": {"type": "break_below", "price": 95, "text": "跌破 95"},
+                                "risk": {
+                                    "max_risk_pct": 1,
+                                    "max_account_risk_pct": 1,
+                                    "risk_per_share": 5,
+                                },
+                                "status": "planned",
+                                "plan_type": "trade_plan",
+                                "execution_status": "conditional_executable",
+                                "entry": {"trigger_price": 100, "confirmation": "pullback holds"},
+                                "stop": {"initial_stop": 95},
+                                "take_profit": {"tp1": 112},
+                                "execution_rules": {"skip_conditions": ["market turns risk-off"]},
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            payload = self.run_wrapper(
+                "validate-trade-plan",
+                "--date",
+                "2026-05-26",
+                "--session",
+                "pre-market",
+                "--signals",
+                str(sidecar),
+            )
+
+        self.assertEqual(payload["status"], "success")
+        self.assertEqual(payload["workflow"], "validate-trade-plan")
+        self.assertEqual(payload["validation"]["status"], "pass")
+        self.assertEqual(payload["artifacts"], [str(sidecar)])
+
     def test_sync_longbridge_can_require_report_validation(self):
         with tempfile.TemporaryDirectory() as tmp:
             report = Path(tmp) / "exec-brief.md"
@@ -189,6 +239,43 @@ class TradingCopilotWrapperTest(unittest.TestCase):
         self.assertEqual(payload["summary"]["by_outcome"], {"triggered": 1})
         self.assertEqual(len(payload["appended"]), 1)
 
+    def test_plan_review_wrapper_contract(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            journal_dir = root / "journal"
+            journal_dir.mkdir()
+            (journal_dir / "signals.jsonl").write_text(
+                json.dumps(
+                    {
+                        "kind": "signal",
+                        "signal_id": "sig-1",
+                        "date": "2026-05-26",
+                        "session": "pre-market",
+                        "symbol": "MU",
+                        "plan_type": "watch_only",
+                        "execution_status": "watch_only",
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            payload = self.run_wrapper(
+                "plan-review",
+                "--date",
+                "2026-05-26",
+                "--journal-dir",
+                str(journal_dir),
+                "--output",
+                str(root / "plan-review"),
+            )
+
+        self.assertEqual(payload["status"], "success")
+        self.assertEqual(payload["workflow"], "plan-review")
+        self.assertEqual(payload["summary"]["plans"], 1)
+        self.assertEqual(payload["summary"]["quality"], {"watch_only": 1})
+
     def test_pre_market_expected_outputs_include_signals_sidecar(self):
         proc = subprocess.CompletedProcess(
             args=[],
@@ -212,7 +299,7 @@ class TradingCopilotWrapperTest(unittest.TestCase):
                 trading_copilot.run_pre_market(args)
 
         payload = emit.call_args.args[0]
-        self.assertIn("report/2026-05-26/signals.json", payload["expected_agent_outputs"])
+        self.assertIn("report/2026-05-26/pre-market-signals.json", payload["expected_agent_outputs"])
 
     def test_post_market_expected_outputs_include_signals_sidecar(self):
         proc = subprocess.CompletedProcess(
@@ -241,7 +328,7 @@ class TradingCopilotWrapperTest(unittest.TestCase):
                 trading_copilot.run_post_market(args)
 
         payload = emit.call_args.args[0]
-        self.assertIn("report/2026-05-26/signals.json", payload["expected_agent_outputs"])
+        self.assertIn("report/2026-05-26/post-market-signals.json", payload["expected_agent_outputs"])
 
     def test_account_snapshot_wrapper_contract(self):
         with tempfile.TemporaryDirectory() as tmp:

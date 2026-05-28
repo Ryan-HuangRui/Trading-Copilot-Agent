@@ -10,7 +10,9 @@
 - `monitor_scan.py`: 5m watchlist/position scan and `report/latest-monitor.json` writer.
 - `longbridge_cli_adapter.py`: read-only Longbridge CLI guard. Do not add order/write commands.
 - `longbridge_account_snapshot.py`: read-only account/position snapshot writer under `runtime/account/`.
-- `position_review.py`: compares read-only positions with `signals.json` and writes review artifacts.
+- `position_review.py`: compares read-only positions with a session-specific signal sidecar and writes review artifacts.
+- `validate_trade_plan.py`: structured Trade Plan Card validator for session sidecars.
+- `plan_review.py`: plan-quality review and candidate lesson writer under `runtime/learning/`.
 - `workflow_smoke_test.py`: fixture-based workflow smoke test; must not fetch live market or account data.
 - `report_delivery_guard.py`: idempotent delivery-state helper.
 - `trading_copilot.py`: unified agent-facing workflow wrapper that returns `status/date/artifacts/skipped/reason`.
@@ -25,10 +27,12 @@
 - Fetch S&P 500 universe only: `python3 script/sp500_universe.py --top 100`.
 - Prepare pre-market context with guard: `python3 script/prepare_daily_context.py --watchlist config/watchlist.json --skip-non-trading-day`.
 - Run unified pre-market workflow: `python3 script/trading_copilot.py pre-market-plan --watchlist config/watchlist.json --skip-non-trading-day`.
-- Run unified post-market workflow: `python3 script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day`.
+- Run unified post-market workflow: `python3 script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day --include-journal-signals --include-position-symbols`.
 - Run unified monitor workflow: `python3 script/trading_copilot.py monitor-brief --state config/monitor_state.json --interval 5min`.
 - Run read-only account snapshot: `python3 script/trading_copilot.py account-snapshot --date 2026-05-06`.
 - Run position review: `python3 script/trading_copilot.py position-review --date 2026-05-06 --append`.
+- Validate trade plan sidecars: `python3 script/trading_copilot.py validate-trade-plan --session pre-market --date 2026-05-06`.
+- Review generated plans: `python3 script/trading_copilot.py plan-review --date 2026-05-06 --append-lessons`.
 - Run fixture workflow smoke test: `python3 script/workflow_smoke_test.py --date 2026-05-06 --week 2026-W19`.
 - Check trading day through wrapper: `python3 script/trading_copilot.py trading-day-check --date 2026-05-06`.
 - Check trading day: `python3 script/trading_day_guard.py`.

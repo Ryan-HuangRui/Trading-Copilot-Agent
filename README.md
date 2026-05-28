@@ -41,11 +41,13 @@ cp .env.example .env
 ```bash
 python3 script/trading_copilot.py trading-day-check --date 2026-05-06
 python3 script/trading_copilot.py pre-market-plan --watchlist config/watchlist.json --skip-non-trading-day
-python3 script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day
+python3 script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day --include-journal-signals --include-position-symbols
 python3 script/trading_copilot.py monitor-brief --state config/monitor_state.json --interval 5min
 python3 script/trading_copilot.py validate-report --session pre-market --date <DATE>
+python3 script/trading_copilot.py validate-trade-plan --session pre-market --date <DATE>
 python3 script/trading_copilot.py extract-report-signals --session pre-market --date <DATE> --require-validation --append
 python3 script/trading_copilot.py backfill-signal-outcomes --date <DATE> --append
+python3 script/trading_copilot.py plan-review --date <DATE> --append-lessons
 python3 script/trading_copilot.py daily-self-review --date <DATE> --append
 python3 script/trading_copilot.py weekly-review --week <YYYY-Www> --append
 python3 script/trading_copilot.py extract-monitor-signals --append
@@ -73,21 +75,23 @@ python3 script/workflow_smoke_test.py --date <DATE> --week <YYYY-Www>
   - 并把动态候选与固定 `config/watchlist.json` 去重合并进 `daily-snapshot.json`
 - 盘后复盘：Agent 读取 `agent/post_market_analysis_prompt.md` + `knowledge/refined/` + snapshot，产出：
   - `report/YYYY-MM-DD/post-market.md`
-  - `report/YYYY-MM-DD/signals.json`
+  - `report/YYYY-MM-DD/post-market-signals.json`
 - 次日盘前上下文：`script/prepare_daily_context.py` 读取上一交易日 snapshot，生成：
   - `report/YYYY-MM-DD/pre-market-context.json`
 - 次日盘前分析：Agent 读取 `agent/daily_analysis_prompt.md` + `knowledge/refined/` + pre-market context，产出：
   - `report/YYYY-MM-DD/exec-brief.md`
   - `report/YYYY-MM-DD/pre-market.md`
-  - `report/YYYY-MM-DD/signals.json`
+  - `report/YYYY-MM-DD/pre-market-signals.json`
 - 报告校验：`python3 script/trading_copilot.py validate-report --session pre-market --date YYYY-MM-DD`
 - 信号入 journal：`python3 script/trading_copilot.py extract-report-signals --session pre-market --date YYYY-MM-DD --require-validation --append`
+- 交易计划校验：`python3 script/trading_copilot.py validate-trade-plan --session pre-market --date YYYY-MM-DD`
 - 分析过程由 Agent 完成，脚本只做交易日判断、数据准备、指标摘要与限频控制
 - 详细 runbook：`docs/daily-report-workflow.md`
 
 ## 复盘闭环
-- 盘后复盘：Agent 生成 `post-market.md` 与 `signals.json` 后，先跑 `validate-report`
+- 盘后复盘：Agent 生成 `post-market.md` 与 `post-market-signals.json` 后，先跑 `validate-report`
 - outcome 回填：`python3 script/trading_copilot.py backfill-signal-outcomes --date YYYY-MM-DD --append`
+- 交易计划复盘：`python3 script/trading_copilot.py plan-review --date YYYY-MM-DD --append-lessons`
 - 日度自我复盘：`python3 script/trading_copilot.py daily-self-review --date YYYY-MM-DD --append`
 - 周度复盘：`python3 script/trading_copilot.py weekly-review --week YYYY-Www --append`
 - journal 默认写入 ignored runtime 路径：`runtime/journal/signals.jsonl`、`outcomes.jsonl`、`trades.jsonl`、`reviews.jsonl`
@@ -129,10 +133,10 @@ python script/trading_copilot.py pre-market-plan --watchlist config/watchlist.js
 
 ```bash
 # 1) 收盘后生成 daily snapshot（交易日判断 + 数据拉取 + 限频）
-python script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day
+python script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day --include-journal-signals --include-position-symbols
 
 # 可选：同时做 S&P 500 top 100 动态扩池，输出 15 个观察候选
-python script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day --sp500-screen --sp500-top 100 --sp500-candidates 15
+python script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day --sp500-screen --sp500-top 100 --sp500-candidates 15 --include-journal-signals --include-position-symbols
 
 # 2) 让 Agent 基于 snapshot + knowledge 生成 report/YYYY-MM-DD/post-market.md
 # （在 Codex App automation 中触发即可）

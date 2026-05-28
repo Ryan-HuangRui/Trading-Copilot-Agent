@@ -15,13 +15,13 @@ Generated runtime artifacts live under ignored runtime paths, primarily `raw_dat
 Producer:
 
 ```bash
-python3 script/prepare_market_snapshot.py --watchlist config/watchlist.json --skip-non-trading-day
+python3 script/prepare_market_snapshot.py --watchlist config/watchlist.json --skip-non-trading-day --include-journal-signals --include-position-symbols
 ```
 
 Wrapper:
 
 ```bash
-python3 script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day
+python3 script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day --include-journal-signals --include-position-symbols
 ```
 
 Expected top-level fields:
@@ -94,7 +94,7 @@ Consumer rules:
 - If `snapshot.stale_data` is true, surface it in the report.
 - If the source snapshot is missing, the workflow should fail before report writing.
 
-## `report/<DATE>/signals.json`
+## `report/<DATE>/<SESSION>-signals.json`
 
 Producer:
 
@@ -104,8 +104,10 @@ Consumers:
 
 ```bash
 python3 script/trading_copilot.py validate-report --session pre-market --date <DATE>
+python3 script/trading_copilot.py validate-trade-plan --session pre-market --date <DATE>
 python3 script/trading_copilot.py extract-report-signals --session pre-market --date <DATE> --require-validation --append
 python3 script/trading_copilot.py validate-report --session post-market --date <DATE>
+python3 script/trading_copilot.py validate-trade-plan --session post-market --date <DATE>
 python3 script/trading_copilot.py extract-report-signals --session post-market --date <DATE> --require-validation --append
 ```
 
@@ -126,15 +128,47 @@ Expected signal fields:
 - `invalidation`: object with `type`, numeric `price`, and human-readable `text`.
 - `risk`: object with `max_risk_pct` and optional `text`.
 - `status`: `planned`, `observed`, or `no_trade`.
+- `plan_type`: `trade_plan`, `watch_only`, or `no_trade`.
+- `execution_status`: `conditional_executable`, `waiting_trigger`, `watch_only`, or `no_trade`.
+- `entry`: for conditional plans, includes `trigger_price`, confirmation, and no-chase rule.
+- `stop`: for conditional plans, includes `initial_stop` and invalidation text.
+- `take_profit`: for conditional plans, includes `tp1` and management rules.
+- `execution_rules`: for conditional plans, includes valid time window and `skip_conditions`.
 - `notes`: concise context.
 
 Consumer rules:
 
-- Markdown remains the human-facing artifact; `signals.json` is the machine-facing artifact.
+- Markdown remains the human-facing artifact; `pre-market-signals.json` and `post-market-signals.json` are the machine-facing artifacts.
 - Full-session validation requires this file.
 - `extract-report-signals` prefers this file and falls back to Markdown only when it is absent.
 - Actionable signals must include structured trigger, invalidation, and risk fields.
-- `signals.json` must match the report focus list.
+- `conditional_executable` plans must include a complete Trade Plan Card and at least 2R to TP1.
+- Incomplete plan cards should be downgraded to `watch_only` or `no_trade`, not delivered as executable.
+- The session signal sidecar must match the report focus list.
+
+## `runtime/learning/daily_lessons.jsonl`
+
+Producer:
+
+```bash
+python3 script/trading_copilot.py plan-review --date <DATE> --append-lessons
+```
+
+Expected fields:
+
+- `date`: review date.
+- `lesson_type`: currently `plan_quality`.
+- `symbol`, `setup`: evidence scope.
+- `problem`: concise issue key such as `missing_take_profit`.
+- `evidence`: short evidence strings.
+- `suggested_constraint`: candidate future constraint.
+- `status`: `candidate`.
+
+Consumer rules:
+
+- Daily lessons are runtime learning artifacts, not approved trading rules.
+- They may be summarized into candidate patterns later.
+- Do not promote them into `knowledge/refined/` without human review.
 
 ## `report/latest-monitor.json`
 

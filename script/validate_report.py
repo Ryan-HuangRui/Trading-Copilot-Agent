@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from signal_artifacts import default_signals_path, read_json, validate_sidecar_payload
+from signal_artifacts import legacy_signals_path, read_json, resolve_signals_path, validate_sidecar_payload
 
 
 REPORT_FILES = {
@@ -48,11 +48,8 @@ def expected_reports(repo_root: Path, report_date: str, session: str, explicit_r
     return [repo_root / "report" / report_date / name for name in REPORT_FILES[session]]
 
 
-def expected_signals(repo_root: Path, report_date: str, explicit_signals: str | None) -> Path:
-    if explicit_signals:
-        path = Path(explicit_signals)
-        return path if path.is_absolute() else repo_root / path
-    return default_signals_path(repo_root, report_date)
+def expected_signals(repo_root: Path, report_date: str, session: str, explicit_signals: str | None) -> Path:
+    return resolve_signals_path(repo_root, report_date, explicit_signals, session)
 
 
 def refined_setup_files(repo_root: Path) -> set[str]:
@@ -188,7 +185,7 @@ def validate(args: argparse.Namespace) -> dict[str, Any]:
     repo_root = Path(args.repo_root).resolve()
     reports = expected_reports(repo_root, args.date, args.session, args.report)
     explicit_signals = getattr(args, "signals", None)
-    sidecar = expected_signals(repo_root, args.date, explicit_signals)
+    sidecar = expected_signals(repo_root, args.date, args.session, explicit_signals)
     setup_files = refined_setup_files(repo_root)
     snapshot = snapshot_payload(repo_root, args.date, args.session) or {}
     stale_data = bool(snapshot.get("stale_data"))
@@ -202,6 +199,15 @@ def validate(args: argparse.Namespace) -> dict[str, Any]:
 
     if not setup_files:
         errors.append("missing refined setup directory or setup markdown files")
+
+    if (
+        not explicit_signals
+        and sidecar == legacy_signals_path(repo_root, args.date)
+        and sidecar.exists()
+    ):
+        warnings.append(
+            f"{sidecar}: using legacy signals.json fallback; write {args.session}-signals.json to avoid session overwrite"
+        )
 
     for report in reports:
         if not report.exists():
@@ -272,7 +278,7 @@ def main() -> None:
     parser.add_argument("--date", required=True, help="Report date in YYYY-MM-DD")
     parser.add_argument("--session", choices=["pre-market", "post-market"], required=True)
     parser.add_argument("--report", help="Validate a single report path instead of the session defaults")
-    parser.add_argument("--signals", help="Validate a structured signals.json sidecar path")
+    parser.add_argument("--signals", help="Validate a structured signal sidecar path")
     parser.add_argument("--repo-root", default=str(Path(__file__).resolve().parents[1]))
     args = parser.parse_args()
 

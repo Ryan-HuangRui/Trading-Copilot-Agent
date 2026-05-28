@@ -10,6 +10,7 @@ import extract_monitor_signals
 import extract_report_signals
 import journal_review
 import longbridge_account_snapshot
+import plan_review
 import position_review
 import validate_report
 import weekly_review
@@ -79,6 +80,8 @@ def run(args: argparse.Namespace) -> dict:
             date=args.date,
             account_snapshot=account_snapshot_path,
             signals=None,
+            session=args.session,
+            snapshot=None,
             config=args.position_config,
             output=None,
             append=True,
@@ -94,6 +97,16 @@ def run(args: argparse.Namespace) -> dict:
         journal_dir=args.journal_dir,
     )
     steps["daily-self-review"] = daily_self_review.run(daily_args)
+
+    plan_args = argparse.Namespace(
+        repo_root=str(repo_root),
+        date=args.date,
+        append_lessons=True,
+        output=None,
+        journal_dir=args.journal_dir,
+        learning_dir=args.learning_dir,
+    )
+    steps["plan-review"] = plan_review.run(plan_args)
 
     weekly_args = argparse.Namespace(
         repo_root=str(repo_root),
@@ -129,6 +142,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--account-snapshot", help="Existing account snapshot path for position-review smoke coverage")
     parser.add_argument("--position-config", help="Optional position review config path")
     parser.add_argument("--journal-dir", default="runtime/journal")
+    parser.add_argument("--learning-dir", default="runtime/learning")
     parser.add_argument("--timezone", default="America/New_York")
     parser.add_argument("--repo-root", default=str(Path(__file__).resolve().parents[1]))
     return parser

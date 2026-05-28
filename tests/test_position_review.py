@@ -312,6 +312,55 @@ class PositionReviewTest(unittest.TestCase):
             self.assertIn("空仓状态", markdown)
             self.assertIn("今日计划信号数：1", markdown)
 
+    def test_position_review_uses_daily_snapshot_price_fallback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            account_dir = root / "runtime" / "account" / "2026-05-27"
+            account_dir.mkdir(parents=True)
+            (account_dir / "account-snapshot.json").write_text(
+                json.dumps(
+                    {
+                        "date": "2026-05-27",
+                        "account": {"net_liquidation": 100000, "cash": 80000, "currency": "USD"},
+                        "positions": [{"symbol": "NVDA", "quantity": 10, "avg_cost": 200}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            report_dir = root / "report" / "2026-05-27"
+            report_dir.mkdir(parents=True)
+            (report_dir / "pre-market-signals.json").write_text(
+                json.dumps({"date": "2026-05-27", "session": "pre-market", "signals": []}),
+                encoding="utf-8",
+            )
+            (report_dir / "daily-snapshot.json").write_text(
+                json.dumps(
+                    {
+                        "snapshot_date": "2026-05-27",
+                        "symbols": [{"symbol": "NVDA", "latest": {"close": "212.6"}}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            command = [
+                sys.executable,
+                str(ROOT / "script" / "position_review.py"),
+                "--repo-root",
+                str(root),
+                "--date",
+                "2026-05-27",
+            ]
+            proc = subprocess.run(command, check=False, text=True, capture_output=True)
+
+            self.assertEqual(proc.returncode, 0, msg=proc.stderr or proc.stdout)
+            review = json.loads((report_dir / "position-review.json").read_text(encoding="utf-8"))
+            record = review["position_reviews"][0]
+            self.assertEqual(record["last_price"], 212.6)
+            self.assertEqual(record["market_value"], 2126.0)
+            self.assertEqual(record["unrealized_pnl"], 126.0)
+            self.assertEqual(record["price_source"], "daily_snapshot")
+
     def test_position_review_links_trade_source_signal_and_estimated_r(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

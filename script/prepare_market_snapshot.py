@@ -3,8 +3,54 @@ import argparse
 import json
 from pathlib import Path
 
+from journal_review import planned_target_date, read_jsonl
 from market_calendar import MARKET_TIMEZONE, resolve_market_date, trading_day_status
 from market_snapshot import build_market_snapshot
+
+
+def normalized_symbol(value: object) -> str:
+    return str(value or "").split(".", 1)[0].upper()
+
+
+def extra_symbols_from_journal(repo_root: Path, snapshot_date: str) -> list[str]:
+    path = repo_root / "runtime" / "journal" / "signals.jsonl"
+    symbols = []
+    for record in read_jsonl(path):
+        if record.get("kind") != "signal" or planned_target_date(record) != snapshot_date:
+            continue
+        symbol = normalized_symbol(record.get("symbol"))
+        if symbol:
+            symbols.append(symbol)
+    return symbols
+
+
+def extra_symbols_from_account(repo_root: Path, snapshot_date: str) -> list[str]:
+    path = repo_root / "runtime" / "account" / snapshot_date / "account-snapshot.json"
+    if not path.exists():
+        return []
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    symbols = []
+    for position in payload.get("positions", []):
+        if not isinstance(position, dict):
+            continue
+        symbol = normalized_symbol(position.get("symbol"))
+        if symbol:
+            symbols.append(symbol)
+    return symbols
+
+
+def ordered_unique(symbols: list[str]) -> list[str]:
+    seen = set()
+    result = []
+    for symbol in symbols:
+        normalized = normalized_symbol(symbol)
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            result.append(normalized)
+    return result
 
 
 def main() -> None:
@@ -19,6 +65,9 @@ def main() -> None:
     parser.add_argument("--sp500-top", type=int, default=100, help="Number of top S&P 500 holdings to evaluate when --sp500-screen is enabled.")
     parser.add_argument("--sp500-candidates", type=int, default=15, help="Number of dynamic candidates to keep when --sp500-screen is enabled.")
     parser.add_argument("--sp500-source", choices=["ishares_ivv", "slickcharts"], default="ishares_ivv", help="S&P 500 universe source. iShares IVV CSV is the stable default.")
+    parser.add_argument("--extra-symbol", action="append", default=[], help="Extra symbol to force into the snapshot.")
+    parser.add_argument("--include-journal-signals", action="store_true", help="Force symbols from journal signals targeting this snapshot date into the snapshot.")
+    parser.add_argument("--include-position-symbols", action="store_true", help="Force symbols from runtime account snapshot positions into the snapshot.")
     args = parser.parse_args()
 
     repo_root = Path(__file__).resolve().parents[1]
@@ -27,6 +76,13 @@ def main() -> None:
     if args.skip_non_trading_day and not guard["is_trading_day"]:
         print(json.dumps({"skipped": True, "guard": guard}, ensure_ascii=False, indent=2))
         return
+
+    extra_symbols = list(args.extra_symbol or [])
+    if args.include_journal_signals:
+        extra_symbols.extend(extra_symbols_from_journal(repo_root, snapshot_date.isoformat()))
+    if args.include_position_symbols:
+        extra_symbols.extend(extra_symbols_from_account(repo_root, snapshot_date.isoformat()))
+    extra_symbols = ordered_unique(extra_symbols)
 
     snapshot, path = build_market_snapshot(
         repo_root=repo_root,
@@ -39,6 +95,7 @@ def main() -> None:
         sp500_top=args.sp500_top,
         sp500_candidates=args.sp500_candidates,
         sp500_source=args.sp500_source,
+        extra_symbols=extra_symbols,
     )
 
     print(json.dumps(
@@ -48,6 +105,7 @@ def main() -> None:
             "symbols": len(snapshot["symbols"]),
             "watchlist_symbols": len(snapshot.get("watchlist_symbols", [])),
             "dynamic_universe_symbols": len(snapshot.get("dynamic_universe_symbols", [])),
+            "extra_symbols": snapshot.get("extra_symbols", []),
             "candidate_universe_path": snapshot.get("candidate_universe_path"),
             "errors": len(snapshot["errors"]),
             "latest_bar_dates": snapshot.get("latest_bar_dates", []),

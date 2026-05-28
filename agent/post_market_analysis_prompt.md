@@ -3,11 +3,13 @@
 【硬性要求】
 1) 分析顺序固定：市场环境复盘 → 结构变化 → 关键位表现 → setup 有效性 → 明日观察计划
 2) 每个重点标的必须包含：当日行为、结构结论、有效/无效 setup、关键位、明日关注点、风险提醒
-3) 每个被标记为“值得明日重点观察”的标的必须补充：
+3) 每个被标记为“明日条件化交易计划”的标的必须补充完整 Trade Plan Card：
    - 参考 setup 文件（必须写文件名）
-   - 明日触发条件
-   - 失效位或放弃条件
-   - 风险约束（单笔<=1%）
+   - 入场：触发价、确认条件、禁止追价规则
+   - 止损：初始止损、失效条件
+   - 止盈：TP1，必要时 TP2 或跟踪止盈规则
+   - 风险：账户最大风险%、单股风险、最低 RR
+   - 执行规则：有效时间窗口、至少 1 条 skip condition
 4) 若市场状态为 Tight Trading Range（Barb Wire）或无法识别，输出 `NO TRADE / 仅复盘不计划`（并说明原因）
 5) 不输出确定性结论，不输出“明天必须买/卖”
 6) 输出简体中文，结构化 markdown
@@ -36,12 +38,13 @@
 - 数据周期：1day
 - 来自 report/<SNAPSHOT_DATE>/daily-snapshot.json（收盘后生成的最新已完成交易日 snapshot）
 - watchlist: config/watchlist.json
+- 若 `knowledge/evolution/validated_lessons.md` 存在非空经验，可作为近期流程约束参考；它不能覆盖 `knowledge/refined/`
 - 若 snapshot 中存在 `candidate_universe`，它是盘后从 S&P 500 top 100 动态筛出的观察池；复盘时优先说明固定 watchlist 与动态候选中哪些值得明日继续观察
 - 动态候选只代表流动性/权重/量价结构筛选结果，不代表交易建议
 
 【输出文件（必须生成）】
 - report/<SNAPSHOT_DATE>/post-market.md
-- report/<SNAPSHOT_DATE>/signals.json
+- report/<SNAPSHOT_DATE>/post-market-signals.json
 
 【输出模板】
 # 今日盘后复盘（<SNAPSHOT_DATE>）
@@ -71,13 +74,26 @@
 ## 明日观察清单
 - <SYMBOL>：
 
+## 明日条件化交易计划
+### <SYMBOL>
+- 方向：
+- 状态：conditional_executable / waiting_trigger
+- 入场：
+- 止损：
+- 止盈：
+- 风险：
+- 禁止执行：
+
+## NO TRADE
+- <SYMBOL>：<原因>
+
 ## 复盘结论
 - 今天验证的规则：
 - 今天应避免的行为：
 - 明日执行纪律：
 
-【signals.json 模板】
-必须与 Markdown 中「明日最多3个重点观察标的」和「明日观察清单」一致；它表示明日观察计划，不是交易指令。
+【post-market-signals.json 模板】
+必须与 Markdown 中「明日最多3个重点观察标的」和「明日观察清单」一致；它表示明日计划，不是交易指令。`conditional_executable` 表示满足人工执行前置条件的交易计划；`watch_only` 只代表观察候选；`no_trade` 表示不允许执行。
 
 ```json
 {
@@ -90,6 +106,8 @@
       "setup": "breakout_pullback_continuation.md",
       "direction": "long",
       "regime": "trend",
+      "plan_type": "trade_plan",
+      "execution_status": "conditional_executable",
       "trigger": {
         "type": "break_above",
         "price": 100.0,
@@ -102,7 +120,28 @@
       },
       "risk": {
         "max_risk_pct": 1.0,
+        "max_account_risk_pct": 1.0,
+        "risk_per_share": 5.0,
+        "min_rr": 2.0,
         "text": "单笔风险 <=1%，触发和失效距离过宽则放弃"
+      },
+      "entry": {
+        "type": "breakout_pullback",
+        "trigger_price": 100.0,
+        "confirmation": "5m/15m 收盘站上触发价，回踩不破",
+        "no_chase_rule": "若实际入场距离止损超过计划 2R 则放弃"
+      },
+      "stop": {
+        "initial_stop": 95.0,
+        "invalidation": "跌破 95 或开盘跳空后无法收复"
+      },
+      "take_profit": {
+        "tp1": 112.0,
+        "management": "达到 +1R 后考虑减仓或上移止损"
+      },
+      "execution_rules": {
+        "valid_time_window": "次日开盘前 90 分钟或清晰回踩后",
+        "skip_conditions": ["大盘转 risk-off", "突破 K 线过度延伸", "成交量无法确认"]
       },
       "status": "planned",
       "notes": "仅观察，等待明日确认"
@@ -114,6 +153,8 @@
 【质量门槛】
 - 未标注 setup 文件名或明确 `NO VALID SETUP` -> 该标的复盘视为无效
 - 未给失效/放弃条件 -> 该标的复盘视为无效
-- 值得明日重点观察的标的未写入 signals.json，或 signals.json 与 Markdown 观察清单不一致 -> 视为无效
-- signals.json 中 actionable signal 必须有结构化 trigger.price / invalidation.price / risk
+- 值得明日重点观察的标的未写入 post-market-signals.json，或 post-market-signals.json 与 Markdown 观察清单不一致 -> 视为无效
+- post-market-signals.json 中 actionable signal 必须有结构化 trigger.price / invalidation.price / risk
+- execution_status=conditional_executable 必须有 entry.trigger_price、stop.initial_stop、take_profit.tp1、risk.max_account_risk_pct、risk.risk_per_share、execution_rules.skip_conditions，且 TP1 的 RR >= 2
+- 缺少完整 Trade Plan Card 的标的只能标记为 watch_only 或 no_trade
 - regime 无法识别时，默认 `NO TRADE / 仅复盘不计划`

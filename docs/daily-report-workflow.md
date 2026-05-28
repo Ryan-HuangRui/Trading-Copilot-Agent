@@ -18,11 +18,11 @@ Production scheduling is expected to run through cc connect. cc connect triggers
 ## Canonical data flow
 1. After market close, generate one reusable daily snapshot:
    ```bash
-   python3 script/prepare_market_snapshot.py --watchlist config/watchlist.json --skip-non-trading-day
+   python3 script/prepare_market_snapshot.py --watchlist config/watchlist.json --skip-non-trading-day --include-journal-signals --include-position-symbols
    ```
    Optional dynamic universe:
    ```bash
-   python3 script/prepare_market_snapshot.py --watchlist config/watchlist.json --skip-non-trading-day --sp500-screen --sp500-top 100 --sp500-candidates 15
+   python3 script/prepare_market_snapshot.py --watchlist config/watchlist.json --skip-non-trading-day --sp500-screen --sp500-top 100 --sp500-candidates 15 --include-journal-signals --include-position-symbols
    ```
 2. The snapshot writes:
    - `raw_data/<SNAPSHOT_DATE>/<INTERVAL>/<SYMBOL>.json`
@@ -30,10 +30,11 @@ Production scheduling is expected to run through cc connect. cc connect triggers
    - with `--sp500-screen`: `report/<SNAPSHOT_DATE>/candidate-universe.json`
 3. Post-market review reads the snapshot and writes:
    - `report/<SNAPSHOT_DATE>/post-market.md`
-   - `report/<SNAPSHOT_DATE>/signals.json`
+   - `report/<SNAPSHOT_DATE>/post-market-signals.json`
 4. Validate the generated post-market artifacts:
    ```bash
    python3 script/trading_copilot.py validate-report --session post-market --date <SNAPSHOT_DATE>
+   python3 script/trading_copilot.py validate-trade-plan --session post-market --date <SNAPSHOT_DATE>
    ```
 5. Backfill outcomes for plans whose target date is the completed snapshot date:
    ```bash
@@ -44,39 +45,44 @@ Production scheduling is expected to run through cc connect. cc connect triggers
    ```bash
    python3 script/trading_copilot.py extract-report-signals --session post-market --date <SNAPSHOT_DATE> --require-validation --append
    ```
-7. Generate the daily self-review:
+7. Generate the plan review and candidate lessons:
+   ```bash
+   python3 script/trading_copilot.py plan-review --date <SNAPSHOT_DATE> --append-lessons
+   ```
+8. Generate the daily self-review:
    ```bash
    python3 script/trading_copilot.py daily-self-review --date <SNAPSHOT_DATE> --append
    ```
-8. Post-market Longbridge sync fully replaces the `今日关注` group from the generated post-market focus list:
+9. Post-market Longbridge sync fully replaces the `今日关注` group from the generated post-market focus list:
    ```bash
    python3 script/trading_copilot.py sync-longbridge-watchlist --session post-market --date <SNAPSHOT_DATE> --group-name 今日关注 --sync-mode replace --require-validation --execute --no-create
    ```
    This removes stale symbols from the `今日关注` group only; it must not globally unfollow securities or remove them from other watchlists.
-9. Next pre-market context reuses the previous trading day's snapshot:
+10. Next pre-market context reuses the previous trading day's snapshot:
    ```bash
    python3 script/prepare_daily_context.py --watchlist config/watchlist.json --skip-non-trading-day
    ```
-10. Pre-market report generation reads:
+11. Pre-market report generation reads:
    - `report/<PRE_MARKET_DATE>/pre-market-context.json`
-11. Pre-market output writes:
+12. Pre-market output writes:
    - `report/<PRE_MARKET_DATE>/exec-brief.md`
    - `report/<PRE_MARKET_DATE>/pre-market.md`
-   - `report/<PRE_MARKET_DATE>/signals.json`
-12. Validate the generated pre-market reports:
+   - `report/<PRE_MARKET_DATE>/pre-market-signals.json`
+13. Validate the generated pre-market reports:
    ```bash
    python3 script/trading_copilot.py validate-report --session pre-market --date <PRE_MARKET_DATE>
+   python3 script/trading_copilot.py validate-trade-plan --session pre-market --date <PRE_MARKET_DATE>
    ```
-13. Append the focused pre-market plan to `runtime/journal/signals.jsonl`:
+14. Append the focused pre-market plan to `runtime/journal/signals.jsonl`:
    ```bash
    python3 script/trading_copilot.py extract-report-signals --session pre-market --date <PRE_MARKET_DATE> --require-validation --append
    ```
-14. Optional read-only account and position review:
+15. Optional read-only account and position review:
    ```bash
    python3 script/trading_copilot.py account-snapshot --date <PRE_MARKET_DATE>
    python3 script/trading_copilot.py position-review --date <PRE_MARKET_DATE> --append
    ```
-15. Pre-market Longbridge sync incrementally adds the generated focus symbols to `今日关注`:
+16. Pre-market Longbridge sync incrementally adds the generated focus symbols to `今日关注`:
    ```bash
    python3 script/trading_copilot.py sync-longbridge-watchlist --session pre-market --date <PRE_MARKET_DATE> --group-name 今日关注 --sync-mode add --require-validation --execute --no-create
    ```
@@ -92,10 +98,10 @@ Production scheduling is expected to run through cc connect. cc connect triggers
 ### Post-market task
 Run:
 ```bash
-python3 script/prepare_market_snapshot.py --watchlist config/watchlist.json --skip-non-trading-day --sp500-screen --sp500-top 100 --sp500-candidates 15
+python3 script/prepare_market_snapshot.py --watchlist config/watchlist.json --skip-non-trading-day --sp500-screen --sp500-top 100 --sp500-candidates 15 --include-journal-signals --include-position-symbols
 ```
 
-If output contains `skipped=true`, stop. If the generated `daily-snapshot.json` contains `stale_data=true`, write a short status note and stop. Otherwise read `agent/post_market_analysis_prompt.md`, `knowledge/refined/`, and `report/<SNAPSHOT_DATE>/daily-snapshot.json`, then generate `report/<SNAPSHOT_DATE>/post-market.md` and `report/<SNAPSHOT_DATE>/signals.json`.
+If output contains `skipped=true`, stop. If the generated `daily-snapshot.json` contains `stale_data=true`, write a short status note and stop. Otherwise read `agent/post_market_analysis_prompt.md`, `knowledge/refined/`, and `report/<SNAPSHOT_DATE>/daily-snapshot.json`, then generate `report/<SNAPSHOT_DATE>/post-market.md` and `report/<SNAPSHOT_DATE>/post-market-signals.json`.
 
 The dynamic universe uses iShares IVV holdings CSV as the default source and falls back to Slickcharts if the primary source fails. If the screener itself fails, the snapshot still continues with the fixed watchlist and records the failure in `candidate-universe.json`.
 
@@ -140,7 +146,7 @@ python3 script/prepare_daily_context.py --watchlist config/watchlist.json --skip
 If output contains `skipped=true`, stop. Otherwise read `agent/daily_analysis_prompt.md`, `knowledge/refined/`, and `report/<PRE_MARKET_DATE>/pre-market-context.json`, then generate:
 - `report/<PRE_MARKET_DATE>/exec-brief.md`
 - `report/<PRE_MARKET_DATE>/pre-market.md`
-- `report/<PRE_MARKET_DATE>/signals.json`
+- `report/<PRE_MARKET_DATE>/pre-market-signals.json`
 
 After `exec-brief.md` and `pre-market.md` are generated, validate them:
 ```bash

@@ -214,6 +214,7 @@ def build_market_snapshot(
     sp500_top: int = 100,
     sp500_candidates: int = 15,
     sp500_source: str = "ishares_ivv",
+    extra_symbols: list[str] | None = None,
 ) -> tuple[dict, Path]:
     load_env(repo_root)
     watch = json.loads((repo_root / watchlist_path).read_text(encoding="utf-8"))
@@ -262,7 +263,8 @@ def build_market_snapshot(
             )
         dynamic_symbols = [item["symbol"] for item in screen_payload.get("candidates", [])]
 
-    symbols = merge_symbols(watchlist_symbols, dynamic_symbols)
+    extra_symbols = merge_symbols(extra_symbols or [], [])
+    symbols = merge_symbols(merge_symbols(watchlist_symbols, dynamic_symbols), extra_symbols)
 
     snapshot = {
         "snapshot_date": snapshot_date,
@@ -273,6 +275,7 @@ def build_market_snapshot(
         "trading_day": trading_day,
         "dynamic_universe_enabled": sp500_screen,
         "dynamic_universe_symbols": dynamic_symbols,
+        "extra_symbols": extra_symbols,
         "symbols": [],
         "errors": [],
     }
@@ -293,6 +296,8 @@ def build_market_snapshot(
             sources = set(symbol_snapshot.get("sources", []))
             if symbol in watchlist_symbols:
                 sources.add("watchlist")
+            if symbol in extra_symbols:
+                sources.add("extra_symbols")
             symbol_snapshot["sources"] = sorted(sources)
             snapshot["symbols"].append(symbol_snapshot)
             continue
@@ -320,6 +325,8 @@ def build_market_snapshot(
             sources.append("watchlist")
         if symbol in dynamic_symbols:
             sources.append("sp500_screen")
+        if symbol in extra_symbols:
+            sources.append("extra_symbols")
         symbol_snapshot["sources"] = sources
         snapshot["symbols"].append(symbol_snapshot)
 

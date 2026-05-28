@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 from typing import Iterable
 
-from signal_artifacts import default_signals_path, read_json
+from signal_artifacts import read_json, resolve_signals_path
 
 
 DEFAULT_GROUPS = {
@@ -67,11 +67,8 @@ def report_path(repo_root: Path, report_date: str, session: str) -> Path:
     return repo_root / "report" / report_date / REPORT_FILES[session]
 
 
-def signals_path(repo_root: Path, report_date: str, explicit_signals: str | None) -> Path:
-    if explicit_signals:
-        path = Path(explicit_signals)
-        return path if path.is_absolute() else repo_root / path
-    return default_signals_path(repo_root, report_date)
+def signals_path(repo_root: Path, report_date: str, session: str, explicit_signals: str | None) -> Path:
+    return resolve_signals_path(repo_root, report_date, explicit_signals, session)
 
 
 def normalize_symbol(symbol: str, default_market: str) -> str:
@@ -175,7 +172,7 @@ def load_symbols(args: argparse.Namespace, repo_root: Path) -> list[str]:
     if args.symbol:
         raw_symbols = args.symbol
     else:
-        sidecar = signals_path(repo_root, args.date, args.signals) if args.date or args.signals else None
+        sidecar = signals_path(repo_root, args.date, args.session, args.signals) if args.date or args.signals else None
         if sidecar and sidecar.exists() and not args.report:
             raw_symbols = extract_symbols_from_sidecar(sidecar, args.session)
         else:
@@ -438,7 +435,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--session", choices=["pre-market", "post-market"], required=True)
     parser.add_argument("--date", help="Report date in YYYY-MM-DD. Required unless --report or --symbol is used.")
     parser.add_argument("--report", help="Explicit report Markdown path.")
-    parser.add_argument("--signals", help="Structured signals.json path. Defaults to report/<DATE>/signals.json.")
+    parser.add_argument("--signals", help="Structured signal sidecar path. Defaults to report/<DATE>/<SESSION>-signals.json.")
     parser.add_argument("--group-name", help="Longbridge watchlist group name. Defaults by session or env var.")
     parser.add_argument("--default-market", default="US", help="Suffix for bare tickers, e.g. AAPL -> AAPL.US.")
     parser.add_argument("--max-symbols", type=int, default=3)

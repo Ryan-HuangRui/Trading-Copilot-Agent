@@ -4,6 +4,25 @@
     "high_concentration_pct": 25,
     "ignore_symbols": [],
     "core_holding_symbols": [],
+    "positions": {
+      "QQQ": {
+        "type": "core",
+        "review_mode": "risk_only",
+        "notes": "指数仓，不要求每天出现在 signals"
+      },
+      "NVDA": {
+        "type": "core_watch",
+        "review_mode": "risk_and_trend"
+      },
+      "TSLA": {
+        "type": "trading",
+        "review_mode": "must_have_plan"
+      },
+      "SMCI": {
+        "type": "trading",
+        "review_mode": "must_have_plan"
+      }
+    },
     "require_trade_link": false
   }
 }

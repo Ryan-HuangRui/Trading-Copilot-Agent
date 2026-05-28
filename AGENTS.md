@@ -38,11 +38,14 @@
   - Uses iShares IVV holdings CSV as the default S&P 500 universe source, writes `report/<SNAPSHOT_DATE>/candidate-universe.json`, and merges selected candidates into the snapshot without editing `config/watchlist.json`.
 - Post-market review flow:
   - Agent reads `agent/post_market_analysis_prompt.md`, `knowledge/refined/`, and `report/<SNAPSHOT_DATE>/daily-snapshot.json`.
-  - Agent writes `report/<SNAPSHOT_DATE>/post-market.md` and `report/<SNAPSHOT_DATE>/signals.json`.
+  - Agent writes `report/<SNAPSHOT_DATE>/post-market.md` and `report/<SNAPSHOT_DATE>/post-market-signals.json`.
+  - Run `python3 script/trading_copilot.py validate-trade-plan --session post-market --date <SNAPSHOT_DATE>` before journal append or sync.
+  - Run `python3 script/trading_copilot.py plan-review --date <SNAPSHOT_DATE> --append-lessons` after outcomes are backfilled and signals are appended.
 - Pre-market plan flow:
   - `python3 script/prepare_daily_context.py --watchlist config/watchlist.json --skip-non-trading-day`
   - Agent reads `agent/daily_analysis_prompt.md`, `knowledge/refined/`, and `report/<PRE_MARKET_DATE>/pre-market-context.json`.
-  - Agent writes `report/<PRE_MARKET_DATE>/exec-brief.md`, `report/<PRE_MARKET_DATE>/pre-market.md`, and `report/<PRE_MARKET_DATE>/signals.json`.
+  - Agent writes `report/<PRE_MARKET_DATE>/exec-brief.md`, `report/<PRE_MARKET_DATE>/pre-market.md`, and `report/<PRE_MARKET_DATE>/pre-market-signals.json`.
+  - Run `python3 script/trading_copilot.py validate-trade-plan --session pre-market --date <PRE_MARKET_DATE>` before journal append or sync.
 - Direct scripted report flow:
   - `python3 script/pre_market_report.py --watchlist config/watchlist.json`
   - Produces generated report files and raw market data under ignored runtime directories.

@@ -63,13 +63,13 @@ class SyncLongbridgeWatchlistTest(unittest.TestCase):
         self.assertIn("--add", args)
         self.assertNotIn("delete", args)
 
-    def test_load_symbols_prefers_signals_sidecar(self):
+    def test_load_symbols_prefers_session_signals_sidecar(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             report_dir = root / "report" / "2026-05-26"
             report_dir.mkdir(parents=True)
             (report_dir / "exec-brief.md").write_text("- 今日最多3个重点标的：OLD\n", encoding="utf-8")
-            (report_dir / "signals.json").write_text(
+            (report_dir / "pre-market-signals.json").write_text(
                 json.dumps(
                     {
                         "date": "2026-05-26",

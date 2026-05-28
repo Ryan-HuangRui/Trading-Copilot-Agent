@@ -9,7 +9,7 @@ from typing import Any
 
 from journal_append import append_jsonl, journal_path
 from journal_review import read_jsonl
-from signal_artifacts import normalize_sidecar, read_json
+from signal_artifacts import normalize_sidecar, read_json, resolve_signals_path
 
 
 CLOSE_TO_INVALIDATION_PCT = 3.0
@@ -19,6 +19,7 @@ DEFAULT_CONFIG = {
     "high_concentration_pct": HIGH_CONCENTRATION_PCT,
     "ignore_symbols": [],
     "core_holding_symbols": [],
+    "positions": {},
     "require_trade_link": False,
 }
 
@@ -47,6 +48,13 @@ def load_config(repo_root: Path, explicit_path: str | None) -> dict[str, Any]:
         value = section.get(key)
         if isinstance(value, list):
             config[key] = [str(item).upper() for item in value if str(item).strip()]
+    positions = section.get("positions")
+    if isinstance(positions, dict):
+        config["positions"] = {
+            str(symbol).upper(): profile
+            for symbol, profile in positions.items()
+            if str(symbol).strip() and isinstance(profile, dict)
+        }
     if isinstance(section.get("require_trade_link"), bool):
         config["require_trade_link"] = section["require_trade_link"]
     return config
@@ -59,11 +67,15 @@ def account_snapshot_path(repo_root: Path, date: str, explicit_path: str | None)
     return repo_root / "runtime" / "account" / date / "account-snapshot.json"
 
 
-def signals_path(repo_root: Path, date: str, explicit_path: str | None) -> Path:
+def signals_path(repo_root: Path, date: str, session: str, explicit_path: str | None) -> Path:
+    return resolve_signals_path(repo_root, date, explicit_path, session)
+
+
+def snapshot_path(repo_root: Path, date: str, explicit_path: str | None) -> Path:
     if explicit_path:
         path = Path(explicit_path)
         return path if path.is_absolute() else repo_root / path
-    return repo_root / "report" / date / "signals.json"
+    return repo_root / "report" / date / "daily-snapshot.json"
 
 
 def output_base(repo_root: Path, date: str, explicit_output: str | None) -> Path:
@@ -97,6 +109,53 @@ def active_signals(repo_root: Path, path: Path) -> dict[str, dict[str, Any]]:
         for signal in normalize_sidecar(payload, path, repo_root)
         if signal.get("status") != "no_trade" and signal.get("symbol")
     }
+
+
+def snapshot_latest_prices(path: Path) -> dict[str, float]:
+    if not path.exists():
+        return {}
+    payload = read_json(path)
+    prices = {}
+    for item in payload.get("symbols", []):
+        if not isinstance(item, dict):
+            continue
+        symbol = normalized_symbol(item.get("symbol"))
+        latest = item.get("latest")
+        if not symbol or not isinstance(latest, dict):
+            continue
+        close = to_float(latest.get("close"))
+        if close is not None:
+            prices[symbol] = close
+    return prices
+
+
+def enrich_position_with_price(position: dict[str, Any], snapshot_prices: dict[str, float]) -> dict[str, Any]:
+    enriched = dict(position)
+    symbol = normalized_symbol(position.get("symbol"))
+    quantity = to_float(position.get("quantity"))
+    avg_cost = to_float(position.get("avg_cost"))
+    last_price = to_float(position.get("last_price"))
+    price_source = "account_snapshot" if last_price is not None else None
+    if last_price is None and symbol in snapshot_prices:
+        last_price = snapshot_prices[symbol]
+        enriched["last_price"] = last_price
+        price_source = "daily_snapshot"
+
+    market_value = to_float(position.get("market_value"))
+    if market_value is None and last_price is not None and quantity is not None:
+        enriched["market_value"] = round(abs(quantity) * last_price, 3)
+
+    unrealized_pnl = to_float(position.get("unrealized_pnl"))
+    if unrealized_pnl is None and last_price is not None and avg_cost is not None and quantity is not None:
+        unrealized_pnl = round((last_price - avg_cost) * quantity, 3)
+        enriched["unrealized_pnl"] = unrealized_pnl
+
+    if position.get("unrealized_pnl_pct") is None and last_price is not None and avg_cost not in (None, 0):
+        enriched["unrealized_pnl_pct"] = round((last_price / avg_cost - 1) * 100, 3)
+
+    if price_source:
+        enriched["_price_source"] = price_source
+    return enriched
 
 
 def journal_signals_by_id(repo_root: Path, journal_dir: str) -> dict[str, dict[str, Any]]:
@@ -206,17 +265,24 @@ def position_review_record(
     high_concentration = concentration_pct is not None and concentration_pct >= float(config["high_concentration_pct"])
     link_state = trade_link_state(trade)
     trade_link_missing = link_state != "linked_to_source_signal"
+    position_profiles = config.get("positions", {})
+    profile = position_profiles.get(symbol, {}) if isinstance(position_profiles, dict) else {}
+    position_type = str(profile.get("type") or ("core" if core_holding else "trading"))
+    review_mode = str(profile.get("review_mode") or ("risk_only" if core_holding else "must_have_plan"))
+    core_holding = core_holding or position_type == "core"
+    requires_plan = review_mode == "must_have_plan" or position_type == "trading"
+    requires_trade_link = bool(config.get("require_trade_link")) and review_mode != "risk_only"
     review_required = (
-        ((not in_today_signals) and not core_holding)
+        ((not in_today_signals) and requires_plan)
         or close_to_invalidation
         or high_concentration
-        or (bool(config.get("require_trade_link")) and trade_link_missing and not core_holding)
+        or (requires_trade_link and trade_link_missing and not core_holding)
     )
     if close_to_invalidation:
         risk_state = "close_to_invalidation"
     elif high_concentration:
         risk_state = "high_concentration"
-    elif bool(config.get("require_trade_link")) and trade_link_missing and not core_holding:
+    elif requires_trade_link and trade_link_missing and not core_holding:
         risk_state = "missing_trade_link"
     elif core_holding and not in_today_signals:
         risk_state = "core_holding_not_in_plan"
@@ -248,6 +314,10 @@ def position_review_record(
         "unrealized_pnl_pct": position.get("unrealized_pnl_pct"),
         "in_today_signals": in_today_signals,
         "core_holding": core_holding,
+        "position_type": position_type,
+        "review_mode": review_mode,
+        "profile_notes": profile.get("notes") if isinstance(profile, dict) else None,
+        "price_source": position.get("_price_source"),
         "setup": effective_signal.get("setup") if effective_signal else trade.get("planned_setup") if trade else None,
         "source_signal_id": source_signal_id,
         "linked_trade_date": trade.get("date") if trade else None,
@@ -306,10 +376,14 @@ def build_markdown(date: str, records: list[dict[str, Any]], summary: dict[str, 
                 f"### {record['symbol']}",
                 f"- 是否在今日计划：{'是' if record.get('in_today_signals') else '否'}",
                 f"- 风险状态：{record.get('risk_state')}",
+                f"- 持仓类型：{record.get('position_type', '未知')} / {record.get('review_mode', '未知')}",
                 f"- 交易关联：{record.get('trade_link_state', '未知')}",
                 f"- 来源 signal：{record.get('source_signal_id', '无')}",
                 f"- 估算 R：{record.get('estimated_r', '无')}",
                 f"- 当前价：{record.get('last_price', '未知')}",
+                f"- 价格来源：{record.get('price_source', '未知')}",
+                f"- 市值：{record.get('market_value', '未知')}",
+                f"- 浮盈亏：{record.get('unrealized_pnl', '未知')}（{record.get('unrealized_pnl_pct', '未知')}%）",
                 f"- 失效位：{record.get('nearest_invalidation', '无')}",
                 f"- 距离失效位：{record.get('distance_to_invalidation_pct', '无')}%",
                 f"- 持仓集中度：{record.get('concentration_pct', '无')}%",
@@ -332,9 +406,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     account_path = account_snapshot_path(repo_root, args.date, args.account_snapshot)
     if not account_path.exists():
         raise FileNotFoundError(f"missing account snapshot: {account_path}")
-    signal_path = signals_path(repo_root, args.date, args.signals)
+    signal_path = signals_path(repo_root, args.date, args.session, args.signals)
+    daily_snapshot = snapshot_path(repo_root, args.date, args.snapshot)
     account = read_json(account_path)
     signals = active_signals(repo_root, signal_path)
+    snapshot_prices = snapshot_latest_prices(daily_snapshot)
     config = load_config(repo_root, getattr(args, "config", None))
     ignored_symbols = set(config.get("ignore_symbols", []))
     signals_by_id = journal_signals_by_id(repo_root, args.journal_dir)
@@ -350,10 +426,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         if symbol in ignored_symbols:
             continue
         trade = latest_trade(symbol, trades_by_symbol)
+        enriched_position = enrich_position_with_price(position, snapshot_prices)
         records.append(
             position_review_record(
                 date=args.date,
-                position=position,
+                position=enriched_position,
                 signal=signals.get(symbol),
                 net_liquidation=net_liquidation,
                 account_snapshot=account_path,
@@ -372,6 +449,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "date": args.date,
         "source_account_snapshot": str(account_path),
         "source_signals": str(signal_path) if signal_path.exists() else None,
+        "source_snapshot": str(daily_snapshot) if daily_snapshot.exists() else None,
         "position_reviews": records,
         "summary": {},
     }
@@ -425,6 +503,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--date", required=True)
     parser.add_argument("--account-snapshot")
     parser.add_argument("--signals")
+    parser.add_argument("--session", choices=["pre-market", "post-market"], default="pre-market")
+    parser.add_argument("--snapshot", help="Daily snapshot for price fallback. Defaults to report/<DATE>/daily-snapshot.json.")
     parser.add_argument("--config", help="Position review config path. Defaults to config/position_review.json.")
     parser.add_argument("--output", help="Output base path without extension")
     parser.add_argument("--append", action="store_true")

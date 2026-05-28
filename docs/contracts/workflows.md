@@ -60,7 +60,7 @@ Agent report outputs:
 
 - `report/<PRE_MARKET_DATE>/exec-brief.md`
 - `report/<PRE_MARKET_DATE>/pre-market.md`
-- `report/<PRE_MARKET_DATE>/signals.json`
+- `report/<PRE_MARKET_DATE>/pre-market-signals.json`
 
 Skip behavior:
 
@@ -74,7 +74,7 @@ Purpose: prepare the completed-market snapshot that a post-market review agent w
 Canonical command:
 
 ```bash
-python3 script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day
+python3 script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day --include-journal-signals --include-position-symbols
 ```
 
 Inputs:
@@ -82,6 +82,7 @@ Inputs:
 - `config/watchlist.json`
 - Twelve Data market data via `.env` or `TWELVE_DATA_API_KEY`
 - Optional S&P 500 dynamic universe flags
+- Optional journal signal and position-symbol merge flags for outcome/position coverage
 - `knowledge/refined/`
 - `agent/post_market_analysis_prompt.md`
 
@@ -94,7 +95,7 @@ Deterministic script outputs:
 Agent report output:
 
 - `report/<SNAPSHOT_DATE>/post-market.md`
-- `report/<SNAPSHOT_DATE>/signals.json`
+- `report/<SNAPSHOT_DATE>/post-market-signals.json`
 
 Skip behavior:
 
@@ -146,7 +147,7 @@ python3 script/trading_copilot.py validate-report --session post-market --date <
 Inputs:
 
 - Generated markdown reports under `report/<DATE>/`.
-- Structured `report/<DATE>/signals.json` sidecar when validating a full session.
+- Structured `report/<DATE>/<SESSION>-signals.json` sidecar when validating a full session.
 - `knowledge/refined/setups/` for setup filename validation.
 - `pre-market-context.json` or `daily-snapshot.json` when available for stale-data checks.
 
@@ -156,14 +157,36 @@ Output:
 - `validation.status` is `pass` or `fail`.
 - `validation.errors` contains blocking quality issues.
 - `validation.warnings` contains non-blocking wording or disclosure concerns.
-- `validation.checked_artifacts` includes markdown reports and `signals.json` when present.
+- `validation.checked_artifacts` includes markdown reports and the session signal sidecar when present.
 
 Required behavior:
 
 - A failed validation must stop delivery and Longbridge sync.
 - `sync-longbridge-watchlist --require-validation` must run this gate before extracting and syncing report focus symbols.
-- Full-session validation requires `report/<DATE>/signals.json`. Single-report validation through `--report` keeps sidecar validation optional for ad-hoc checks.
-- Markdown focus symbols must match the symbols in `signals.json`.
+- Full-session validation requires `report/<DATE>/pre-market-signals.json` or `report/<DATE>/post-market-signals.json`. Single-report validation through `--report` keeps sidecar validation optional for ad-hoc checks.
+- Markdown focus symbols must match the symbols in the session signal sidecar.
+
+## validate-trade-plan
+
+Purpose: enforce structured Trade Plan Card gates on the session sidecar without requiring Markdown report validation.
+
+Canonical commands:
+
+```bash
+python3 script/trading_copilot.py validate-trade-plan --session pre-market --date <PRE_MARKET_DATE>
+python3 script/trading_copilot.py validate-trade-plan --session post-market --date <SNAPSHOT_DATE>
+```
+
+Inputs:
+
+- `report/<DATE>/pre-market-signals.json` or `report/<DATE>/post-market-signals.json`.
+- `knowledge/refined/setups/` for setup filename validation.
+
+Required behavior:
+
+- `execution_status=conditional_executable` requires a complete Trade Plan Card: `entry.trigger_price`, `stop.initial_stop`, `take_profit.tp1`, `risk.max_account_risk_pct`, `risk.risk_per_share`, and at least one `execution_rules.skip_conditions` item.
+- TP1 reward/risk must be at least 2R.
+- Incomplete plans must be downgraded by the agent to `watch_only` or `no_trade` before delivery.
 
 ## extract-report-signals
 
@@ -178,7 +201,7 @@ python3 script/trading_copilot.py extract-report-signals --session post-market -
 
 Inputs:
 
-- Preferred structured input: `report/<DATE>/signals.json`.
+- Preferred structured input: `report/<DATE>/pre-market-signals.json` or `report/<DATE>/post-market-signals.json`.
 - Markdown fallback for pre-market: `report/<DATE>/exec-brief.md`.
 - Markdown fallback for post-market: `report/<DATE>/post-market.md`.
 - Optional `--report` path for ad-hoc extraction.
@@ -191,7 +214,7 @@ Output:
 
 Required behavior:
 
-- Prefer structured `signals.json` over Markdown parsing.
+- Prefer the session signal sidecar over Markdown parsing.
 - Extract at most 3 focused candidates by default.
 - Prefer explicit focus lists such as `今日最多3个重点标的` and `明日观察清单`.
 - Include `signal_id`, `symbol`, `setup`, `setup_files`, `trigger`, `invalidation`, `risk`, `status`, and `source_report` when available.
@@ -216,6 +239,34 @@ Output:
 
 - JSON envelope with `outcomes`, `summary`, and optional appended outcome ids.
 - With `--append`, writes new records to `runtime/journal/outcomes.jsonl`.
+
+## plan-review
+
+Purpose: review the generated trade plans, compare them with outcome/trade records, and record candidate learning lessons.
+
+Canonical command:
+
+```bash
+python3 script/trading_copilot.py plan-review --date <DATE> --append-lessons
+```
+
+Inputs:
+
+- `runtime/journal/signals.jsonl`
+- `runtime/journal/outcomes.jsonl`
+- Optional `runtime/journal/trades.jsonl`
+
+Outputs:
+
+- `report/<DATE>/plan-review.md`
+- `report/<DATE>/plan-review.json`
+- With `--append-lessons`, `runtime/learning/daily_lessons.jsonl`
+
+Required behavior:
+
+- Review the plan, not broad market commentary.
+- Separate plan quality, price touch outcome, and real execution.
+- Lessons are candidate process improvements only; they must not mutate `knowledge/refined/`.
 
 Required behavior:
 
@@ -371,7 +422,7 @@ python3 script/trading_copilot.py position-review --date <DATE> --config config/
 Inputs:
 
 - `runtime/account/<DATE>/account-snapshot.json`
-- `report/<DATE>/signals.json`
+- `report/<DATE>/pre-market-signals.json` or `report/<DATE>/post-market-signals.json`
 - `config/position_review.json`
 - Optional `runtime/journal/trades.jsonl` and `runtime/journal/signals.jsonl` for `source_signal_id` linkage.
 - Optional `runtime/journal/position_reviews.jsonl` for duplicate detection.
