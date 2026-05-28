@@ -69,6 +69,24 @@ class MarketSnapshotContractTest(unittest.TestCase):
         self.assertEqual(payload["values"][0]["datetime"], "2026-05-06")
         self.assertEqual(payload["values"][1]["datetime"], "2026-05-05")
 
+    def test_longbridge_oldest_to_newest_fixture_feeds_latest_snapshot_bar(self):
+        payload = normalize_longbridge_kline(
+            "MU.US",
+            "1day",
+            [
+                {"time": "2026-05-20 04:00:00", "open": "734.955", "high": "735.680", "low": "700.660", "close": "731.990", "volume": "48827357"},
+                {"time": "2026-05-21 04:00:00", "open": "736.360", "high": "764.900", "low": "732.200", "close": "762.100", "volume": "42461460"},
+                {"time": "2026-05-22 04:00:00", "open": "756.815", "high": "780.200", "low": "747.200", "close": "751.000", "volume": "36002915"},
+                {"time": "2026-05-26 04:00:00", "open": "820.500", "high": "916.800", "low": "820.295", "close": "895.880", "volume": "76560763"},
+                {"time": "2026-05-27 04:00:00", "open": "955.660", "high": "956.160", "low": "888.150", "close": "928.410", "volume": "72295713"},
+            ],
+        )
+        snapshot = build_symbol_snapshot("MU", payload, Path("raw_data/2026-05-27/1day/MU.json"))
+
+        self.assertEqual(snapshot["latest"]["datetime"], "2026-05-27")
+        self.assertEqual(snapshot["latest"]["close"], "928.410")
+        self.assertEqual(snapshot["previous"]["datetime"], "2026-05-26")
+
     def test_fallback_client_uses_twelve_data_when_longbridge_fails(self):
         class FailingPrimary:
             name = "longbridge"

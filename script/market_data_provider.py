@@ -76,6 +76,7 @@ def normalize_longbridge_kline(
         raise RuntimeError(f"Longbridge returned no K-line data for {symbol}")
     period = longbridge_period(interval)
     values = []
+    # Longbridge CLI returns K-line rows oldest-to-newest; snapshots expect newest first.
     for row in reversed(rows):
         if not isinstance(row, dict):
             continue
