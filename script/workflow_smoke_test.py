@@ -13,6 +13,7 @@ import longbridge_account_snapshot
 import plan_review
 import position_review
 import validate_report
+import validate_trade_plan
 import weekly_review
 
 
@@ -31,6 +32,11 @@ def run(args: argparse.Namespace) -> dict:
     steps["validate-report"] = {"validation": validation}
     if validation["status"] != "pass":
         return {"status": "failed", "date": args.date, "steps": steps, "reason": "validate-report failed"}
+
+    plan_validation = validate_trade_plan.validate(validate_args)
+    steps["validate-trade-plan"] = {"validation": plan_validation}
+    if plan_validation["status"] != "pass":
+        return {"status": "failed", "date": args.date, "steps": steps, "reason": "validate-trade-plan failed"}
 
     extract_args = argparse.Namespace(
         repo_root=str(repo_root),

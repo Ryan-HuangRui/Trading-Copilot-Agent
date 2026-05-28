@@ -63,12 +63,14 @@ Run the post-market workflow for this repository.
    python3 script/trading_copilot.py extract-report-signals --session post-market --date <SNAPSHOT_DATE> --require-validation --append
 11. Run plan-review and append candidate lessons:
    python3 script/trading_copilot.py plan-review --date <SNAPSHOT_DATE> --append-lessons
-12. Optionally run read-only account and position review:
+12. Aggregate repeated lessons into pattern candidates:
+   python3 script/trading_copilot.py learning-review --lookback-days 20
+13. Optionally run read-only account and position review:
    python3 script/trading_copilot.py account-snapshot --date <SNAPSHOT_DATE>
    python3 script/trading_copilot.py position-review --date <SNAPSHOT_DATE> --append
-13. Run daily self-review:
+14. Run daily self-review:
    python3 script/trading_copilot.py daily-self-review --date <SNAPSHOT_DATE> --append
-14. Update the Longbridge watchlist group `今日关注` as a full replacement from the post-market focus list:
+15. Update the Longbridge watchlist group `今日关注` as a full replacement from the post-market focus list:
    python3 script/trading_copilot.py sync-longbridge-watchlist --session post-market --date <SNAPSHOT_DATE> --group-name 今日关注 --sync-mode replace --require-validation --execute --no-create
 
 Keep output in simplified Chinese. Treat S&P 500 dynamic candidates as an observation universe only, not investment advice.
@@ -115,6 +117,8 @@ Keep output in simplified Chinese. The merged universe may include fixed watchli
 The Longbridge sync is additive before market open and must not remove existing `今日关注` symbols.
 ```
 
+`--require-validation` on `extract-report-signals` and `sync-longbridge-watchlist` runs both `validate-report` and `validate-trade-plan`. If either gate fails, stop the journal append or Longbridge sync and fix the Markdown/sidecar artifacts first.
+
 ## First-run checklist
 - Run the post-market automation once first, or manually run its snapshot command, so the next pre-market job has a previous completed trading-day snapshot.
 - Confirm `report/<DATE>/daily-snapshot.json` exists and contains `symbols`.
@@ -127,6 +131,6 @@ The Longbridge sync is additive before market open and must not remove existing 
 - `stale_data=true` after market close: wait and rerun the post-market automation later.
 - S&P 500 screener failure: the snapshot continues with the fixed watchlist and records the screener error in `candidate-universe.json`.
 - Missing pre-market source snapshot: run the post-market snapshot workflow for the previous completed trading day first.
-- Report validation failure: fix the generated report and session signal sidecar so every actionable candidate has setup, structured trigger price, structured invalidation price, and risk framing; rerun `validate-report` before Longbridge sync.
+- Report or trade-plan validation failure: fix the generated report and session signal sidecar so every actionable candidate has setup, structured trigger price, structured invalidation price, risk framing, and complete Trade Plan Card fields when marked `conditional_executable`; rerun validation before Longbridge sync.
 - Rate limiting: the repo uses the shared 8 requests/minute limiter in `config/rate_limit_state.json`; full S&P 500 top 100 screening can take more than ten minutes.
 - Longbridge watchlist sync failure: keep the generated report, fix CLI login/connectivity with `longbridge auth login` and `longbridge check`, then rerun only the `sync-longbridge-watchlist` command for that report date.

@@ -108,9 +108,10 @@ The dynamic universe uses iShares IVV holdings CSV as the default source and fal
 After `post-market.md` is generated, validate it:
 ```bash
 python3 script/trading_copilot.py validate-report --session post-market --date <SNAPSHOT_DATE>
+python3 script/trading_copilot.py validate-trade-plan --session post-market --date <SNAPSHOT_DATE>
 ```
 
-Only after validation passes, backfill outcomes for the completed snapshot date:
+Only after both validations pass, backfill outcomes for the completed snapshot date:
 ```bash
 python3 script/trading_copilot.py backfill-signal-outcomes --date <SNAPSHOT_DATE> --append
 ```
@@ -118,6 +119,12 @@ python3 script/trading_copilot.py backfill-signal-outcomes --date <SNAPSHOT_DATE
 Then append the focused observation plan:
 ```bash
 python3 script/trading_copilot.py extract-report-signals --session post-market --date <SNAPSHOT_DATE> --require-validation --append
+```
+
+Then review plans and aggregate repeated lessons:
+```bash
+python3 script/trading_copilot.py plan-review --date <SNAPSHOT_DATE> --append-lessons
+python3 script/trading_copilot.py learning-review --lookback-days 20
 ```
 
 Optionally capture a read-only account snapshot and position review:
@@ -151,9 +158,10 @@ If output contains `skipped=true`, stop. Otherwise read `agent/daily_analysis_pr
 After `exec-brief.md` and `pre-market.md` are generated, validate them:
 ```bash
 python3 script/trading_copilot.py validate-report --session pre-market --date <PRE_MARKET_DATE>
+python3 script/trading_copilot.py validate-trade-plan --session pre-market --date <PRE_MARKET_DATE>
 ```
 
-Only after validation passes, append the focused pre-market plan:
+Only after both validations pass, append the focused pre-market plan:
 ```bash
 python3 script/trading_copilot.py extract-report-signals --session pre-market --date <PRE_MARKET_DATE> --require-validation --append
 ```
@@ -168,5 +176,6 @@ This is additive only. It may add new focus symbols from the pre-market plan, bu
 - Reports are research and process support only; they are not investment advice.
 - Do not output deterministic buy/sell instructions.
 - Every candidate must include setup reference, trigger, invalidation, and risk constraint.
+- `--require-validation` on report extraction and Longbridge sync runs both report validation and trade-plan validation; do not continue when either gate fails.
 - If market regime is unclear, data is insufficient, or refined rules do not support a setup, output `NO TRADE`.
 - Dynamic S&P 500 candidates are only an observation universe; they must still pass refined setup rules before appearing as executable candidates.

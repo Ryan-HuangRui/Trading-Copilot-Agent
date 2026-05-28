@@ -5,14 +5,14 @@ import argparse
 import hashlib
 import json
 import re
-import subprocess
-import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from journal_append import append_jsonl, journal_path
 from signal_artifacts import normalize_sidecar, read_json, resolve_signals_path
+import validate_report as report_validator
+import validate_trade_plan as trade_plan_validator
 
 
 REPORT_FILES = {
@@ -262,24 +262,30 @@ def existing_signal_ids(path: Path) -> set[str]:
 
 
 def validate_report(repo_root: Path, date: str, session: str, report: Path | None, signals: Path | None) -> dict[str, Any]:
-    command = [
-        sys.executable,
-        "script/validate_report.py",
-        "--date",
-        date,
-        "--session",
-        session,
-    ]
-    if report:
-        command.extend(["--report", str(report)])
-    if signals:
-        command.extend(["--signals", str(signals)])
-    proc = subprocess.run(command, cwd=repo_root, check=False, text=True, capture_output=True)
-    try:
-        payload = json.loads(proc.stdout)
-    except json.JSONDecodeError:
-        payload = {"status": "fail", "errors": [proc.stderr or proc.stdout or "validation failed"]}
-    if proc.returncode != 0:
+    payload = report_validator.validate(
+        argparse.Namespace(
+            repo_root=str(repo_root),
+            date=date,
+            session=session,
+            report=str(report) if report else None,
+            signals=str(signals) if signals else None,
+        )
+    )
+    if payload["status"] != "pass":
+        raise RuntimeError(json.dumps(payload, ensure_ascii=False))
+    return payload
+
+
+def validate_trade_plan(repo_root: Path, date: str, session: str, signals: Path | None) -> dict[str, Any]:
+    payload = trade_plan_validator.validate(
+        argparse.Namespace(
+            repo_root=str(repo_root),
+            date=date,
+            session=session,
+            signals=str(signals) if signals else None,
+        )
+    )
+    if payload["status"] != "pass":
         raise RuntimeError(json.dumps(payload, ensure_ascii=False))
     return payload
 
@@ -290,6 +296,7 @@ def extract(args: argparse.Namespace) -> dict[str, Any]:
     sidecar = signals_path(repo_root, args.date, args.session, args.signals)
     if args.require_validation:
         validate_report(repo_root, args.date, args.session, report if args.report else None, sidecar if args.signals else None)
+        validate_trade_plan(repo_root, args.date, args.session, sidecar if args.signals else None)
 
     source_report = str(report.relative_to(repo_root)) if report.exists() and report.is_relative_to(repo_root) else str(report)
     source_signals = None
@@ -348,7 +355,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-signals", type=int, default=3)
     parser.add_argument("--append", action="store_true", help="Append extracted signals to runtime journal JSONL.")
     parser.add_argument("--journal-dir", default="runtime/journal")
-    parser.add_argument("--require-validation", action="store_true", help="Run validate_report.py before extracting signals.")
+    parser.add_argument(
+        "--require-validation",
+        action="store_true",
+        help="Run validate_report.py and validate_trade_plan.py before extracting signals.",
+    )
     parser.add_argument("--repo-root", default=str(Path(__file__).resolve().parents[1]))
     return parser
 

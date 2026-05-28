@@ -38,6 +38,15 @@ class TradingCopilotWrapperTest(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, msg=proc.stderr or proc.stdout)
         return json.loads(proc.stdout)
 
+    def run_wrapper_raw(self, *args):
+        return subprocess.run(
+            [sys.executable, "script/trading_copilot.py", *args],
+            cwd=ROOT,
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+
     def test_trading_day_check_wrapper_contract(self):
         payload = self.run_wrapper("trading-day-check", "--date", "2026-05-06")
 
@@ -139,8 +148,41 @@ class TradingCopilotWrapperTest(unittest.TestCase):
 
     def test_sync_longbridge_can_require_report_validation(self):
         with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
             report = Path(tmp) / "exec-brief.md"
             report.write_text(GOOD_REPORT, encoding="utf-8")
+            sidecar = root / "pre-market-signals.json"
+            sidecar.write_text(
+                json.dumps(
+                    {
+                        "date": "2026-05-26",
+                        "session": "pre-market",
+                        "signals": [
+                            {
+                                "symbol": "MU",
+                                "setup": "breakout_pullback_continuation.md",
+                                "direction": "long",
+                                "trigger": {"type": "break_above", "price": 100, "text": "突破 100"},
+                                "invalidation": {"type": "break_below", "price": 95, "text": "跌破 95"},
+                                "risk": {
+                                    "max_risk_pct": 1,
+                                    "max_account_risk_pct": 1,
+                                    "risk_per_share": 5,
+                                },
+                                "status": "planned",
+                                "plan_type": "trade_plan",
+                                "execution_status": "conditional_executable",
+                                "entry": {"trigger_price": 100, "confirmation": "pullback holds"},
+                                "stop": {"initial_stop": 95},
+                                "take_profit": {"tp1": 112},
+                                "execution_rules": {"skip_conditions": ["market turns risk-off"]},
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
 
             payload = self.run_wrapper(
                 "sync-longbridge-watchlist",
@@ -150,6 +192,8 @@ class TradingCopilotWrapperTest(unittest.TestCase):
                 "2026-05-26",
                 "--report",
                 str(report),
+                "--signals",
+                str(sidecar),
                 "--symbol",
                 "MU",
                 "--require-validation",
@@ -159,6 +203,65 @@ class TradingCopilotWrapperTest(unittest.TestCase):
         self.assertTrue(payload["dry_run"])
         self.assertEqual(payload["symbols"], ["MU.US"])
         self.assertEqual(payload["validation"]["status"], "pass")
+        self.assertEqual(payload["trade_plan_validation"]["status"], "pass")
+
+    def test_sync_longbridge_require_validation_fails_invalid_trade_plan(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            report = root / "exec-brief.md"
+            report.write_text(GOOD_REPORT, encoding="utf-8")
+            sidecar = root / "pre-market-signals.json"
+            sidecar.write_text(
+                json.dumps(
+                    {
+                        "date": "2026-05-26",
+                        "session": "pre-market",
+                        "signals": [
+                            {
+                                "symbol": "MU",
+                                "setup": "breakout_pullback_continuation.md",
+                                "direction": "long",
+                                "trigger": {"type": "break_above", "price": 100, "text": "突破 100"},
+                                "invalidation": {"type": "break_below", "price": 95, "text": "跌破 95"},
+                                "risk": {
+                                    "max_risk_pct": 1,
+                                    "max_account_risk_pct": 1,
+                                    "risk_per_share": 5,
+                                },
+                                "status": "planned",
+                                "plan_type": "trade_plan",
+                                "execution_status": "conditional_executable",
+                                "entry": {"trigger_price": 100, "confirmation": "pullback holds"},
+                                "stop": {"initial_stop": 95},
+                                "execution_rules": {"skip_conditions": ["market turns risk-off"]},
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            proc = self.run_wrapper_raw(
+                "sync-longbridge-watchlist",
+                "--session",
+                "pre-market",
+                "--date",
+                "2026-05-26",
+                "--report",
+                str(report),
+                "--signals",
+                str(sidecar),
+                "--symbol",
+                "MU",
+                "--require-validation",
+            )
+
+        self.assertNotEqual(proc.returncode, 0)
+        payload = json.loads(proc.stdout)
+        self.assertEqual(payload["status"], "failed")
+        self.assertEqual(payload["workflow"], "sync-longbridge-watchlist")
+        self.assertIn("take_profit.tp1", payload["reason"])
 
     def test_extract_report_signals_wrapper_contract(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -275,6 +378,86 @@ class TradingCopilotWrapperTest(unittest.TestCase):
         self.assertEqual(payload["workflow"], "plan-review")
         self.assertEqual(payload["summary"]["plans"], 1)
         self.assertEqual(payload["summary"]["quality"], {"watch_only": 1})
+
+    def test_learning_review_wrapper_contract(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            learning_dir = root / "learning"
+            learning_dir.mkdir()
+            records = []
+            for date, symbol in (("2026-05-24", "MU"), ("2026-05-25", "AMD"), ("2026-05-26", "TSM")):
+                records.append(
+                    {
+                        "kind": "daily_lesson",
+                        "date": date,
+                        "lesson_type": "plan_quality",
+                        "symbol": symbol,
+                        "setup": "breakout_pullback_continuation.md",
+                        "problem": "missing_take_profit",
+                        "suggested_constraint": "conditional_executable plans must include TP1",
+                    }
+                )
+            (learning_dir / "daily_lessons.jsonl").write_text(
+                "\n".join(json.dumps(record, ensure_ascii=False) for record in records) + "\n",
+                encoding="utf-8",
+            )
+
+            payload = self.run_wrapper(
+                "learning-review",
+                "--learning-dir",
+                str(learning_dir),
+                "--end-date",
+                "2026-05-26",
+                "--lookback-days",
+                "20",
+                "--min-count",
+                "3",
+                "--output",
+                str(root / "pattern-review"),
+            )
+
+        self.assertEqual(payload["status"], "success")
+        self.assertEqual(payload["workflow"], "learning-review")
+        self.assertEqual(payload["summary"]["pattern_candidates"], 1)
+
+    def test_promote_lesson_wrapper_contract(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            learning_dir = root / "learning"
+            learning_dir.mkdir()
+            candidate = {
+                "kind": "pattern_candidate",
+                "pattern_id": "missing_take_profit__breakout_pullback_continuation",
+                "problem": "missing_take_profit",
+                "setup": "breakout_pullback_continuation.md",
+                "lesson_type": "plan_quality",
+                "seen_count": 3,
+                "first_seen": "2026-05-24",
+                "last_seen": "2026-05-26",
+                "suggested_constraint": "conditional_executable plans must include TP1",
+                "promotion_status": "needs_human_review",
+            }
+            (learning_dir / "pattern_candidates.jsonl").write_text(
+                json.dumps(candidate, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            output = root / "validated_lessons.md"
+
+            payload = self.run_wrapper(
+                "promote-lesson",
+                "--learning-dir",
+                str(learning_dir),
+                "--pattern-id",
+                "missing_take_profit__breakout_pullback_continuation",
+                "--output",
+                str(output),
+                "--apply",
+            )
+            self.assertTrue(output.exists())
+
+        self.assertEqual(payload["status"], "success")
+        self.assertEqual(payload["workflow"], "promote-lesson")
+        self.assertTrue(payload["applied"])
 
     def test_pre_market_expected_outputs_include_signals_sidecar(self):
         proc = subprocess.CompletedProcess(

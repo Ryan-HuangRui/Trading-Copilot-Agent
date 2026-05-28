@@ -248,6 +248,19 @@ def validate_report_command(args: argparse.Namespace) -> List[str]:
     return command
 
 
+def validate_trade_plan_command(args: argparse.Namespace) -> List[str]:
+    command = [
+        "script/validate_trade_plan.py",
+        "--date",
+        args.date,
+        "--session",
+        args.session,
+    ]
+    if getattr(args, "signals", None):
+        command.extend(["--signals", args.signals])
+    return command
+
+
 def run_validate_report(args: argparse.Namespace) -> None:
     command = validate_report_command(args)
     proc = run_child(command)
@@ -263,15 +276,7 @@ def run_validate_report(args: argparse.Namespace) -> None:
 
 
 def run_validate_trade_plan(args: argparse.Namespace) -> None:
-    command = [
-        "script/validate_trade_plan.py",
-        "--date",
-        args.date,
-        "--session",
-        args.session,
-    ]
-    if args.signals:
-        command.extend(["--signals", args.signals])
+    command = validate_trade_plan_command(args)
 
     proc = run_child(command)
     stdout = parse_json_output(proc.stdout)
@@ -406,6 +411,64 @@ def run_plan_review(args: argparse.Namespace) -> None:
     emit(response)
 
 
+def run_learning_review(args: argparse.Namespace) -> None:
+    command = [
+        "script/learning_review.py",
+        "--lookback-days",
+        str(args.lookback_days),
+        "--min-count",
+        str(args.min_count),
+        "--learning-dir",
+        args.learning_dir,
+    ]
+    if args.end_date:
+        command.extend(["--end-date", args.end_date])
+    if args.output:
+        command.extend(["--output", args.output])
+
+    proc = run_child(command)
+    stdout = parse_json_output(proc.stdout)
+    if proc.returncode != 0:
+        emit(failed_response("learning-review", command, proc), 1)
+
+    response = base_response("learning-review", command, stdout)
+    response["date"] = (stdout or {}).get("end_date")
+    response["artifacts"] = (stdout or {}).get("artifacts", [])
+    response["summary"] = (stdout or {}).get("summary")
+    response["pattern_candidates"] = (stdout or {}).get("pattern_candidates", [])
+    emit(response)
+
+
+def run_promote_lesson(args: argparse.Namespace) -> None:
+    command = [
+        "script/promote_lesson.py",
+        "--pattern-id",
+        args.pattern_id,
+        "--learning-dir",
+        args.learning_dir,
+    ]
+    if args.candidates:
+        command.extend(["--candidates", args.candidates])
+    if args.output:
+        command.extend(["--output", args.output])
+    if args.apply:
+        command.append("--apply")
+    else:
+        command.append("--dry-run")
+
+    proc = run_child(command)
+    stdout = parse_json_output(proc.stdout)
+    if proc.returncode != 0:
+        emit(failed_response("promote-lesson", command, proc), 1)
+
+    response = base_response("promote-lesson", command, stdout)
+    response["artifacts"] = [stdout["output"]] if stdout and stdout.get("output") else []
+    response["pattern_id"] = args.pattern_id
+    response["applied"] = bool((stdout or {}).get("applied"))
+    response["markdown_block"] = (stdout or {}).get("markdown_block")
+    emit(response)
+
+
 def run_weekly_review(args: argparse.Namespace) -> None:
     command = [
         "script/weekly_review.py",
@@ -531,6 +594,7 @@ def run_position_review(args: argparse.Namespace) -> None:
 
 def run_sync_longbridge_watchlist(args: argparse.Namespace) -> None:
     validation = None
+    trade_plan_validation = None
     if args.require_validation:
         if not args.date:
             emit(
@@ -553,6 +617,15 @@ def run_sync_longbridge_watchlist(args: argparse.Namespace) -> None:
             response = failed_response("sync-longbridge-watchlist", validation_command, validation_proc)
             response["date"] = args.date
             response["validation"] = validation
+            emit(response, 1)
+        trade_plan_command = validate_trade_plan_command(args)
+        trade_plan_proc = run_child(trade_plan_command)
+        trade_plan_validation = parse_json_output(trade_plan_proc.stdout)
+        if trade_plan_proc.returncode != 0:
+            response = failed_response("sync-longbridge-watchlist", trade_plan_command, trade_plan_proc)
+            response["date"] = args.date
+            response["validation"] = validation
+            response["trade_plan_validation"] = trade_plan_validation
             emit(response, 1)
 
     command = [
@@ -598,6 +671,7 @@ def run_sync_longbridge_watchlist(args: argparse.Namespace) -> None:
     response["symbols"] = (stdout or {}).get("symbols", [])
     response["longbridge"] = (stdout or {}).get("longbridge")
     response["validation"] = validation
+    response["trade_plan_validation"] = trade_plan_validation
     emit(response)
 
 
@@ -690,6 +764,23 @@ def build_parser() -> argparse.ArgumentParser:
     plan_review.add_argument("--learning-dir", default="runtime/learning")
     plan_review.set_defaults(func=run_plan_review)
 
+    learning_review = sub.add_parser("learning-review", help="Aggregate daily lessons into repeated pattern candidates")
+    learning_review.add_argument("--lookback-days", type=int, default=20)
+    learning_review.add_argument("--min-count", type=int, default=3)
+    learning_review.add_argument("--end-date")
+    learning_review.add_argument("--output")
+    learning_review.add_argument("--learning-dir", default="runtime/learning")
+    learning_review.set_defaults(func=run_learning_review)
+
+    promote_lesson = sub.add_parser("promote-lesson", help="Promote a pattern candidate into validated lessons")
+    promote_lesson.add_argument("--pattern-id", required=True)
+    promote_lesson.add_argument("--dry-run", action="store_true")
+    promote_lesson.add_argument("--apply", action="store_true")
+    promote_lesson.add_argument("--candidates")
+    promote_lesson.add_argument("--learning-dir", default="runtime/learning")
+    promote_lesson.add_argument("--output")
+    promote_lesson.set_defaults(func=run_promote_lesson)
+
     weekly_review = sub.add_parser("weekly-review", help="Generate a weekly review from journal outcomes and trades")
     weekly_review.add_argument("--week", required=True)
     weekly_review.add_argument("--append", action="store_true")
@@ -743,7 +834,11 @@ def build_parser() -> argparse.ArgumentParser:
     sync.add_argument("--sync-mode", choices=["auto", "add", "replace"], default="auto")
     sync.add_argument("--method", choices=["auto", "cli", "sdk"], default="auto")
     sync.add_argument("--longbridge-cli")
-    sync.add_argument("--require-validation", action="store_true", help="Validate the generated report before any Longbridge sync.")
+    sync.add_argument(
+        "--require-validation",
+        action="store_true",
+        help="Validate the generated report and trade-plan sidecar before any Longbridge sync.",
+    )
     sync.set_defaults(func=run_sync_longbridge_watchlist)
 
     return parser

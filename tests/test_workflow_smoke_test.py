@@ -135,6 +135,7 @@ class WorkflowSmokeTest(unittest.TestCase):
             payload = json.loads(proc.stdout)
             self.assertEqual(payload["status"], "success")
             self.assertEqual(payload["steps"]["validate-report"]["validation"]["status"], "pass")
+            self.assertEqual(payload["steps"]["validate-trade-plan"]["validation"]["status"], "pass")
             self.assertIn("account-snapshot", payload["steps"])
             self.assertIn("position-review", payload["steps"])
             self.assertTrue((root / "report" / "2026-05-26" / "self-review.md").exists())
