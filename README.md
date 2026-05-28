@@ -49,6 +49,7 @@ python3 script/trading_copilot.py extract-report-signals --session pre-market --
 python3 script/trading_copilot.py backfill-signal-outcomes --date <DATE> --append
 python3 script/trading_copilot.py plan-review --date <DATE> --append-lessons
 python3 script/trading_copilot.py learning-review --lookback-days 20
+python3 script/trading_copilot.py feishu-summary --session pre-market --date <DATE>
 python3 script/trading_copilot.py promote-lesson --pattern-id <PATTERN_ID> --dry-run
 python3 script/trading_copilot.py daily-self-review --date <DATE> --append
 python3 script/trading_copilot.py weekly-review --week <YYYY-Www> --append
@@ -96,6 +97,7 @@ python3 script/workflow_smoke_test.py --date <DATE> --week <YYYY-Www>
 - outcome 回填：`python3 script/trading_copilot.py backfill-signal-outcomes --date YYYY-MM-DD --append`
 - 交易计划复盘：`python3 script/trading_copilot.py plan-review --date YYYY-MM-DD --append-lessons`
 - 候选规律聚合：`python3 script/trading_copilot.py learning-review --lookback-days 20`
+- 飞书摘要：`python3 script/trading_copilot.py feishu-summary --session pre-market --date YYYY-MM-DD`
 - 人工晋升预览：`python3 script/trading_copilot.py promote-lesson --pattern-id <PATTERN_ID> --dry-run`
 - 日度自我复盘：`python3 script/trading_copilot.py daily-self-review --date YYYY-MM-DD --append`
 - 周度复盘：`python3 script/trading_copilot.py weekly-review --week YYYY-Www --append`

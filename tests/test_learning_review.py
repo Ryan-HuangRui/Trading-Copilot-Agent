@@ -69,6 +69,57 @@ class LearningReviewTest(unittest.TestCase):
             markdown = (root / "report" / "learning" / "pattern-review.md").read_text(encoding="utf-8")
             self.assertIn("missing_take_profit", markdown)
 
+    def test_learning_review_promotes_repeated_position_discipline_patterns(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            journal = root / "runtime" / "journal"
+            journal.mkdir(parents=True)
+            records = []
+            for date, symbol in (("2026-05-24", "TSLA"), ("2026-05-25", "SMCI"), ("2026-05-26", "NVDA")):
+                records.append(
+                    {
+                        "kind": "position_review",
+                        "position_review_id": f"position:{date}:{symbol}",
+                        "date": date,
+                        "symbol": symbol,
+                        "in_today_signals": False,
+                        "review_required": True,
+                        "trade_link_state": "no_trade_record",
+                        "risk_state": "not_in_plan",
+                    }
+                )
+            (journal / "position_reviews.jsonl").write_text(
+                "\n".join(json.dumps(item, ensure_ascii=False) for item in records) + "\n",
+                encoding="utf-8",
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "script" / "learning_review.py"),
+                    "--repo-root",
+                    str(root),
+                    "--end-date",
+                    "2026-05-26",
+                    "--lookback-days",
+                    "20",
+                    "--min-count",
+                    "3",
+                ],
+                check=False,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, msg=proc.stderr or proc.stdout)
+            payload = json.loads(proc.stdout)
+            self.assertEqual(payload["summary"]["position_reviews"], 3)
+            candidate = payload["pattern_candidates"][0]
+            self.assertEqual(candidate["problem"], "position_without_plan")
+            self.assertEqual(candidate["setup"], "position_discipline")
+            self.assertEqual(candidate["seen_count"], 3)
+            self.assertIn("TSLA", candidate["symbols"])
+
     def test_promote_lesson_dry_run_and_apply_validated_lesson(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

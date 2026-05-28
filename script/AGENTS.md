@@ -14,6 +14,7 @@
 - `validate_trade_plan.py`: structured Trade Plan Card validator for session sidecars.
 - `plan_review.py`: plan-quality review and candidate lesson writer under `runtime/learning/`.
 - `learning_review.py`: aggregates repeated daily lessons into `pattern_candidates.jsonl`.
+- `feishu_summary.py`: concise Feishu-ready execution panel built from validated sidecars and review artifacts.
 - `promote_lesson.py`: human-triggered promotion into `knowledge/evolution/validated_lessons.md`; never edits `knowledge/refined/`.
 - `workflow_smoke_test.py`: fixture-based workflow smoke test; must not fetch live market or account data.
 - `report_delivery_guard.py`: idempotent delivery-state helper.
@@ -36,6 +37,7 @@
 - Validate trade plan sidecars: `python3 script/trading_copilot.py validate-trade-plan --session pre-market --date 2026-05-06`.
 - Review generated plans: `python3 script/trading_copilot.py plan-review --date 2026-05-06 --append-lessons`.
 - Aggregate candidate lessons: `python3 script/trading_copilot.py learning-review --lookback-days 20`.
+- Build Feishu summary: `python3 script/trading_copilot.py feishu-summary --session pre-market --date 2026-05-06`.
 - Preview lesson promotion: `python3 script/trading_copilot.py promote-lesson --pattern-id <PATTERN_ID> --dry-run`.
 - Run fixture workflow smoke test: `python3 script/workflow_smoke_test.py --date 2026-05-06 --week 2026-W19`.
 - Check trading day through wrapper: `python3 script/trading_copilot.py trading-day-check --date 2026-05-06`.

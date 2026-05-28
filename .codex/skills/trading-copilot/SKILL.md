@@ -57,11 +57,13 @@ Every workflow run should return or report the same status fields:
    `python3 script/trading_copilot.py validate-trade-plan --session pre-market --date <DATE>`.
 6. After validation passes, append the focused plan to the local journal:
    `python3 script/trading_copilot.py extract-report-signals --session pre-market --date <DATE> --require-validation --append`.
-7. Incrementally add focus symbols to Longbridge `今日关注`:
-   `python3 script/trading_copilot.py sync-longbridge-watchlist --session pre-market --date <DATE> --group-name 今日关注 --sync-mode add --require-validation --execute --no-create`.
-8. If read-only account context is enabled, run:
+7. If read-only account context is enabled, run:
    `python3 script/trading_copilot.py account-snapshot --date <DATE>`
    then `python3 script/trading_copilot.py position-review --date <DATE> --append`.
+8. Build the Feishu execution summary:
+   `python3 script/trading_copilot.py feishu-summary --session pre-market --date <DATE>`.
+9. Incrementally add focus symbols to Longbridge `今日关注`:
+   `python3 script/trading_copilot.py sync-longbridge-watchlist --session pre-market --date <DATE> --group-name 今日关注 --sync-mode add --require-validation --execute --no-create`.
 
 ### Post-Market Review
 
@@ -76,14 +78,16 @@ Every workflow run should return or report the same status fields:
    `python3 script/trading_copilot.py backfill-signal-outcomes --date <DATE> --append`.
 7. Append the focused observation plan to the local journal:
    `python3 script/trading_copilot.py extract-report-signals --session post-market --date <DATE> --require-validation --append`.
-8. Generate the plan review and candidate learning lessons:
-   `python3 script/trading_copilot.py plan-review --date <DATE> --append-lessons`.
-9. Generate the daily self-review:
-   `python3 script/trading_copilot.py daily-self-review --date <DATE> --append`.
-10. If read-only account context is enabled, run:
+8. If read-only account context is enabled, run:
    `python3 script/trading_copilot.py account-snapshot --date <DATE>`
    then `python3 script/trading_copilot.py position-review --date <DATE> --append`.
-11. Fully replace Longbridge `今日关注` from the post-market focus list:
+9. Generate the plan review and candidate learning lessons:
+   `python3 script/trading_copilot.py plan-review --date <DATE> --append-lessons`.
+10. Generate the daily self-review:
+   `python3 script/trading_copilot.py daily-self-review --date <DATE> --append`.
+11. Build the Feishu execution summary:
+   `python3 script/trading_copilot.py feishu-summary --session post-market --date <DATE>`.
+12. Fully replace Longbridge `今日关注` from the post-market focus list:
    `python3 script/trading_copilot.py sync-longbridge-watchlist --session post-market --date <DATE> --group-name 今日关注 --sync-mode replace --require-validation --execute --no-create`.
 
 `--require-validation` runs both `validate-report` and `validate-trade-plan`; if either fails, stop before journal append or Longbridge sync.

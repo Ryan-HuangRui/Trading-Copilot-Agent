@@ -140,6 +140,8 @@ class WorkflowSmokeTest(unittest.TestCase):
             self.assertIn("position-review", payload["steps"])
             self.assertTrue((root / "report" / "2026-05-26" / "self-review.md").exists())
             self.assertTrue((root / "report" / "2026-05-26" / "plan-review.md").exists())
+            self.assertTrue((root / "report" / "learning" / "pattern-review.md").exists())
+            self.assertTrue((root / "report" / "2026-05-26" / "feishu-summary.md").exists())
             self.assertTrue((root / "report" / "2026-05-26" / "position-review.json").exists())
             self.assertTrue((root / "report" / "weekly" / "2026-W22.md").exists())
 

@@ -51,7 +51,9 @@ Update the configured cc connect prompts so they require the new artifacts and g
 - Both workflows must run `validate-report` and `validate-trade-plan` before journal append or Longbridge sync.
 - Any `extract-report-signals --require-validation` failure must stop journal append.
 - Any `sync-longbridge-watchlist --require-validation` failure must stop watchlist sync.
+- Post-market must run account/position review before `plan-review --append-lessons` when account context is enabled, so plan review can include position discipline.
 - Post-market must include `learning-review --lookback-days 20` after `plan-review --append-lessons`.
+- Both workflows should generate `feishu-summary.md` through `feishu-summary` and send that summary body instead of dumping the full Markdown report.
 - `promote-lesson --apply` must not be scheduled automatically; run it only after human approval of a specific `pattern_id`.
 
 ### 3. Update Failure Policy
@@ -172,6 +174,7 @@ python3 script/trading_copilot.py validate-trade-plan --session pre-market --dat
 python3 script/trading_copilot.py extract-report-signals --session pre-market --date <DATE> --require-validation --append
 python3 script/trading_copilot.py account-snapshot --date <DATE>
 python3 script/trading_copilot.py position-review --date <DATE> --config config/position_review.json --append
+python3 script/trading_copilot.py feishu-summary --session pre-market --date <DATE>
 ```
 
 `extract-report-signals --require-validation` runs both `validate-report` and `validate-trade-plan`; if either gate fails, do not append journal records or continue to Longbridge sync. `sync-longbridge-watchlist --require-validation` repeats both gates before any watchlist update.
@@ -198,11 +201,12 @@ python3 script/trading_copilot.py validate-report --session post-market --date <
 python3 script/trading_copilot.py validate-trade-plan --session post-market --date <DATE>
 python3 script/trading_copilot.py backfill-signal-outcomes --date <DATE> --append
 python3 script/trading_copilot.py extract-report-signals --session post-market --date <DATE> --require-validation --append
-python3 script/trading_copilot.py plan-review --date <DATE> --append-lessons
-python3 script/trading_copilot.py learning-review --lookback-days 20
 python3 script/trading_copilot.py account-snapshot --date <DATE>
 python3 script/trading_copilot.py position-review --date <DATE> --config config/position_review.json --append
+python3 script/trading_copilot.py plan-review --date <DATE> --append-lessons
+python3 script/trading_copilot.py learning-review --lookback-days 20
 python3 script/trading_copilot.py daily-self-review --date <DATE> --append
+python3 script/trading_copilot.py feishu-summary --session post-market --date <DATE>
 ```
 
 ### Task C: Weekly Review
@@ -243,6 +247,7 @@ The final Feishu message should be a concise summary with artifact paths:
 - journal append counts
 - position review count and human-review count, if account snapshot was enabled
 - self-review or weekly-review summary
+- plan-review position discipline summary and learning-review candidate count, when available
 - data limitations, if `stale_data=true` or any fetch errors exist
 
 The full Markdown reports should remain in `report/<DATE>/` or `report/weekly/` and can be attached or linked by the cc connect integration.

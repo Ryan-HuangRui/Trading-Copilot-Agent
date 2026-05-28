@@ -61,16 +61,18 @@ Run the post-market workflow for this repository.
    If this fails, send or log a short status note, but do not treat it as a report-quality failure.
 10. Append the focused post-market observation plan to the local journal:
    python3 script/trading_copilot.py extract-report-signals --session post-market --date <SNAPSHOT_DATE> --require-validation --append
-11. Run plan-review and append candidate lessons:
-   python3 script/trading_copilot.py plan-review --date <SNAPSHOT_DATE> --append-lessons
-12. Aggregate repeated lessons into pattern candidates:
-   python3 script/trading_copilot.py learning-review --lookback-days 20
-13. Optionally run read-only account and position review:
+11. Optionally run read-only account and position review:
    python3 script/trading_copilot.py account-snapshot --date <SNAPSHOT_DATE>
    python3 script/trading_copilot.py position-review --date <SNAPSHOT_DATE> --append
+12. Run plan-review and append candidate lessons:
+   python3 script/trading_copilot.py plan-review --date <SNAPSHOT_DATE> --append-lessons
+13. Aggregate repeated lessons into pattern candidates:
+   python3 script/trading_copilot.py learning-review --lookback-days 20
 14. Run daily self-review:
    python3 script/trading_copilot.py daily-self-review --date <SNAPSHOT_DATE> --append
-15. Update the Longbridge watchlist group `今日关注` as a full replacement from the post-market focus list:
+15. Build the Feishu summary:
+   python3 script/trading_copilot.py feishu-summary --session post-market --date <SNAPSHOT_DATE>
+16. Update the Longbridge watchlist group `今日关注` as a full replacement from the post-market focus list:
    python3 script/trading_copilot.py sync-longbridge-watchlist --session post-market --date <SNAPSHOT_DATE> --group-name 今日关注 --sync-mode replace --require-validation --execute --no-create
 
 Keep output in simplified Chinese. Treat S&P 500 dynamic candidates as an observation universe only, not investment advice.
@@ -110,7 +112,9 @@ Run the pre-market workflow for this repository.
 9. Optionally run read-only account and position review:
    python3 script/trading_copilot.py account-snapshot --date <PRE_MARKET_DATE>
    python3 script/trading_copilot.py position-review --date <PRE_MARKET_DATE> --append
-10. Incrementally add the pre-market focus symbols to the Longbridge watchlist group `今日关注`:
+10. Build the Feishu summary:
+   python3 script/trading_copilot.py feishu-summary --session pre-market --date <PRE_MARKET_DATE>
+11. Incrementally add the pre-market focus symbols to the Longbridge watchlist group `今日关注`:
    python3 script/trading_copilot.py sync-longbridge-watchlist --session pre-market --date <PRE_MARKET_DATE> --group-name 今日关注 --sync-mode add --require-validation --execute --no-create
 
 Keep output in simplified Chinese. The merged universe may include fixed watchlist symbols and S&P 500 dynamic candidates, but every executable candidate must still pass refined setup rules.

@@ -8,7 +8,9 @@ from pathlib import Path
 import daily_self_review
 import extract_monitor_signals
 import extract_report_signals
+import feishu_summary
 import journal_review
+import learning_review
 import longbridge_account_snapshot
 import plan_review
 import position_review
@@ -113,6 +115,29 @@ def run(args: argparse.Namespace) -> dict:
         learning_dir=args.learning_dir,
     )
     steps["plan-review"] = plan_review.run(plan_args)
+
+    learning_args = argparse.Namespace(
+        repo_root=str(repo_root),
+        lookback_days=20,
+        min_count=3,
+        end_date=args.date,
+        output=None,
+        learning_dir=args.learning_dir,
+        journal_dir=args.journal_dir,
+    )
+    steps["learning-review"] = learning_review.run(learning_args)
+
+    feishu_args = argparse.Namespace(
+        repo_root=str(repo_root),
+        date=args.date,
+        session=args.session,
+        signals=None,
+        position_review=None,
+        plan_review=None,
+        output=None,
+        learning_dir=args.learning_dir,
+    )
+    steps["feishu-summary"] = feishu_summary.run(feishu_args)
 
     weekly_args = argparse.Namespace(
         repo_root=str(repo_root),

@@ -258,6 +258,7 @@ Inputs:
 - `runtime/journal/signals.jsonl`
 - `runtime/journal/outcomes.jsonl`
 - Optional `runtime/journal/trades.jsonl`
+- Optional `runtime/journal/position_reviews.jsonl`
 
 Outputs:
 
@@ -269,6 +270,7 @@ Required behavior:
 
 - Review the plan, not broad market commentary.
 - Separate plan quality, price touch outcome, and real execution.
+- Include position discipline when position reviews exist: planned symbols without trade records, positions outside the plan, missing trade links, missing `source_signal_id`, and positions near invalidation without complete trade linkage.
 - Lessons are candidate process improvements only; they must not mutate `knowledge/refined/`.
 
 ## learning-review
@@ -284,6 +286,9 @@ python3 script/trading_copilot.py learning-review --lookback-days 20 --min-count
 Inputs:
 
 - `runtime/learning/daily_lessons.jsonl`
+- `runtime/journal/outcomes.jsonl`
+- `runtime/journal/trades.jsonl`
+- `runtime/journal/position_reviews.jsonl`
 
 Outputs:
 
@@ -294,9 +299,38 @@ Outputs:
 Required behavior:
 
 - Group repeated lessons by problem, setup, and lesson type.
+- Enrich lesson evidence with matching outcome/trade context and synthesize position-discipline learning events from repeated position review records.
 - Only emit candidates that meet the repeat threshold.
 - Mark emitted candidates as `promotion_status=needs_human_review`.
 - Do not mutate `knowledge/refined/`.
+
+## feishu-summary
+
+Purpose: build a concise Feishu-ready execution panel from validated sidecars and review artifacts.
+
+Canonical command:
+
+```bash
+python3 script/trading_copilot.py feishu-summary --session pre-market --date <DATE>
+python3 script/trading_copilot.py feishu-summary --session post-market --date <DATE>
+```
+
+Inputs:
+
+- `report/<DATE>/pre-market-signals.json` or `report/<DATE>/post-market-signals.json`
+- Optional `report/<DATE>/position-review.json`
+- Optional `report/<DATE>/plan-review.json`
+- Optional `runtime/learning/daily_lessons.jsonl`
+
+Output:
+
+- `report/<DATE>/feishu-summary.md`
+
+Required behavior:
+
+- Show only a compact execution panel: conditional plans, watch candidates, `NO TRADE`, position review summary, plan review summary, and daily lessons.
+- Keep the full analysis in the Markdown report artifacts; Feishu content should stay summary-first.
+- Do not present conditional plans as deterministic buy/sell instructions.
 
 ## promote-lesson
 
