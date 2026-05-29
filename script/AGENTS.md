@@ -12,6 +12,7 @@
 - `longbridge_cli_adapter.py`: read-only Longbridge CLI guard. Do not add order/write commands.
 - `longbridge_account_snapshot.py`: read-only account/position snapshot writer under `runtime/account/`.
 - `longbridge_paper_trade_adapter.py`: Longbridge paper-account guard and read-only paper order/execution fetcher.
+- `longbridge_paper_order_adapter.py`: gated Longbridge paper order writer. It must remain paper-only and currently supports only limit buy submission through explicit execute/env gates.
 - `paper_account_snapshot.py`: read-only paper account, order, and execution snapshot writer under `runtime/paper/`.
 - `paper_order_models.py`: stable paper intent/order record builders and idempotency keys.
 - `paper_risk_guard.py`: deterministic execution-safety checks for paper order intents.

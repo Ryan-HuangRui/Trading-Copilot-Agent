@@ -83,6 +83,13 @@ Execution gates:
 - `--execute` is required for broker submission.
 - `TRADING_COPILOT_PAPER_EXECUTION=enabled` is required for broker submission.
 
+Adapter boundary:
+
+- `longbridge_paper_trade_adapter.py` remains read-only.
+- `longbridge_paper_order_adapter.py` is the only paper broker-write adapter.
+- The first adapter write capability is limited to `long buy` `LO` entry orders.
+- Cancel, replace, stop, take-profit, OCO, market orders, short selling, and real-money orders remain out of scope for Milestone 1.
+
 Idempotency:
 
 - Every order intent must have a stable `intent_id`.

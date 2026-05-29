@@ -1,0 +1,119 @@
+import json
+import sys
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "script"))
+
+from longbridge_paper_order_adapter import LongbridgePaperOrderAdapter
+from paper_order_models import build_order_intent
+
+
+def order_intent() -> dict:
+    return build_order_intent(
+        date="2026-05-26",
+        session="pre-market",
+        preview={
+            "signal_id": "sig-1",
+            "symbol": "MU",
+            "longbridge_symbol": "MU.US",
+            "setup": "breakout_pullback_continuation.md",
+            "side": "buy",
+            "status": "ready",
+            "quantity": 200,
+            "entry_price": 100,
+            "stop_price": 95,
+            "take_profit": 112,
+            "risk_per_share": 5,
+            "max_account_risk_pct": 1,
+            "estimated_account_risk": 1000,
+            "estimated_notional": 20000,
+            "order_type": "LO",
+            "tif": "day",
+        },
+    )
+
+
+class LongbridgePaperOrderAdapterTest(unittest.TestCase):
+    def test_submit_requires_execute_flag(self):
+        adapter = LongbridgePaperOrderAdapter(cli="/bin/longbridge")
+
+        with self.assertRaises(PermissionError):
+            adapter.submit_limit_order(order_intent(), execute=False, env={"TRADING_COPILOT_PAPER_EXECUTION": "enabled"})
+
+    def test_submit_requires_env_flag(self):
+        adapter = LongbridgePaperOrderAdapter(cli="/bin/longbridge")
+
+        with self.assertRaises(PermissionError):
+            adapter.submit_limit_order(order_intent(), execute=True, env={})
+
+    def test_submit_rejects_non_paper_account(self):
+        adapter = LongbridgePaperOrderAdapter(cli="/bin/longbridge")
+
+        with patch.object(adapter, "run_json", return_value={"account": {"account_channel": "live"}, "token": {"status": "valid"}}):
+            with self.assertRaises(ValueError):
+                adapter.submit_limit_order(
+                    order_intent(),
+                    execute=True,
+                    env={"TRADING_COPILOT_PAPER_EXECUTION": "enabled"},
+                )
+
+    def test_submit_limit_order_builds_safe_command_and_records_raw_response(self):
+        adapter = LongbridgePaperOrderAdapter(cli="/bin/longbridge")
+        calls = []
+
+        def fake_run(args):
+            calls.append(args)
+            if args[:2] == ["auth", "status"]:
+                return {"account": {"account_channel": "lb_papertrading"}, "token": {"status": "valid"}}
+            if args[:2] == ["order", "buy"]:
+                return {"order_id": "order-1", "status": "submitted"}
+            raise AssertionError(args)
+
+        with patch.object(adapter, "run_json", side_effect=fake_run):
+            result = adapter.submit_limit_order(
+                order_intent(),
+                execute=True,
+                env={"TRADING_COPILOT_PAPER_EXECUTION": "enabled"},
+            )
+
+        self.assertEqual(result["broker_order_id"], "order-1")
+        self.assertEqual(result["raw_response"], {"order_id": "order-1", "status": "submitted"})
+        self.assertEqual(
+            calls[1],
+            [
+                "order",
+                "buy",
+                "MU.US",
+                "200",
+                "--price",
+                "100",
+                "--order-type",
+                "LO",
+                "--tif",
+                "day",
+                "--remark",
+                result["raw_request"]["remark"],
+                "--format",
+                "json",
+                "-y",
+            ],
+        )
+
+    def test_submit_rejects_unsupported_order_shape(self):
+        adapter = LongbridgePaperOrderAdapter(cli="/bin/longbridge")
+        intent = {**order_intent(), "side": "sell"}
+
+        with self.assertRaises(ValueError):
+            adapter.submit_limit_order(
+                intent,
+                execute=True,
+                env={"TRADING_COPILOT_PAPER_EXECUTION": "enabled"},
+            )
+
+
+if __name__ == "__main__":
+    unittest.main()
