@@ -104,6 +104,12 @@ TRADING_COPILOT_PAPER_EXECUTION=enabled \
 python3 script/trading_copilot.py paper-take-profit-plan --date <DATE> --execute
 ```
 
+Build a dry-run break-even stop movement plan after TP1 fill evidence exists:
+
+```bash
+python3 script/trading_copilot.py paper-break-even-stop-plan --date <DATE>
+```
+
 Review observed paper executions against the preview and append matched paper fills:
 
 ```bash
@@ -140,6 +146,7 @@ Paper outputs:
 - `runtime/paper/<DATE>/paper-stop-orders.jsonl` when `paper-protective-stop-plan --execute` succeeds
 - `report/<DATE>/paper-take-profit-plan.json`
 - `runtime/paper/<DATE>/paper-take-profit-orders.jsonl` when `paper-take-profit-plan --execute` succeeds
+- `report/<DATE>/paper-break-even-stop-plan.json`
 - `report/<DATE>/paper-trade-review.json`
 - matched paper fills in `runtime/journal/trades.jsonl` when `paper-trade-review --append` is used
 

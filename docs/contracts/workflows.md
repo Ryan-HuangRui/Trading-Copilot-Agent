@@ -653,6 +653,34 @@ Required behavior:
 - The artifact must separate `take_profit_candidates`, `blocked`, `submitted`, and `errors`.
 - Successful TP1 records must preserve `intent_id`, `entry_broker_order_id`, `broker_order_id`, `remark`, `raw_request`, `raw_response`, `exit_fraction`, and `submitted_at`.
 
+## paper-break-even-stop-plan
+
+Purpose: build a dry-run plan to move an existing protective stop to break-even after TP1 fill evidence exists.
+
+Canonical command:
+
+```bash
+python3 script/trading_copilot.py paper-break-even-stop-plan --date <DATE>
+```
+
+Inputs:
+
+- `runtime/paper/<DATE>/paper-execution-state.json`.
+- `runtime/paper/<DATE>/paper-stop-orders.jsonl` when the state file does not already include a protective stop order id.
+
+Output:
+
+- `report/<DATE>/paper-break-even-stop-plan.json`
+
+Required behavior:
+
+- This workflow is dry-run only and must not cancel, replace, or submit broker orders.
+- Only fully filled long buy entries with TP1 fill evidence, a positive remaining quantity, an existing protective stop order id, and a break-even price may become move candidates.
+- TP1 fill evidence may come from `tp1_status=filled`, `take_profit_status=filled`, or positive `tp1_filled_quantity` / `take_profit_filled_quantity` in the execution state.
+- Break-even price is based on `avg_fill_price`, falling back to entry/limit price, with optional non-negative `--buffer-pct`.
+- Candidates must include the existing stop order id, remaining quantity, new trigger price, and preview steps for canceling the old stop and submitting a replacement `sell MIT`.
+- Because cancel/replace safety needs separate execution design, there is no `--execute` mode for this workflow.
+
 Required behavior for outcome backfill:
 
 - Pre-market signals target the same date as the signal.

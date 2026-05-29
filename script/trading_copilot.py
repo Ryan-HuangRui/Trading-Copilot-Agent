@@ -918,6 +918,38 @@ def run_paper_take_profit_plan(args: argparse.Namespace) -> None:
     emit(response)
 
 
+def run_paper_break_even_stop_plan(args: argparse.Namespace) -> None:
+    command = [
+        "script/paper_break_even_stop_plan.py",
+        "--date",
+        args.date,
+        "--repo-root",
+        args.repo_root,
+        "--buffer-pct",
+        str(args.buffer_pct),
+        "--tif",
+        args.tif,
+    ]
+    if args.state:
+        command.extend(["--state", args.state])
+    if args.stops_journal:
+        command.extend(["--stops-journal", args.stops_journal])
+    if args.output:
+        command.extend(["--output", args.output])
+
+    proc = run_child(command)
+    stdout = parse_json_output(proc.stdout)
+    if proc.returncode != 0:
+        emit(failed_response("paper-break-even-stop-plan", command, proc), 1)
+
+    response = base_response("paper-break-even-stop-plan", command, stdout)
+    response["date"] = (stdout or {}).get("date") or args.date
+    response["artifacts"] = [stdout["output"]] if stdout and stdout.get("output") else []
+    response["dry_run"] = (stdout or {}).get("dry_run")
+    response["summary"] = (stdout or {}).get("summary")
+    emit(response)
+
+
 def run_position_review(args: argparse.Namespace) -> None:
     command = [
         "script/position_review.py",
@@ -1288,6 +1320,16 @@ def build_parser() -> argparse.ArgumentParser:
     paper_tp.add_argument("--execute", action="store_true")
     paper_tp.add_argument("--repo-root", default=str(ROOT))
     paper_tp.set_defaults(func=run_paper_take_profit_plan)
+
+    paper_be = sub.add_parser("paper-break-even-stop-plan", help="Build a dry-run break-even stop movement plan")
+    paper_be.add_argument("--date", required=True)
+    paper_be.add_argument("--state")
+    paper_be.add_argument("--stops-journal")
+    paper_be.add_argument("--output")
+    paper_be.add_argument("--buffer-pct", type=float, default=0.0)
+    paper_be.add_argument("--tif", default="gtc")
+    paper_be.add_argument("--repo-root", default=str(ROOT))
+    paper_be.set_defaults(func=run_paper_break_even_stop_plan)
 
     position = sub.add_parser("position-review", help="Review read-only positions against structured signals")
     position.add_argument("--date", required=True)
