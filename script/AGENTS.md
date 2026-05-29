@@ -13,7 +13,10 @@
 - `longbridge_account_snapshot.py`: read-only account/position snapshot writer under `runtime/account/`.
 - `longbridge_paper_trade_adapter.py`: Longbridge paper-account guard and read-only paper order/execution fetcher.
 - `paper_account_snapshot.py`: read-only paper account, order, and execution snapshot writer under `runtime/paper/`.
+- `paper_order_models.py`: stable paper intent/order record builders and idempotency keys.
+- `paper_risk_guard.py`: deterministic execution-safety checks for paper order intents.
 - `paper_trade_preview.py`: converts validated Trade Plan Cards into dry-run paper order previews.
+- `paper_trade_submit.py`: prepares controlled dry-run paper submissions from previews and risk guard output.
 - `paper_trade_review.py`: compares dry-run previews with observed paper executions and can append matched paper fills to the journal.
 - `position_review.py`: compares read-only positions with a session-specific signal sidecar and writes review artifacts.
 - `data_quality.py`: checks daily snapshot data source/freshness, focused-symbol fallback, account price deltas, and abnormal moves.
@@ -41,6 +44,7 @@
 - Run read-only account snapshot: `python3 script/trading_copilot.py account-snapshot --date 2026-05-06`.
 - Run read-only paper account snapshot: `python3 script/trading_copilot.py paper-account-snapshot --date 2026-05-06`.
 - Build paper order previews: `python3 script/trading_copilot.py paper-trade-preview --date 2026-05-06 --session pre-market --require-validation`.
+- Prepare dry-run paper submissions: `python3 script/trading_copilot.py paper-trade-submit --date 2026-05-06 --session pre-market --require-validation`.
 - Review paper executions: `python3 script/trading_copilot.py paper-trade-review --date 2026-05-06 --session pre-market --append`.
 - Run position review: `python3 script/trading_copilot.py position-review --date 2026-05-06 --append`.
 - Run data quality review: `python3 script/trading_copilot.py data-quality --date 2026-05-06`.
@@ -63,7 +67,7 @@
 - Load `TWELVE_DATA_API_KEY` from `.env` or the process environment only for Twelve Data fallback; never hardcode or print secrets.
 - Preserve provider rate limits unless the data provider contract is intentionally changed. Longbridge uses `config/longbridge_rate_limit_state.json`; Twelve Data fallback uses `config/rate_limit_state.json`.
 - Keep output writes under ignored runtime paths (`raw_data/`, `report/`, `config/rate_limit_state.json`, `config/longbridge_rate_limit_state.json`) unless the task is metadata import.
-- Longbridge account workflows are read-only. Paper-trading workflows may inspect paper orders/executions and produce dry-run order previews, but must never submit, cancel, replace, or automatically adjust orders or positions.
+- Longbridge account workflows are read-only. Current paper-trading workflows may inspect paper orders/executions and produce dry-run order previews/submissions, but must not call broker write APIs until a dedicated paper order adapter and execution gate are implemented.
 - If adding a script that fetches market data, reuse `build_market_data_client()` so Longbridge remains primary and Twelve Data remains fallback.
 - S&P 500 universe fetches may use standard-library HTTP, but per-symbol market-data screening must still use the shared market-data provider stack.
 - For scheduled report scripts, support `--skip-non-trading-day` and use the market date in `America/New_York`.

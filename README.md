@@ -59,6 +59,7 @@ python3 script/trading_copilot.py extract-monitor-signals --append
 python3 script/trading_copilot.py account-snapshot --date <DATE>
 python3 script/trading_copilot.py paper-account-snapshot --date <DATE>
 python3 script/trading_copilot.py paper-trade-preview --date <DATE> --session pre-market --require-validation
+python3 script/trading_copilot.py paper-trade-submit --date <DATE> --session pre-market --require-validation
 python3 script/trading_copilot.py paper-trade-review --date <DATE> --session pre-market --append
 python3 script/trading_copilot.py position-review --date <DATE> --config config/position_review.json --append
 python3 script/workflow_smoke_test.py --date <DATE> --week <YYYY-Www>
@@ -71,6 +72,7 @@ python3 script/workflow_smoke_test.py --date <DATE> --week <YYYY-Www>
 - `docs/contracts/journal.md`
 - `docs/cc-connect-scheduler.md`
 - `docs/longbridge-account-setup.md`
+- `docs/paper-execution-roadmap.md`
 - `docs/workflows/`
 
 ## 每日报告流程
@@ -114,12 +116,13 @@ python3 script/workflow_smoke_test.py --date <DATE> --week <YYYY-Www>
   - 产物：`runtime/account/YYYY-MM-DD/account-snapshot.json`、`report/YYYY-MM-DD/position-review.md`、`report/YYYY-MM-DD/position-review.json`
   - 配置：`config/position_review.json`
   - 若 `runtime/journal/trades.jsonl` 里有 `source_signal_id`，持仓复核会关联原始 signal、交易记录和估算 R
-- 模拟盘接入只做快照、预览和复盘，不自动下单：
+- 模拟盘接入当前支持快照、订单预览、提交 dry-run 和复盘；真实 broker 写入仍未接入：
   - `python3 script/trading_copilot.py paper-account-snapshot --date YYYY-MM-DD`
   - `python3 script/trading_copilot.py paper-trade-preview --date YYYY-MM-DD --session pre-market --require-validation`
+  - `python3 script/trading_copilot.py paper-trade-submit --date YYYY-MM-DD --session pre-market --require-validation`
   - `python3 script/trading_copilot.py paper-trade-review --date YYYY-MM-DD --session pre-market --append`
-  - 产物：`runtime/paper/YYYY-MM-DD/paper-account-snapshot.json`、`report/YYYY-MM-DD/paper-trade-preview.json`、`report/YYYY-MM-DD/paper-trade-review.json`
-  - `paper-account-snapshot` 会校验 Longbridge 当前账户是 `lb_papertrading`；`paper-trade-preview` 只输出 dry-run 订单预览；`paper-trade-review` 只把已观察到的模拟成交回写 journal
+  - 产物：`runtime/paper/YYYY-MM-DD/paper-account-snapshot.json`、`report/YYYY-MM-DD/paper-trade-preview.json`、`report/YYYY-MM-DD/paper-trade-submission.json`、`report/YYYY-MM-DD/paper-trade-review.json`
+  - `paper-account-snapshot` 会校验 Longbridge 当前账户是 `lb_papertrading`；`paper-trade-preview` 输出 dry-run 订单预览；`paper-trade-submit` 执行模型和风控门但目前不调用 broker 写 API；`paper-trade-review` 只把已观察到的模拟成交回写 journal
 
 ## 实时盯盘
 - 支持多标的 5m 监控，默认只输出做多路径（可配置）

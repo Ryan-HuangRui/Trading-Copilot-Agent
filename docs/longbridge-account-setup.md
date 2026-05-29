@@ -45,6 +45,12 @@ Build dry-run paper order previews from validated Trade Plan Cards:
 python3 script/trading_copilot.py paper-trade-preview --date <DATE> --session pre-market --require-validation
 ```
 
+Prepare controlled paper submissions without calling broker write APIs:
+
+```bash
+python3 script/trading_copilot.py paper-trade-submit --date <DATE> --session pre-market --require-validation
+```
+
 Review observed paper executions against the preview and append matched paper fills:
 
 ```bash
@@ -73,6 +79,7 @@ Paper outputs:
 
 - `runtime/paper/<DATE>/paper-account-snapshot.json`
 - `report/<DATE>/paper-trade-preview.json`
+- `report/<DATE>/paper-trade-submission.json`
 - `report/<DATE>/paper-trade-review.json`
 - matched paper fills in `runtime/journal/trades.jsonl` when `paper-trade-review --append` is used
 

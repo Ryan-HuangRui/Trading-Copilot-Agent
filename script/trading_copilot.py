@@ -741,6 +741,48 @@ def run_paper_trade_review(args: argparse.Namespace) -> None:
     emit(response)
 
 
+def run_paper_trade_submit(args: argparse.Namespace) -> None:
+    command = [
+        "script/paper_trade_submit.py",
+        "--date",
+        args.date,
+        "--session",
+        args.session,
+        "--repo-root",
+        args.repo_root,
+        "--max-daily-risk-pct",
+        str(args.max_daily_risk_pct),
+        "--max-daily-orders",
+        str(args.max_daily_orders),
+    ]
+    if args.preview:
+        command.extend(["--preview", args.preview])
+    if args.account_snapshot:
+        command.extend(["--account-snapshot", args.account_snapshot])
+    if args.orders_journal:
+        command.extend(["--orders-journal", args.orders_journal])
+    if args.signals:
+        command.extend(["--signals", args.signals])
+    if args.output:
+        command.extend(["--output", args.output])
+    if args.require_validation:
+        command.append("--require-validation")
+    if args.execute:
+        command.append("--execute")
+
+    proc = run_child(command)
+    stdout = parse_json_output(proc.stdout)
+    if proc.returncode != 0:
+        emit(failed_response("paper-trade-submit", command, proc), 1)
+
+    response = base_response("paper-trade-submit", command, stdout)
+    response["date"] = (stdout or {}).get("date") or args.date
+    response["artifacts"] = [stdout["output"]] if stdout and stdout.get("output") else []
+    response["dry_run"] = (stdout or {}).get("dry_run")
+    response["summary"] = (stdout or {}).get("summary")
+    emit(response)
+
+
 def run_position_review(args: argparse.Namespace) -> None:
     command = [
         "script/position_review.py",
@@ -1052,6 +1094,21 @@ def build_parser() -> argparse.ArgumentParser:
     paper_review.add_argument("--journal-dir", default="runtime/journal")
     paper_review.add_argument("--repo-root", default=str(ROOT))
     paper_review.set_defaults(func=run_paper_trade_review)
+
+    paper_submit = sub.add_parser("paper-trade-submit", help="Prepare controlled paper order submissions")
+    paper_submit.add_argument("--date", required=True)
+    paper_submit.add_argument("--session", choices=["pre-market", "post-market"], required=True)
+    paper_submit.add_argument("--preview")
+    paper_submit.add_argument("--account-snapshot")
+    paper_submit.add_argument("--orders-journal")
+    paper_submit.add_argument("--signals")
+    paper_submit.add_argument("--output")
+    paper_submit.add_argument("--require-validation", action="store_true")
+    paper_submit.add_argument("--execute", action="store_true")
+    paper_submit.add_argument("--max-daily-risk-pct", type=float, default=3.0)
+    paper_submit.add_argument("--max-daily-orders", type=int, default=3)
+    paper_submit.add_argument("--repo-root", default=str(ROOT))
+    paper_submit.set_defaults(func=run_paper_trade_submit)
 
     position = sub.add_parser("position-review", help="Review read-only positions against structured signals")
     position.add_argument("--date", required=True)

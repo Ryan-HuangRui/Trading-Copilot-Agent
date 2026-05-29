@@ -6,7 +6,7 @@ All workflows must preserve the repository safety rules:
 
 - Never place real trades or call broker write APIs.
 - Read-only Longbridge account snapshots are allowed only through the account snapshot workflow; order placement, cancellation, replacement, and automatic position changes are prohibited.
-- Paper-trading workflows may read Longbridge paper-account orders/executions and generate dry-run order previews only; they must not submit, cancel, replace, or automatically adjust orders.
+- Paper-trading workflows may read Longbridge paper-account orders/executions and generate dry-run order preview/submission artifacts only; they must not submit, cancel, replace, or automatically adjust orders until a dedicated paper order adapter is implemented.
 - Do not output deterministic buy/sell instructions.
 - Use scenarios, triggers, invalidation, risk, and `NO TRADE`.
 - Use `knowledge/refined/` as the only rule source for trading conclusions.
@@ -391,6 +391,8 @@ Required behavior:
 
 Purpose: write a read-only Longbridge paper account snapshot for execution-readiness checks and later paper-trade review.
 
+Long-term paper execution milestones are tracked in `docs/paper-execution-roadmap.md`. This contract section only describes currently implemented workflows.
+
 Canonical command:
 
 ```bash
@@ -468,6 +470,36 @@ Required behavior:
 - Must not infer an execution when no paper fill is observed.
 - Must append only matched paper fills, keyed by `source_signal_id` and paper order id.
 - Must keep paper execution feedback separate from plan quality and refined trading rules.
+
+## paper-trade-submit
+
+Purpose: prepare controlled paper order submissions from validated dry-run order previews.
+
+Canonical command:
+
+```bash
+python3 script/trading_copilot.py paper-trade-submit --date <DATE> --session pre-market --require-validation
+```
+
+Inputs:
+
+- `report/<DATE>/paper-trade-preview.json`.
+- `runtime/paper/<DATE>/paper-account-snapshot.json`.
+- Optional `runtime/paper/<DATE>/paper-orders.jsonl` for duplicate detection.
+- `report/<DATE>/pre-market-signals.json` or `report/<DATE>/post-market-signals.json` when `--require-validation` is used.
+
+Output:
+
+- `report/<DATE>/paper-trade-submission.json`
+
+Required behavior:
+
+- Current implementation is dry-run only and must not call broker write APIs.
+- `--require-validation` must run `validate-trade-plan` for the session sidecar.
+- Only `status=ready` long buy limit order intents may pass the risk guard.
+- Account snapshot `account_channel` must be `lb_papertrading`.
+- Duplicate `intent_id` values already present in `paper-orders.jsonl` must be skipped.
+- The submission artifact must separate `ready`, `submitted`, `blocked`, `skipped_duplicates`, and `errors`.
 
 Required behavior for outcome backfill:
 
