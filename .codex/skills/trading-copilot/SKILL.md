@@ -126,8 +126,9 @@ Use `python3 script/trading_copilot.py learning-review --lookback-days 20` to ag
 1. Run `python3 script/trading_copilot.py paper-account-snapshot --date <DATE>` to write a read-only paper account, order, and execution snapshot.
 2. Run `python3 script/trading_copilot.py paper-trade-preview --date <DATE> --session pre-market --require-validation` to convert complete Trade Plan Cards into dry-run order previews.
 3. Run `python3 script/trading_copilot.py paper-trade-submit --date <DATE> --session pre-market --require-validation` to prepare a dry-run controlled submission artifact.
-4. Run `python3 script/trading_copilot.py paper-trade-review --date <DATE> --session pre-market --append` only after paper executions exist and should be recorded.
-5. Treat paper results as execution feedback. Do not promote paper P/L directly into `knowledge/refined/`.
+4. Only when the user explicitly wants simulated order submission, run `TRADING_COPILOT_PAPER_EXECUTION=enabled python3 script/trading_copilot.py paper-trade-submit --date <DATE> --session pre-market --require-validation --execute`.
+5. Run `python3 script/trading_copilot.py paper-trade-review --date <DATE> --session pre-market --append` only after paper executions exist and should be recorded.
+6. Treat paper results as execution feedback. Do not promote paper P/L directly into `knowledge/refined/`.
 
 ### Symbol Analysis
 

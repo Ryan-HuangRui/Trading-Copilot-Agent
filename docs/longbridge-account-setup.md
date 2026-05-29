@@ -1,6 +1,6 @@
 # Longbridge Account Snapshot Setup
 
-This runbook covers the read-only account snapshot, paper account snapshot, paper order preview/review, and position review workflows. These workflows support portfolio discipline and execution feedback only; they must not place, cancel, replace, modify, or submit orders.
+This runbook covers the read-only account snapshot, paper account snapshot, paper order preview/submit/review, and position review workflows. Production account workflows remain read-only. Paper submission is limited to guarded Longbridge paper-account entry orders.
 
 ## Safety Boundary
 
@@ -8,6 +8,7 @@ This runbook covers the read-only account snapshot, paper account snapshot, pape
 - Allowed operations are read-only account, assets, positions, portfolio, quote, and market lookups.
 - Order, cancel, replace, modify, trade, buy, sell, submit, and watchlist write tokens are rejected by the adapter.
 - `script/longbridge_paper_trade_adapter.py` is separate and only supports Longbridge paper accounts. It may read paper order and execution lists after verifying `account_channel=lb_papertrading`.
+- `script/longbridge_paper_order_adapter.py` is the only broker-write adapter. It requires `account_channel=lb_papertrading`, `--execute`, and `TRADING_COPILOT_PAPER_EXECUTION=enabled`, and currently supports only simulated limit buy entry orders.
 - Downstream scripts read `runtime/account/<DATE>/account-snapshot.json` instead of calling Longbridge directly.
 
 ## Longbridge CLI Commands
@@ -51,6 +52,13 @@ Prepare controlled paper submissions without calling broker write APIs:
 python3 script/trading_copilot.py paper-trade-submit --date <DATE> --session pre-market --require-validation
 ```
 
+Submit passing paper entry intents through the guarded paper adapter:
+
+```bash
+TRADING_COPILOT_PAPER_EXECUTION=enabled \
+python3 script/trading_copilot.py paper-trade-submit --date <DATE> --session pre-market --require-validation --execute
+```
+
 Review observed paper executions against the preview and append matched paper fills:
 
 ```bash
@@ -80,6 +88,7 @@ Paper outputs:
 - `runtime/paper/<DATE>/paper-account-snapshot.json`
 - `report/<DATE>/paper-trade-preview.json`
 - `report/<DATE>/paper-trade-submission.json`
+- `runtime/paper/<DATE>/paper-orders.jsonl` when `paper-trade-submit --execute` succeeds
 - `report/<DATE>/paper-trade-review.json`
 - matched paper fills in `runtime/journal/trades.jsonl` when `paper-trade-review --append` is used
 

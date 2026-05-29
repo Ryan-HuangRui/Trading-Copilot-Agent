@@ -47,6 +47,8 @@ Acceptance:
 
 Goal: automatically submit Longbridge paper entry limit buy orders from validated plans.
 
+Implementation status: order models, risk guard, dry-run submission, guarded Longbridge paper order adapter, and `paper-trade-submit --execute` integration are implemented. The next Milestone 1 hardening item is fixture smoke coverage for the paper submit chain.
+
 Scope:
 
 - Long only

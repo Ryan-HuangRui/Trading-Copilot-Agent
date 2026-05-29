@@ -765,6 +765,8 @@ def run_paper_trade_submit(args: argparse.Namespace) -> None:
         command.extend(["--signals", args.signals])
     if args.output:
         command.extend(["--output", args.output])
+    if args.longbridge_cli:
+        command.extend(["--longbridge-cli", args.longbridge_cli])
     if args.require_validation:
         command.append("--require-validation")
     if args.execute:
@@ -1103,6 +1105,7 @@ def build_parser() -> argparse.ArgumentParser:
     paper_submit.add_argument("--orders-journal")
     paper_submit.add_argument("--signals")
     paper_submit.add_argument("--output")
+    paper_submit.add_argument("--longbridge-cli")
     paper_submit.add_argument("--require-validation", action="store_true")
     paper_submit.add_argument("--execute", action="store_true")
     paper_submit.add_argument("--max-daily-risk-pct", type=float, default=3.0)

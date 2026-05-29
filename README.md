@@ -120,9 +120,10 @@ python3 script/workflow_smoke_test.py --date <DATE> --week <YYYY-Www>
   - `python3 script/trading_copilot.py paper-account-snapshot --date YYYY-MM-DD`
   - `python3 script/trading_copilot.py paper-trade-preview --date YYYY-MM-DD --session pre-market --require-validation`
   - `python3 script/trading_copilot.py paper-trade-submit --date YYYY-MM-DD --session pre-market --require-validation`
+  - `TRADING_COPILOT_PAPER_EXECUTION=enabled python3 script/trading_copilot.py paper-trade-submit --date YYYY-MM-DD --session pre-market --require-validation --execute`
   - `python3 script/trading_copilot.py paper-trade-review --date YYYY-MM-DD --session pre-market --append`
-  - 产物：`runtime/paper/YYYY-MM-DD/paper-account-snapshot.json`、`report/YYYY-MM-DD/paper-trade-preview.json`、`report/YYYY-MM-DD/paper-trade-submission.json`、`report/YYYY-MM-DD/paper-trade-review.json`
-  - `paper-account-snapshot` 会校验 Longbridge 当前账户是 `lb_papertrading`；`paper-trade-preview` 输出 dry-run 订单预览；`paper-trade-submit` 执行模型和风控门但目前不调用 broker 写 API；`paper-trade-review` 只把已观察到的模拟成交回写 journal
+  - 产物：`runtime/paper/YYYY-MM-DD/paper-account-snapshot.json`、`report/YYYY-MM-DD/paper-trade-preview.json`、`report/YYYY-MM-DD/paper-trade-submission.json`、`runtime/paper/YYYY-MM-DD/paper-orders.jsonl`、`report/YYYY-MM-DD/paper-trade-review.json`
+  - `paper-account-snapshot` 会校验 Longbridge 当前账户是 `lb_papertrading`；`paper-trade-preview` 输出 dry-run 订单预览；`paper-trade-submit` 默认 dry-run，只在 `--execute` 与 `TRADING_COPILOT_PAPER_EXECUTION=enabled` 同时满足后，通过独立 paper order adapter 提交模拟盘限价买入单；`paper-trade-review` 只把已观察到的模拟成交回写 journal
 
 ## 实时盯盘
 - 支持多标的 5m 监控，默认只输出做多路径（可配置）

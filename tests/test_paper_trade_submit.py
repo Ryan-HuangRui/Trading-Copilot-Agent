@@ -3,10 +3,15 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from argparse import Namespace
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "script"))
+
+import paper_trade_submit
 
 
 def write_json(path: Path, payload: dict) -> None:
@@ -42,6 +47,25 @@ def valid_preview() -> dict:
     }
 
 
+def second_valid_order() -> dict:
+    order = dict(valid_preview()["orders"][0])
+    order.update(
+        {
+            "signal_id": "sig-2",
+            "symbol": "AAPL",
+            "longbridge_symbol": "AAPL.US",
+            "quantity": 10,
+            "entry_price": 200,
+            "stop_price": 190,
+            "take_profit": 225,
+            "risk_per_share": 10,
+            "estimated_account_risk": 100,
+            "estimated_notional": 2000,
+        }
+    )
+    return order
+
+
 def paper_snapshot() -> dict:
     return {
         "date": "2026-05-26",
@@ -54,6 +78,25 @@ def paper_snapshot() -> dict:
 
 
 class PaperTradeSubmitTest(unittest.TestCase):
+    def args(self, root: Path, **overrides) -> Namespace:
+        values = {
+            "repo_root": str(root),
+            "date": "2026-05-26",
+            "session": "pre-market",
+            "preview": None,
+            "account_snapshot": None,
+            "orders_journal": None,
+            "signals": None,
+            "output": None,
+            "require_validation": False,
+            "execute": False,
+            "longbridge_cli": None,
+            "max_daily_risk_pct": 3.0,
+            "max_daily_orders": 3,
+        }
+        values.update(overrides)
+        return Namespace(**values)
+
     def run_submit(self, root: Path, *extra_args: str) -> subprocess.CompletedProcess:
         return subprocess.run(
             [
@@ -166,6 +209,92 @@ class PaperTradeSubmitTest(unittest.TestCase):
             payload = json.loads(proc.stdout)
             self.assertEqual(payload["workflow"], "paper-trade-submit")
             self.assertEqual(payload["summary"]["ready"], 1)
+
+    def test_execute_submits_ready_intent_and_writes_orders_jsonl(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.seed_inputs(root)
+            adapter = unittest.mock.Mock()
+            adapter.submit_limit_order.return_value = {
+                "broker": "longbridge",
+                "account_channel": "lb_papertrading",
+                "broker_order_id": "order-1",
+                "raw_request": {"command": ["order", "buy"], "remark": "tca:test"},
+                "raw_response": {"order_id": "order-1", "status": "submitted"},
+            }
+
+            with patch.object(paper_trade_submit, "LongbridgePaperOrderAdapter", return_value=adapter):
+                result = paper_trade_submit.run(self.args(root, execute=True))
+
+            self.assertFalse(result["dry_run"])
+            self.assertEqual(result["summary"]["submitted"], 1)
+            self.assertEqual(result["summary"]["ready"], 0)
+            adapter.submit_limit_order.assert_called_once()
+            called_intent = adapter.submit_limit_order.call_args.args[0]
+            self.assertEqual(called_intent["remark"], f"tca:{called_intent['intent_id']}")
+            self.assertEqual(adapter.submit_limit_order.call_args.kwargs["execute"], True)
+            orders_path = root / "runtime" / "paper" / "2026-05-26" / "paper-orders.jsonl"
+            records = [json.loads(line) for line in orders_path.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual(len(records), 1)
+            self.assertEqual(records[0]["broker_order_id"], "order-1")
+            self.assertFalse(records[0]["dry_run"])
+            self.assertEqual(records[0]["submit_status"], "submitted")
+            submission = json.loads((root / "report" / "2026-05-26" / "paper-trade-submission.json").read_text(encoding="utf-8"))
+            self.assertEqual(submission["submitted"][0]["broker_order_id"], "order-1")
+
+    def test_execute_skips_duplicate_without_calling_adapter(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.seed_inputs(root)
+            dry_run = paper_trade_submit.run(self.args(root))
+            submission = json.loads(Path(dry_run["output"]).read_text(encoding="utf-8"))
+            intent_id = submission["ready"][0]["intent"]["intent_id"]
+            orders_path = root / "runtime" / "paper" / "2026-05-26" / "paper-orders.jsonl"
+            orders_path.parent.mkdir(parents=True, exist_ok=True)
+            orders_path.write_text(json.dumps({"intent_id": intent_id, "submit_status": "submitted"}) + "\n", encoding="utf-8")
+
+            adapter = unittest.mock.Mock()
+            with patch.object(paper_trade_submit, "LongbridgePaperOrderAdapter", return_value=adapter):
+                result = paper_trade_submit.run(self.args(root, execute=True))
+
+            adapter.submit_limit_order.assert_not_called()
+            self.assertEqual(result["summary"]["skipped_duplicates"], 1)
+            self.assertEqual(result["summary"]["submitted"], 0)
+
+    def test_execute_records_error_and_continues_other_orders(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.seed_inputs(root)
+            preview = valid_preview()
+            preview["orders"].append(second_valid_order())
+            write_json(root / "report" / "2026-05-26" / "paper-trade-preview.json", preview)
+            adapter = unittest.mock.Mock()
+            adapter.submit_limit_order.side_effect = [
+                RuntimeError("broker rejected order"),
+                {
+                    "broker": "longbridge",
+                    "account_channel": "lb_papertrading",
+                    "broker_order_id": "order-2",
+                    "raw_request": {"command": ["order", "buy"]},
+                    "raw_response": {"order_id": "order-2", "status": "submitted"},
+                },
+            ]
+
+            with patch.object(paper_trade_submit, "LongbridgePaperOrderAdapter", return_value=adapter):
+                result = paper_trade_submit.run(self.args(root, execute=True))
+
+            self.assertEqual(result["summary"]["submitted"], 1)
+            self.assertEqual(result["summary"]["errors"], 1)
+            submission = json.loads(Path(result["output"]).read_text(encoding="utf-8"))
+            self.assertIn("broker rejected order", submission["errors"][0]["error"])
+            records = [
+                json.loads(line)
+                for line in (root / "runtime" / "paper" / "2026-05-26" / "paper-orders.jsonl")
+                .read_text(encoding="utf-8")
+                .splitlines()
+            ]
+            self.assertEqual(len(records), 1)
+            self.assertEqual(records[0]["broker_order_id"], "order-2")
 
 
 if __name__ == "__main__":

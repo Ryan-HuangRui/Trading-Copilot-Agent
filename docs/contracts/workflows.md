@@ -481,6 +481,13 @@ Canonical command:
 python3 script/trading_copilot.py paper-trade-submit --date <DATE> --session pre-market --require-validation
 ```
 
+Execute command:
+
+```bash
+TRADING_COPILOT_PAPER_EXECUTION=enabled \
+python3 script/trading_copilot.py paper-trade-submit --date <DATE> --session pre-market --require-validation --execute
+```
+
 Inputs:
 
 - `report/<DATE>/paper-trade-preview.json`.
@@ -491,15 +498,19 @@ Inputs:
 Output:
 
 - `report/<DATE>/paper-trade-submission.json`
+- `runtime/paper/<DATE>/paper-orders.jsonl` only when `--execute` successfully submits an order.
 
 Required behavior:
 
-- Current implementation is dry-run only and must not call broker write APIs.
+- Default behavior is dry-run and must not call broker write APIs.
+- Broker submission requires both `--execute` and `TRADING_COPILOT_PAPER_EXECUTION=enabled`.
+- Broker submission must use only `script/longbridge_paper_order_adapter.py`.
 - `--require-validation` must run `validate-trade-plan` for the session sidecar.
 - Only `status=ready` long buy limit order intents may pass the risk guard.
 - Account snapshot `account_channel` must be `lb_papertrading`.
 - Duplicate `intent_id` values already present in `paper-orders.jsonl` must be skipped.
 - The submission artifact must separate `ready`, `submitted`, `blocked`, `skipped_duplicates`, and `errors`.
+- Successful submit records must preserve `intent_id`, `broker_order_id`, `remark`, `raw_request`, `raw_response`, and `submitted_at`.
 
 Required behavior for outcome backfill:
 

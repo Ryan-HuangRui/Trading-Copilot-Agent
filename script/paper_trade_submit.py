@@ -7,7 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from paper_order_models import build_order_intent
+from longbridge_paper_order_adapter import LongbridgePaperOrderAdapter
+from paper_order_models import build_order_intent, paper_order_record
 from paper_risk_guard import RiskGuardConfig, evaluate_order_intent, load_submitted_intent_ids
 from signal_artifacts import read_json
 from validate_trade_plan import validate as validate_trade_plan
@@ -41,6 +42,12 @@ def default_orders_path(repo_root: Path, date: str, explicit_path: str | None) -
     return repo_root / "runtime" / "paper" / date / "paper-orders.jsonl"
 
 
+def append_jsonl(path: Path, record: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+
+
 def validation_result(repo_root: Path, date: str, session: str, signals: str | None) -> dict[str, Any]:
     args = argparse.Namespace(date=date, session=session, signals=signals, repo_root=str(repo_root))
     result = validate_trade_plan(args)
@@ -65,9 +72,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     submitted_intent_ids = load_submitted_intent_ids(orders_path)
     config = RiskGuardConfig(max_daily_risk_pct=args.max_daily_risk_pct, max_daily_orders=args.max_daily_orders)
     ready: list[dict[str, Any]] = []
+    submitted: list[dict[str, Any]] = []
     blocked: list[dict[str, Any]] = []
     skipped_duplicates: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
+    adapter: LongbridgePaperOrderAdapter | None = None
 
     for order in orders:
         if not isinstance(order, dict):
@@ -87,7 +96,28 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             config=config,
         )
         if result["passed"]:
-            ready.append({"intent": intent, "risk_guard": result})
+            if not args.execute:
+                ready.append({"intent": intent, "risk_guard": result})
+                continue
+            if adapter is None:
+                adapter = LongbridgePaperOrderAdapter(cli=args.longbridge_cli)
+            try:
+                submit_result = adapter.submit_limit_order(intent, execute=True)
+                record = paper_order_record(
+                    intent=intent,
+                    submit_status="submitted",
+                    broker_order_id=submit_result.get("broker_order_id"),
+                    raw_request=submit_result.get("raw_request") if isinstance(submit_result.get("raw_request"), dict) else {},
+                    raw_response=submit_result.get("raw_response") if isinstance(submit_result.get("raw_response"), dict) else {},
+                    dry_run=False,
+                )
+                if submit_result.get("account_channel"):
+                    record["account_channel"] = submit_result["account_channel"]
+                append_jsonl(orders_path, record)
+                submitted_intent_ids.add(intent["intent_id"])
+                submitted.append(record)
+            except Exception as exc:
+                errors.append({"intent": intent, "error": str(exc)})
         else:
             blocked.append({"intent": intent, "risk_guard": result})
 
@@ -102,19 +132,23 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "orders_journal": str(orders_path),
         "validation": validation,
         "ready": ready,
-        "submitted": [],
+        "submitted": submitted,
         "blocked": blocked,
         "skipped_duplicates": skipped_duplicates,
         "errors": errors,
         "summary": {
             "total": len(orders),
             "ready": len(ready),
-            "submitted": 0,
+            "submitted": len(submitted),
             "blocked": len(blocked),
             "skipped_duplicates": len(skipped_duplicates),
             "errors": len(errors),
         },
-        "safety_note": "Dry-run paper submission preview. This workflow does not call broker write APIs yet.",
+        "safety_note": (
+            "Dry-run only; no broker write APIs were called."
+            if not args.execute
+            else "Executed paper submissions through guarded Longbridge paper adapter."
+        ),
     }
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -131,7 +165,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--signals")
     parser.add_argument("--output")
     parser.add_argument("--require-validation", action="store_true")
-    parser.add_argument("--execute", action="store_true", help="Reserved for future broker execution; currently keeps dry-run output")
+    parser.add_argument("--execute", action="store_true", help="Submit passing intents through the guarded paper adapter")
+    parser.add_argument("--longbridge-cli")
     parser.add_argument("--max-daily-risk-pct", type=float, default=3.0)
     parser.add_argument("--max-daily-orders", type=int, default=3)
     parser.add_argument("--repo-root", default=str(Path(__file__).resolve().parents[1]))
