@@ -50,6 +50,19 @@ def stop_intent() -> dict:
     }
 
 
+def take_profit_intent() -> dict:
+    return {
+        "intent_id": "intent-1",
+        "longbridge_symbol": "MU.US",
+        "side": "sell",
+        "order_type": "LO",
+        "quantity": 100,
+        "limit_price": 112,
+        "tif": "gtc",
+        "remark": "tca-tp1:intent-1",
+    }
+
+
 class LongbridgePaperOrderAdapterTest(unittest.TestCase):
     def test_submit_requires_execute_flag(self):
         adapter = LongbridgePaperOrderAdapter(cli="/bin/longbridge")
@@ -230,6 +243,74 @@ class LongbridgePaperOrderAdapterTest(unittest.TestCase):
                 "gtc",
                 "--remark",
                 "tca-stop:intent-1",
+                "--format",
+                "json",
+                "-y",
+            ],
+        )
+
+    def test_take_profit_requires_execute_flag(self):
+        adapter = LongbridgePaperOrderAdapter(cli="/bin/longbridge")
+
+        with self.assertRaises(PermissionError):
+            adapter.submit_take_profit_order(
+                take_profit_intent(),
+                execute=False,
+                env={"TRADING_COPILOT_PAPER_EXECUTION": "enabled"},
+            )
+
+    def test_take_profit_requires_env_flag(self):
+        adapter = LongbridgePaperOrderAdapter(cli="/bin/longbridge")
+
+        with self.assertRaises(PermissionError):
+            adapter.submit_take_profit_order(take_profit_intent(), execute=True, env={})
+
+    def test_take_profit_rejects_unsupported_shape(self):
+        adapter = LongbridgePaperOrderAdapter(cli="/bin/longbridge")
+
+        with self.assertRaises(ValueError):
+            adapter.submit_take_profit_order(
+                {**take_profit_intent(), "order_type": "MIT"},
+                execute=True,
+                env={"TRADING_COPILOT_PAPER_EXECUTION": "enabled"},
+            )
+
+    def test_take_profit_builds_safe_command_and_records_raw_response(self):
+        adapter = LongbridgePaperOrderAdapter(cli="/bin/longbridge")
+        calls = []
+
+        def fake_run(args):
+            calls.append(args)
+            if args[:2] == ["auth", "status"]:
+                return {"account": {"account_channel": "lb_papertrading"}, "token": {"status": "valid"}}
+            if args[:2] == ["order", "sell"]:
+                return {"order_id": "tp-o-1", "status": "submitted"}
+            raise AssertionError(args)
+
+        with patch.object(adapter, "run_json", side_effect=fake_run):
+            result = adapter.submit_take_profit_order(
+                take_profit_intent(),
+                execute=True,
+                env={"TRADING_COPILOT_PAPER_EXECUTION": "enabled"},
+            )
+
+        self.assertEqual(result["broker_order_id"], "tp-o-1")
+        self.assertEqual(result["raw_response"], {"order_id": "tp-o-1", "status": "submitted"})
+        self.assertEqual(
+            calls[1],
+            [
+                "order",
+                "sell",
+                "MU.US",
+                "100",
+                "--price",
+                "112",
+                "--order-type",
+                "LO",
+                "--tif",
+                "gtc",
+                "--remark",
+                "tca-tp1:intent-1",
                 "--format",
                 "json",
                 "-y",

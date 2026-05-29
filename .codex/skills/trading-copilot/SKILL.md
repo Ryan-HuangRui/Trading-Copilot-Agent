@@ -1,6 +1,6 @@
 ---
 name: trading-copilot
-description: Use this repo-local skill for Trading-Copilot-Agent market research workflows, including pre-market planning, post-market review, symbol analysis, monitor brief generation, research notes, rule validation, and paper-trading readiness review. The skill prepares or reviews trading research artifacts only; it must not place trades, call broker write APIs, or output deterministic buy/sell instructions.
+description: Use this repo-local skill for Trading-Copilot-Agent market research workflows, including pre-market planning, post-market review, symbol analysis, monitor brief generation, research notes, rule validation, and paper-trading readiness review. The skill prepares or reviews trading research artifacts, and may run explicitly gated Longbridge paper-account workflows only when requested; it must not place real trades or output deterministic buy/sell instructions.
 ---
 
 # Trading Copilot
@@ -28,7 +28,7 @@ Every workflow run should return or report the same status fields:
 
 ## Safety Rules
 
-- Never place real trades, call broker write APIs, or imply order execution. Read-only account snapshots are allowed only through the repository's account snapshot workflow. Paper-trading workflows may read paper orders/executions and generate dry-run order previews/submission artifacts only.
+- Never place real trades or imply real-account order execution. Read-only account snapshots are allowed only through the repository's account snapshot workflow. Paper-trading broker writes are allowed only through dedicated paper workflows, only against `lb_papertrading`, and only when the user explicitly requests simulated execution with both `--execute` and `TRADING_COPILOT_PAPER_EXECUTION=enabled`.
 - Do not output deterministic buy/sell instructions. Use scenarios, triggers, invalidation, risk, and `NO TRADE`.
 - For current or recent symbol analysis, fetch real market data first through the repository scripts or state that no concrete price conclusion can be made.
 - Use `knowledge/refined/` as the rule source for trading conclusions.
@@ -132,8 +132,10 @@ Use `python3 script/trading_copilot.py learning-review --lookback-days 20` to ag
 7. Only when the user explicitly wants simulated cancellation, run `TRADING_COPILOT_PAPER_EXECUTION=enabled python3 script/trading_copilot.py paper-order-cancel --date <DATE> --execute`.
 8. Run `python3 script/trading_copilot.py paper-protective-stop-plan --date <DATE>` to prepare a dry-run protective stop plan for filled long entries.
 9. Only when the user explicitly wants simulated protective stop submission, run `TRADING_COPILOT_PAPER_EXECUTION=enabled python3 script/trading_copilot.py paper-protective-stop-plan --date <DATE> --execute`.
-10. Run `python3 script/trading_copilot.py paper-trade-review --date <DATE> --session pre-market --append` only after paper executions exist and should be recorded.
-11. Treat paper results as execution feedback. Do not promote paper P/L directly into `knowledge/refined/`.
+10. Run `python3 script/trading_copilot.py paper-take-profit-plan --date <DATE>` to prepare a dry-run TP1 partial-exit plan for filled long entries.
+11. Only when the user explicitly wants simulated TP1 submission, run `TRADING_COPILOT_PAPER_EXECUTION=enabled python3 script/trading_copilot.py paper-take-profit-plan --date <DATE> --execute`.
+12. Run `python3 script/trading_copilot.py paper-trade-review --date <DATE> --session pre-market --append` only after paper executions exist and should be recorded.
+13. Treat paper results as execution feedback. Do not promote paper P/L directly into `knowledge/refined/`.
 
 ### Symbol Analysis
 

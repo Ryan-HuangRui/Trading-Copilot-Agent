@@ -5,9 +5,9 @@ This repository is a trading research workflow package for Codex/Claude/OpenClaw
 All workflows must preserve the repository safety rules:
 
 - Never place real trades.
-- Read-only Longbridge account snapshots are allowed only through the account snapshot workflow; order placement, cancellation, replacement, and automatic position changes are prohibited.
+- Read-only Longbridge real-account snapshots are allowed only through the account snapshot workflow; real-account order placement, cancellation, replacement, and automatic position changes are prohibited.
 - Paper broker writes are allowed only through dedicated guarded paper adapters, only against `lb_papertrading`, and only for explicitly contracted operations.
-- Current paper write scope is limited to guarded entry limit-buy submission and guarded cancellation of expired unfilled entry orders. Paper replace/stop/take-profit actions remain dry-run planning only until separately implemented.
+- Current paper write scope is limited to guarded entry limit-buy submission, guarded cancellation of expired unfilled entry orders, guarded protective stop submission, and guarded TP1 partial-exit submission. Paper replace, break-even stop movement, trailing stops, OCO, market orders, short selling, and real-account writes remain out of scope.
 - Do not output deterministic buy/sell instructions.
 - Use scenarios, triggers, invalidation, risk, and `NO TRADE`.
 - Use `knowledge/refined/` as the only rule source for trading conclusions.
@@ -614,6 +614,44 @@ Required behavior:
 - Duplicate `intent_id` values already present in `paper-stop-orders.jsonl` must be blocked.
 - The artifact must separate `stop_candidates`, `blocked`, `submitted`, and `errors`.
 - Successful stop records must preserve `intent_id`, `entry_broker_order_id`, `broker_order_id`, `remark`, `raw_request`, `raw_response`, and `submitted_at`.
+
+## paper-take-profit-plan
+
+Purpose: build a TP1 partial-exit plan for filled long paper entries, and optionally submit those take-profit orders to the Longbridge paper account through the guarded paper adapter.
+
+Canonical command:
+
+```bash
+python3 script/trading_copilot.py paper-take-profit-plan --date <DATE>
+```
+
+Execution command:
+
+```bash
+TRADING_COPILOT_PAPER_EXECUTION=enabled \
+python3 script/trading_copilot.py paper-take-profit-plan --date <DATE> --execute
+```
+
+Inputs:
+
+- `runtime/paper/<DATE>/paper-execution-state.json`.
+- Optional `runtime/paper/<DATE>/paper-take-profit-orders.jsonl` for duplicate detection.
+
+Output:
+
+- `report/<DATE>/paper-take-profit-plan.json`
+- `runtime/paper/<DATE>/paper-take-profit-orders.jsonl` only when `--execute` successfully submits a TP1 order.
+
+Required behavior:
+
+- Default behavior is dry-run and must not call broker write APIs.
+- Broker TP1 submission requires both `--execute` and `TRADING_COPILOT_PAPER_EXECUTION=enabled`.
+- Broker TP1 submission must use only `script/longbridge_paper_order_adapter.py`.
+- Only fully filled long buy entries with positive `take_profit`, positive filled quantity, and no existing TP1/take-profit order may become TP1 candidates.
+- The first TP1 plan uses Longbridge `sell` `LO` with `--price <take_profit>`, `tif=gtc` by default, and a default `--exit-fraction 0.5`.
+- Duplicate `intent_id` values already present in `paper-take-profit-orders.jsonl` must be blocked.
+- The artifact must separate `take_profit_candidates`, `blocked`, `submitted`, and `errors`.
+- Successful TP1 records must preserve `intent_id`, `entry_broker_order_id`, `broker_order_id`, `remark`, `raw_request`, `raw_response`, `exit_fraction`, and `submitted_at`.
 
 Required behavior for outcome backfill:
 

@@ -91,6 +91,19 @@ TRADING_COPILOT_PAPER_EXECUTION=enabled \
 python3 script/trading_copilot.py paper-protective-stop-plan --date <DATE> --execute
 ```
 
+Build a dry-run TP1 partial-exit plan for filled long paper entries:
+
+```bash
+python3 script/trading_copilot.py paper-take-profit-plan --date <DATE>
+```
+
+Submit guarded paper TP1 partial exits for filled long entries:
+
+```bash
+TRADING_COPILOT_PAPER_EXECUTION=enabled \
+python3 script/trading_copilot.py paper-take-profit-plan --date <DATE> --execute
+```
+
 Review observed paper executions against the preview and append matched paper fills:
 
 ```bash
@@ -125,6 +138,8 @@ Paper outputs:
 - `report/<DATE>/paper-order-cancel-plan.json`
 - `report/<DATE>/paper-protective-stop-plan.json`
 - `runtime/paper/<DATE>/paper-stop-orders.jsonl` when `paper-protective-stop-plan --execute` succeeds
+- `report/<DATE>/paper-take-profit-plan.json`
+- `runtime/paper/<DATE>/paper-take-profit-orders.jsonl` when `paper-take-profit-plan --execute` succeeds
 - `report/<DATE>/paper-trade-review.json`
 - matched paper fills in `runtime/journal/trades.jsonl` when `paper-trade-review --append` is used
 

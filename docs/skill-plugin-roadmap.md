@@ -69,7 +69,7 @@ Goal: evaluate ideas without turning this repository into an execution engine.
 
 Candidate adapters:
 
-- Longbridge paper-account snapshot, dry-run order preview, and paper execution review.
+- Longbridge paper-account snapshot, dry-run order preview, guarded paper execution actions, and paper execution review.
 - Lightweight local paper ledger.
 - Lean export for serious multi-asset backtests.
 - freqtrade adapter only if crypto execution/backtest becomes relevant.
