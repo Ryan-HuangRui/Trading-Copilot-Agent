@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from longbridge_paper_order_adapter import LongbridgePaperOrderAdapter
+from paper_execution_config import load_paper_execution_config
 from paper_order_models import build_order_intent, paper_order_record
 from paper_risk_guard import RiskGuardConfig, evaluate_order_intent, load_submitted_intent_ids
 from signal_artifacts import read_json
@@ -62,6 +63,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     account_path = default_account_snapshot_path(repo_root, args.date, args.account_snapshot)
     output = default_output_path(repo_root, args.date, args.output)
     orders_path = default_orders_path(repo_root, args.date, args.orders_journal)
+    paper_execution_config, paper_execution_config_path = load_paper_execution_config(
+        repo_root,
+        getattr(args, "paper_execution_config", None),
+    )
     validation = validation_result(repo_root, args.date, args.session, args.signals) if args.require_validation else None
     preview = read_json(preview_path)
     account_snapshot = read_json(account_path)
@@ -100,7 +105,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 ready.append({"intent": intent, "risk_guard": result})
                 continue
             if adapter is None:
-                adapter = LongbridgePaperOrderAdapter(cli=args.longbridge_cli)
+                adapter = LongbridgePaperOrderAdapter(
+                    cli=args.longbridge_cli,
+                    paper_execution_config=paper_execution_config,
+                )
             try:
                 submit_result = adapter.submit_limit_order(intent, execute=True)
                 record = paper_order_record(
@@ -130,6 +138,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "source_preview": str(preview_path),
         "source_account_snapshot": str(account_path),
         "orders_journal": str(orders_path),
+        "paper_execution_config": str(paper_execution_config_path),
         "validation": validation,
         "ready": ready,
         "submitted": submitted,
@@ -167,6 +176,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--require-validation", action="store_true")
     parser.add_argument("--execute", action="store_true", help="Submit passing intents through the guarded paper adapter")
     parser.add_argument("--longbridge-cli")
+    parser.add_argument("--paper-execution-config")
     parser.add_argument("--max-daily-risk-pct", type=float, default=3.0)
     parser.add_argument("--max-daily-orders", type=int, default=3)
     parser.add_argument("--repo-root", default=str(Path(__file__).resolve().parents[1]))

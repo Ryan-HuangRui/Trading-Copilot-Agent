@@ -769,6 +769,8 @@ def run_paper_trade_submit(args: argparse.Namespace) -> None:
         command.extend(["--output", args.output])
     if args.longbridge_cli:
         command.extend(["--longbridge-cli", args.longbridge_cli])
+    if args.paper_execution_config:
+        command.extend(["--paper-execution-config", args.paper_execution_config])
     if args.require_validation:
         command.append("--require-validation")
     if args.execute:
@@ -966,6 +968,8 @@ def run_paper_order_cancel(args: argparse.Namespace) -> None:
         command.extend(["--now", args.now])
     if args.longbridge_cli:
         command.extend(["--longbridge-cli", args.longbridge_cli])
+    if args.paper_execution_config:
+        command.extend(["--paper-execution-config", args.paper_execution_config])
     if args.execute:
         command.append("--execute")
 
@@ -1000,6 +1004,8 @@ def run_paper_protective_stop_plan(args: argparse.Namespace) -> None:
         command.extend(["--stops-journal", args.stops_journal])
     if args.longbridge_cli:
         command.extend(["--longbridge-cli", args.longbridge_cli])
+    if args.paper_execution_config:
+        command.extend(["--paper-execution-config", args.paper_execution_config])
     if args.execute:
         command.append("--execute")
 
@@ -1036,6 +1042,8 @@ def run_paper_take_profit_plan(args: argparse.Namespace) -> None:
         command.extend(["--take-profit-journal", args.take_profit_journal])
     if args.longbridge_cli:
         command.extend(["--longbridge-cli", args.longbridge_cli])
+    if args.paper_execution_config:
+        command.extend(["--paper-execution-config", args.paper_execution_config])
     if args.execute:
         command.append("--execute")
 
@@ -1410,6 +1418,7 @@ def build_parser() -> argparse.ArgumentParser:
     paper_submit.add_argument("--execute", action="store_true")
     paper_submit.add_argument("--max-daily-risk-pct", type=float, default=3.0)
     paper_submit.add_argument("--max-daily-orders", type=int, default=3)
+    paper_submit.add_argument("--paper-execution-config")
     paper_submit.add_argument("--repo-root", default=str(ROOT))
     paper_submit.set_defaults(func=run_paper_trade_submit)
 
@@ -1467,6 +1476,7 @@ def build_parser() -> argparse.ArgumentParser:
     paper_cancel.add_argument("--now")
     paper_cancel.add_argument("--longbridge-cli")
     paper_cancel.add_argument("--execute", action="store_true")
+    paper_cancel.add_argument("--paper-execution-config")
     paper_cancel.add_argument("--repo-root", default=str(ROOT))
     paper_cancel.set_defaults(func=run_paper_order_cancel)
 
@@ -1478,6 +1488,7 @@ def build_parser() -> argparse.ArgumentParser:
     paper_stop.add_argument("--tif", default="gtc")
     paper_stop.add_argument("--longbridge-cli")
     paper_stop.add_argument("--execute", action="store_true")
+    paper_stop.add_argument("--paper-execution-config")
     paper_stop.add_argument("--repo-root", default=str(ROOT))
     paper_stop.set_defaults(func=run_paper_protective_stop_plan)
 
@@ -1490,6 +1501,7 @@ def build_parser() -> argparse.ArgumentParser:
     paper_tp.add_argument("--tif", default="gtc")
     paper_tp.add_argument("--longbridge-cli")
     paper_tp.add_argument("--execute", action="store_true")
+    paper_tp.add_argument("--paper-execution-config")
     paper_tp.add_argument("--repo-root", default=str(ROOT))
     paper_tp.set_defaults(func=run_paper_take_profit_plan)
 

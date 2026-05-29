@@ -83,7 +83,7 @@ Execution gates:
 - `paper-risk-guard` must pass.
 - `account_channel` must be `lb_papertrading`.
 - `--execute` is required for broker submission.
-- `TRADING_COPILOT_PAPER_EXECUTION=enabled` is required for broker submission.
+- `config/paper_execution.json` must enable `paper_execution.broker_writes_enabled=true` and the relevant action gate for broker submission.
 
 Adapter boundary:
 
@@ -145,9 +145,9 @@ Recommended sequence:
 3. Add TP1 partial exits.
 4. Add break-even stop movement or trailing logic only after basic exits are stable.
 
-Implementation status: `paper-order-cancel` now generates a dry-run cancel plan for expired unfilled entry orders and can execute those cancels through the guarded paper adapter when `--execute` and `TRADING_COPILOT_PAPER_EXECUTION=enabled` are both set. `paper-protective-stop-plan` now generates a `sell MIT --trigger-price <stop>` plan for filled long entries and can submit those protective stops through the guarded paper adapter under the same execution gates. `paper-take-profit-plan` now generates a default 50% TP1 partial-exit `sell LO --price <tp1>` plan for filled long entries and can submit those take-profit orders through the guarded paper adapter under the same execution gates. `paper-break-even-stop-plan` now generates a dry-run-only plan to move existing protective stops to break-even after TP1 fill evidence exists; it does not execute cancel/replace.
+Implementation status: `paper-order-cancel` now generates a dry-run cancel plan for expired unfilled entry orders and can execute those cancels through the guarded paper adapter when `--execute` and the cancel gate in `config/paper_execution.json` are both enabled. `paper-protective-stop-plan` now generates a `sell MIT --trigger-price <stop>` plan for filled long entries and can submit those protective stops through the guarded paper adapter under the same config-driven execution gates. `paper-take-profit-plan` now generates a default 50% TP1 partial-exit `sell LO --price <tp1>` plan for filled long entries and can submit those take-profit orders through the guarded paper adapter under the same config-driven execution gates. `paper-break-even-stop-plan` now generates a dry-run-only plan to move existing protective stops to break-even after TP1 fill evidence exists; it does not execute cancel/replace.
 
-All exit actions must use the same paper-account, env flag, execute flag, idempotency, and audit-log gates as entry submission.
+All exit actions must use the same paper-account, config gate, execute flag, idempotency, and audit-log gates as entry submission.
 
 ## Milestone 4: Unified Trading Event Ledger
 

@@ -8,7 +8,7 @@ This runbook covers the read-only account snapshot, paper account snapshot, pape
 - Allowed operations are read-only account, assets, positions, portfolio, quote, and market lookups.
 - Order, cancel, replace, modify, trade, buy, sell, submit, and watchlist write tokens are rejected by the adapter.
 - `script/longbridge_paper_trade_adapter.py` is separate and only supports Longbridge paper accounts. It may read paper order and execution lists after verifying `account_channel=lb_papertrading`.
-- `script/longbridge_paper_order_adapter.py` is the only broker-write adapter. It requires `account_channel=lb_papertrading`, `--execute`, and `TRADING_COPILOT_PAPER_EXECUTION=enabled`, and currently supports simulated limit buy entry orders, expired unfilled entry-order cancellation, and protective stop submission.
+- `script/longbridge_paper_order_adapter.py` is the only broker-write adapter. It requires `account_channel=lb_papertrading`, `--execute`, and the matching `config/paper_execution.json` action gate, and currently supports simulated limit buy entry orders, expired unfilled entry-order cancellation, protective stop submission, and TP1 partial-exit submission.
 - Downstream scripts read `runtime/account/<DATE>/account-snapshot.json` instead of calling Longbridge directly.
 
 ## Longbridge CLI Commands
@@ -55,9 +55,10 @@ python3 script/trading_copilot.py paper-trade-submit --date <DATE> --session pre
 Submit passing paper entry intents through the guarded paper adapter:
 
 ```bash
-TRADING_COPILOT_PAPER_EXECUTION=enabled \
 python3 script/trading_copilot.py paper-trade-submit --date <DATE> --session pre-market --require-validation --execute
 ```
+
+This requires the selected paper execution config to set `paper_execution.broker_writes_enabled=true` and `paper_execution.allow_entry_submit=true`. The tracked `config/paper_execution.json` defaults to all false; deployment hosts can pass an ignored file such as `--paper-execution-config config/paper_execution.local.json`.
 
 Sync submitted paper order state from the latest paper account snapshot:
 
@@ -98,9 +99,10 @@ python3 script/trading_copilot.py paper-order-cancel --date <DATE>
 Cancel passing expired unfilled paper entry orders through the guarded paper adapter:
 
 ```bash
-TRADING_COPILOT_PAPER_EXECUTION=enabled \
 python3 script/trading_copilot.py paper-order-cancel --date <DATE> --execute
 ```
+
+This requires `paper_execution.allow_cancel=true`; keep it false during the initial rollout.
 
 Build a dry-run protective stop plan for filled long paper entries:
 
@@ -111,9 +113,10 @@ python3 script/trading_copilot.py paper-protective-stop-plan --date <DATE>
 Submit guarded paper protective stops for filled long entries:
 
 ```bash
-TRADING_COPILOT_PAPER_EXECUTION=enabled \
 python3 script/trading_copilot.py paper-protective-stop-plan --date <DATE> --execute
 ```
+
+This requires `paper_execution.allow_protective_stop=true`; keep it false during the initial rollout.
 
 Build a dry-run TP1 partial-exit plan for filled long paper entries:
 
@@ -124,9 +127,10 @@ python3 script/trading_copilot.py paper-take-profit-plan --date <DATE>
 Submit guarded paper TP1 partial exits for filled long entries:
 
 ```bash
-TRADING_COPILOT_PAPER_EXECUTION=enabled \
 python3 script/trading_copilot.py paper-take-profit-plan --date <DATE> --execute
 ```
+
+This requires `paper_execution.allow_take_profit=true`; keep it false during the initial rollout.
 
 Build a dry-run break-even stop movement plan after TP1 fill evidence exists:
 

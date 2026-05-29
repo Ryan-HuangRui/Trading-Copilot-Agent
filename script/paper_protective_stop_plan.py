@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from longbridge_paper_order_adapter import LongbridgePaperOrderAdapter, format_decimal
+from paper_execution_config import load_paper_execution_config
 from signal_artifacts import read_json
 
 
@@ -158,6 +159,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     state_path = default_state_path(repo_root, args.date, args.state)
     output = default_output_path(repo_root, args.date, args.output)
     stops_path = default_stops_path(repo_root, args.date, args.stops_journal)
+    paper_execution_config, paper_execution_config_path = load_paper_execution_config(
+        repo_root,
+        getattr(args, "paper_execution_config", None),
+    )
     submitted_stop_intent_ids = load_submitted_stop_intent_ids(stops_path)
     state = read_json(state_path)
     orders = state.get("orders")
@@ -180,7 +185,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         else:
             blocked.append(record)
     if args.execute and stop_candidates:
-        adapter = LongbridgePaperOrderAdapter(cli=args.longbridge_cli)
+        adapter = LongbridgePaperOrderAdapter(
+            cli=args.longbridge_cli,
+            paper_execution_config=paper_execution_config,
+        )
         for candidate in stop_candidates:
             try:
                 submit_result = adapter.submit_protective_stop_order(candidate, execute=True)
@@ -205,6 +213,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "execute_requested": bool(args.execute),
         "source_execution_state": str(state_path),
         "stops_journal": str(stops_path),
+        "paper_execution_config": str(paper_execution_config_path),
         "stop_order_type": "MIT",
         "tif": args.tif,
         "stop_candidates": stop_candidates,
@@ -232,6 +241,7 @@ def build_args(**overrides: Any) -> argparse.Namespace:
         "tif": "gtc",
         "execute": False,
         "longbridge_cli": None,
+        "paper_execution_config": None,
         "repo_root": str(Path(__file__).resolve().parents[1]),
     }
     values.update(overrides)
@@ -247,6 +257,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--tif", default="gtc")
     parser.add_argument("--execute", action="store_true", help="Submit passing protective stop candidates through the guarded paper adapter")
     parser.add_argument("--longbridge-cli")
+    parser.add_argument("--paper-execution-config")
     parser.add_argument("--repo-root", default=str(Path(__file__).resolve().parents[1]))
     return parser
 

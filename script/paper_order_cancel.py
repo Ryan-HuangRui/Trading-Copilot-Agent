@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from longbridge_paper_order_adapter import LongbridgePaperOrderAdapter
+from paper_execution_config import load_paper_execution_config
 from signal_artifacts import read_json
 
 
@@ -103,6 +104,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     repo_root = Path(args.repo_root).resolve()
     state_path = default_state_path(repo_root, args.date, args.state)
     output = default_output_path(repo_root, args.date, args.output)
+    paper_execution_config, paper_execution_config_path = load_paper_execution_config(
+        repo_root,
+        getattr(args, "paper_execution_config", None),
+    )
     state = read_json(state_path)
     orders = state.get("orders")
     if not isinstance(orders, list):
@@ -125,7 +130,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         else:
             blocked.append(record)
     if args.execute and cancel_candidates:
-        adapter = LongbridgePaperOrderAdapter(cli=args.longbridge_cli)
+        adapter = LongbridgePaperOrderAdapter(
+            cli=args.longbridge_cli,
+            paper_execution_config=paper_execution_config,
+        )
         for candidate in cancel_candidates:
             try:
                 cancel_result = adapter.cancel_order(str(candidate["broker_order_id"]), execute=True)
@@ -153,6 +161,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "dry_run": not args.execute,
         "execute_requested": bool(args.execute),
         "source_execution_state": str(state_path),
+        "paper_execution_config": str(paper_execution_config_path),
         "expire_after_minutes": args.expire_after_minutes,
         "now": current_time.isoformat(timespec="seconds"),
         "cancel_candidates": cancel_candidates,
@@ -186,6 +195,7 @@ def build_args(**overrides: Any) -> argparse.Namespace:
         "now": None,
         "execute": False,
         "longbridge_cli": None,
+        "paper_execution_config": None,
         "repo_root": str(Path(__file__).resolve().parents[1]),
     }
     values.update(overrides)
@@ -201,6 +211,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--now")
     parser.add_argument("--execute", action="store_true", help="Cancel passing candidates through the guarded paper adapter")
     parser.add_argument("--longbridge-cli")
+    parser.add_argument("--paper-execution-config")
     parser.add_argument("--repo-root", default=str(Path(__file__).resolve().parents[1]))
     return parser
 

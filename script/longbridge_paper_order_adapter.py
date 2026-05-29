@@ -2,16 +2,13 @@
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 from longbridge_paper_trade_adapter import PAPER_ACCOUNT_CHANNEL, ensure_paper_account
-
-
-PAPER_EXECUTION_ENV = "TRADING_COPILOT_PAPER_EXECUTION"
+from paper_execution_config import ensure_paper_write_allowed, normalize_paper_execution_config
 
 
 def format_decimal(value: float) -> str:
@@ -21,8 +18,9 @@ def format_decimal(value: float) -> str:
 
 
 class LongbridgePaperOrderAdapter:
-    def __init__(self, cli: str | None = None) -> None:
+    def __init__(self, cli: str | None = None, paper_execution_config: dict[str, Any] | None = None) -> None:
         self.cli = cli or shutil.which("longbridge") or str(Path.home() / ".local" / "bin" / "longbridge")
+        self.paper_execution_config = normalize_paper_execution_config(paper_execution_config)
 
     def run_json(self, args: list[str]) -> Any:
         if not Path(self.cli).exists() and shutil.which(self.cli) is None:
@@ -45,19 +43,8 @@ class LongbridgePaperOrderAdapter:
             raise RuntimeError("Longbridge auth status did not return an object")
         return ensure_paper_account(payload)
 
-    def ensure_submit_allowed(self, *, execute: bool, env: Mapping[str, str] | None = None) -> None:
-        if not execute:
-            raise PermissionError("--execute is required to submit paper orders")
-        values = env if env is not None else os.environ
-        if values.get(PAPER_EXECUTION_ENV) != "enabled":
-            raise PermissionError(f"{PAPER_EXECUTION_ENV}=enabled is required to submit paper orders")
-
-    def ensure_write_allowed(self, *, execute: bool, action: str, env: Mapping[str, str] | None = None) -> None:
-        if not execute:
-            raise PermissionError(f"--execute is required to {action} paper orders")
-        values = env if env is not None else os.environ
-        if values.get(PAPER_EXECUTION_ENV) != "enabled":
-            raise PermissionError(f"{PAPER_EXECUTION_ENV}=enabled is required to {action} paper orders")
+    def ensure_write_allowed(self, *, execute: bool, action: str) -> None:
+        ensure_paper_write_allowed(self.paper_execution_config, execute=execute, action=action)
 
     def validate_limit_buy_intent(self, intent: dict[str, Any]) -> None:
         if intent.get("side") != "buy":
@@ -76,10 +63,9 @@ class LongbridgePaperOrderAdapter:
         intent: dict[str, Any],
         *,
         execute: bool,
-        env: Mapping[str, str] | None = None,
     ) -> dict[str, Any]:
         self.validate_limit_buy_intent(intent)
-        self.ensure_write_allowed(execute=execute, action="submit", env=env)
+        self.ensure_write_allowed(execute=execute, action="entry_submit")
         account_channel = self.assert_paper_account()
         quantity = str(int(intent["quantity"]))
         price = format_decimal(float(intent["limit_price"]))
@@ -122,12 +108,11 @@ class LongbridgePaperOrderAdapter:
         broker_order_id: str,
         *,
         execute: bool,
-        env: Mapping[str, str] | None = None,
     ) -> dict[str, Any]:
         order_id = str(broker_order_id or "").strip()
         if not order_id:
             raise ValueError("broker_order_id is required")
-        self.ensure_write_allowed(execute=execute, action="cancel", env=env)
+        self.ensure_write_allowed(execute=execute, action="cancel")
         account_channel = self.assert_paper_account()
         command = ["order", "cancel", order_id, "--format", "json", "-y"]
         raw_response = self.run_json(command)
@@ -162,10 +147,9 @@ class LongbridgePaperOrderAdapter:
         intent: dict[str, Any],
         *,
         execute: bool,
-        env: Mapping[str, str] | None = None,
     ) -> dict[str, Any]:
         self.validate_protective_stop_intent(intent)
-        self.ensure_write_allowed(execute=execute, action="submit", env=env)
+        self.ensure_write_allowed(execute=execute, action="protective_stop")
         account_channel = self.assert_paper_account()
         quantity = str(int(intent["quantity"]))
         trigger_price = format_decimal(float(intent["trigger_price"]))
@@ -220,10 +204,9 @@ class LongbridgePaperOrderAdapter:
         intent: dict[str, Any],
         *,
         execute: bool,
-        env: Mapping[str, str] | None = None,
     ) -> dict[str, Any]:
         self.validate_take_profit_intent(intent)
-        self.ensure_write_allowed(execute=execute, action="submit", env=env)
+        self.ensure_write_allowed(execute=execute, action="take_profit")
         account_channel = self.assert_paper_account()
         quantity = str(int(intent["quantity"]))
         limit_price = format_decimal(float(intent["limit_price"]))

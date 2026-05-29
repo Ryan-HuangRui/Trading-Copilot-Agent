@@ -518,13 +518,13 @@ python3 script/trading_copilot.py paper-order-cancel --date <DATE>
 Execute command:
 
 ```bash
-TRADING_COPILOT_PAPER_EXECUTION=enabled \
 python3 script/trading_copilot.py paper-order-cancel --date <DATE> --execute
 ```
 
 Inputs:
 
 - `runtime/paper/<DATE>/paper-execution-state.json`.
+- `config/paper_execution.json` when `--execute` is used.
 
 Output:
 
@@ -533,7 +533,7 @@ Output:
 Required behavior:
 
 - Default behavior is dry-run and must not call broker cancel APIs.
-- Broker cancellation requires both `--execute` and `TRADING_COPILOT_PAPER_EXECUTION=enabled`.
+- Broker cancellation requires both `--execute` and `config/paper_execution.json` with `paper_execution.broker_writes_enabled=true` and `paper_execution.allow_cancel=true`.
 - Broker cancellation must use only `script/longbridge_paper_order_adapter.py`.
 - Only unfilled `submitted` or `accepted` entry orders with `broker_order_id` and `submitted_at` may become cancel candidates.
 - Filled and partially filled orders must be blocked from cancellation planning.
@@ -661,7 +661,6 @@ python3 script/trading_copilot.py paper-trade-submit --date <DATE> --session pre
 Execute command:
 
 ```bash
-TRADING_COPILOT_PAPER_EXECUTION=enabled \
 python3 script/trading_copilot.py paper-trade-submit --date <DATE> --session pre-market --require-validation --execute
 ```
 
@@ -671,6 +670,7 @@ Inputs:
 - `runtime/paper/<DATE>/paper-account-snapshot.json`.
 - Optional `runtime/paper/<DATE>/paper-orders.jsonl` for duplicate detection.
 - `report/<DATE>/pre-market-signals.json` or `report/<DATE>/post-market-signals.json` when `--require-validation` is used.
+- `config/paper_execution.json` when `--execute` is used.
 
 Output:
 
@@ -680,7 +680,7 @@ Output:
 Required behavior:
 
 - Default behavior is dry-run and must not call broker write APIs.
-- Broker submission requires both `--execute` and `TRADING_COPILOT_PAPER_EXECUTION=enabled`.
+- Broker submission requires both `--execute` and `config/paper_execution.json` with `paper_execution.broker_writes_enabled=true` and `paper_execution.allow_entry_submit=true`.
 - Broker submission must use only `script/longbridge_paper_order_adapter.py`.
 - `--require-validation` must run `validate-trade-plan` for the session sidecar.
 - Only `status=ready` long buy limit order intents may pass the risk guard.
@@ -702,7 +702,6 @@ python3 script/trading_copilot.py paper-protective-stop-plan --date <DATE>
 Execution command:
 
 ```bash
-TRADING_COPILOT_PAPER_EXECUTION=enabled \
 python3 script/trading_copilot.py paper-protective-stop-plan --date <DATE> --execute
 ```
 
@@ -710,6 +709,7 @@ Inputs:
 
 - `runtime/paper/<DATE>/paper-execution-state.json`.
 - Optional `runtime/paper/<DATE>/paper-stop-orders.jsonl` for duplicate detection.
+- `config/paper_execution.json` when `--execute` is used.
 
 Output:
 
@@ -719,7 +719,7 @@ Output:
 Required behavior:
 
 - Default behavior is dry-run and must not call broker write APIs.
-- Broker stop submission requires both `--execute` and `TRADING_COPILOT_PAPER_EXECUTION=enabled`.
+- Broker stop submission requires both `--execute` and `config/paper_execution.json` with `paper_execution.broker_writes_enabled=true` and `paper_execution.allow_protective_stop=true`.
 - Broker stop submission must use only `script/longbridge_paper_order_adapter.py`.
 - Only fully filled long buy entries with positive `stop_price`, positive filled quantity, and no existing protective stop may become stop candidates.
 - The first stop plan uses Longbridge `sell` `MIT` with `--trigger-price <stop_price>` and `tif=gtc` by default.
@@ -740,7 +740,6 @@ python3 script/trading_copilot.py paper-take-profit-plan --date <DATE>
 Execution command:
 
 ```bash
-TRADING_COPILOT_PAPER_EXECUTION=enabled \
 python3 script/trading_copilot.py paper-take-profit-plan --date <DATE> --execute
 ```
 
@@ -748,6 +747,7 @@ Inputs:
 
 - `runtime/paper/<DATE>/paper-execution-state.json`.
 - Optional `runtime/paper/<DATE>/paper-take-profit-orders.jsonl` for duplicate detection.
+- `config/paper_execution.json` when `--execute` is used.
 
 Output:
 
@@ -757,7 +757,7 @@ Output:
 Required behavior:
 
 - Default behavior is dry-run and must not call broker write APIs.
-- Broker TP1 submission requires both `--execute` and `TRADING_COPILOT_PAPER_EXECUTION=enabled`.
+- Broker TP1 submission requires both `--execute` and `config/paper_execution.json` with `paper_execution.broker_writes_enabled=true` and `paper_execution.allow_take_profit=true`.
 - Broker TP1 submission must use only `script/longbridge_paper_order_adapter.py`.
 - Only fully filled long buy entries with positive `take_profit`, positive filled quantity, and no existing TP1/take-profit order may become TP1 candidates.
 - The first TP1 plan uses Longbridge `sell` `LO` with `--price <take_profit>`, `tif=gtc` by default, and a default `--exit-fraction 0.5`.

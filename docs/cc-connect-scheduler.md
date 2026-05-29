@@ -96,13 +96,21 @@ config/rate_limit_state.json
 config/longbridge_rate_limit_state.json
 ```
 
-Confirm paper execution environment is injected into the scheduler process only for tasks that may execute paper broker writes:
+Confirm paper execution config stays explicit and defaults to no broker writes. The tracked `config/paper_execution.json` should remain all false; deployment automation can pass an ignored host-local config such as `config/paper_execution.local.json` with `--paper-execution-config`.
 
-```text
-TRADING_COPILOT_PAPER_EXECUTION=enabled
+```json
+{
+  "paper_execution": {
+    "broker_writes_enabled": false,
+    "allow_entry_submit": false,
+    "allow_cancel": false,
+    "allow_protective_stop": false,
+    "allow_take_profit": false
+  }
+}
 ```
 
-Writing this only into `.env` is not sufficient for the current paper execution scripts; the launched process must receive the environment variable.
+Only enable the specific action gate on the deployment host after the dry-run workflow is accepted. Do not use environment variables as the paper execution gate.
 
 ### 5. Server Acceptance Check
 
@@ -300,14 +308,13 @@ Do not run cancel, protective-stop, TP1, break-even, or real-account operations.
 Repository workflow stage:
 
 ```bash
-TRADING_COPILOT_PAPER_EXECUTION=enabled \
-python3 script/trading_copilot.py paper-trade-submit --date <DATE> --session pre-market --require-validation --execute
+python3 script/trading_copilot.py paper-trade-submit --date <DATE> --session pre-market --require-validation --paper-execution-config config/paper_execution.local.json --execute
 ```
 
 Required scheduler gates:
 
-- `PAPER_ENTRY_EXECUTE=true`
-- `TRADING_COPILOT_PAPER_EXECUTION=enabled`
+- selected paper execution config has `paper_execution.broker_writes_enabled=true`
+- selected paper execution config has `paper_execution.allow_entry_submit=true`
 - prior dry-run `summary.errors = 0`
 - prior dry-run `summary.ready > 0`
 - Longbridge paper account snapshot passes `account_channel=lb_papertrading`
@@ -342,12 +349,17 @@ python3 script/trading_copilot.py paper-strategy-review
 
 Keep these execution switches disabled in the initial rollout:
 
-```text
-PAPER_EXIT_EXECUTE=false
-PAPER_CANCEL_EXECUTE=false
+```json
+{
+  "paper_execution": {
+    "allow_cancel": false,
+    "allow_protective_stop": false,
+    "allow_take_profit": false
+  }
+}
 ```
 
-Do not add `--execute` to `paper-order-cancel`, `paper-protective-stop-plan`, or `paper-take-profit-plan` while those switches are false. Current exit-management execution is intentionally dry-run because protective stops use the full filled quantity while TP1 uses a partial exit quantity; automatic execution needs OCO or stop resize/cancel-replace safety before rollout.
+Do not add `--execute` to `paper-order-cancel`, `paper-protective-stop-plan`, or `paper-take-profit-plan` while those config gates are false. Current exit-management execution is intentionally dry-run because protective stops use the full filled quantity while TP1 uses a partial exit quantity; automatic execution needs OCO or stop resize/cancel-replace safety before rollout.
 
 ## Optional Monitor Journal Task
 

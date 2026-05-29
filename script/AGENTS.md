@@ -55,18 +55,18 @@
 - Run read-only paper account snapshot: `python3 script/trading_copilot.py paper-account-snapshot --date 2026-05-06`.
 - Build paper order previews: `python3 script/trading_copilot.py paper-trade-preview --date 2026-05-06 --session pre-market --require-validation`.
 - Prepare dry-run paper submissions: `python3 script/trading_copilot.py paper-trade-submit --date 2026-05-06 --session pre-market --require-validation`.
-- Submit guarded paper entry orders: `TRADING_COPILOT_PAPER_EXECUTION=enabled python3 script/trading_copilot.py paper-trade-submit --date 2026-05-06 --session pre-market --require-validation --execute`.
+- Submit guarded paper entry orders after enabling `paper_execution.broker_writes_enabled=true` and `paper_execution.allow_entry_submit=true` in `config/paper_execution.json`: `python3 script/trading_copilot.py paper-trade-submit --date 2026-05-06 --session pre-market --require-validation --execute`.
 - Sync paper order state: `python3 script/trading_copilot.py paper-order-sync --date 2026-05-06`.
 - Project paper events: `python3 script/trading_copilot.py paper-event-ledger --date 2026-05-06`.
 - Review paper execution quality: `python3 script/trading_copilot.py paper-execution-review --date 2026-05-06`.
 - Append paper learning candidates: `python3 script/trading_copilot.py paper-learning-lessons --date 2026-05-06 --append`.
 - Aggregate paper strategy evidence: `python3 script/trading_copilot.py paper-strategy-review`.
 - Build paper cancel plan: `python3 script/trading_copilot.py paper-order-cancel --date 2026-05-06`.
-- Cancel guarded expired paper entry orders: `TRADING_COPILOT_PAPER_EXECUTION=enabled python3 script/trading_copilot.py paper-order-cancel --date 2026-05-06 --execute`.
+- Cancel guarded expired paper entry orders after enabling `paper_execution.allow_cancel=true`: `python3 script/trading_copilot.py paper-order-cancel --date 2026-05-06 --execute`.
 - Build protective stop plan: `python3 script/trading_copilot.py paper-protective-stop-plan --date 2026-05-06`.
-- Submit guarded paper protective stops: `TRADING_COPILOT_PAPER_EXECUTION=enabled python3 script/trading_copilot.py paper-protective-stop-plan --date 2026-05-06 --execute`.
+- Submit guarded paper protective stops after enabling `paper_execution.allow_protective_stop=true`: `python3 script/trading_copilot.py paper-protective-stop-plan --date 2026-05-06 --execute`.
 - Build TP1 partial-exit plan: `python3 script/trading_copilot.py paper-take-profit-plan --date 2026-05-06`.
-- Submit guarded paper TP1 partial exits: `TRADING_COPILOT_PAPER_EXECUTION=enabled python3 script/trading_copilot.py paper-take-profit-plan --date 2026-05-06 --execute`.
+- Submit guarded paper TP1 partial exits after enabling `paper_execution.allow_take_profit=true`: `python3 script/trading_copilot.py paper-take-profit-plan --date 2026-05-06 --execute`.
 - Build dry-run break-even stop movement plan: `python3 script/trading_copilot.py paper-break-even-stop-plan --date 2026-05-06`.
 - Review paper executions: `python3 script/trading_copilot.py paper-trade-review --date 2026-05-06 --session pre-market --append`.
 - Run position review: `python3 script/trading_copilot.py position-review --date 2026-05-06 --append`.

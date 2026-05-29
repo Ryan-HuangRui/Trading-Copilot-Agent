@@ -10,7 +10,7 @@ Use this split:
 
 - Pre-market and post-market workflows produce research artifacts, structured Trade Plan Cards, validation results, journal records, and Feishu summaries.
 - Paper execution workflows consume `report/<DATE>/pre-market-signals.json` or `report/<DATE>/post-market-signals.json`.
-- Paper broker writes are allowed only against `lb_papertrading`, only through `script/longbridge_paper_order_adapter.py`, and only when both `--execute` and `TRADING_COPILOT_PAPER_EXECUTION=enabled` are present.
+- Paper broker writes are allowed only against `lb_papertrading`, only through `script/longbridge_paper_order_adapter.py`, and only when both `--execute` and the matching `config/paper_execution.json` action gate are enabled.
 - Real-account writes remain prohibited.
 
 Recommended initial rollout:
@@ -42,13 +42,21 @@ This workflow reads Longbridge auth, assets, positions, orders, and executions, 
 runtime/paper/<DATE>/paper-account-snapshot.json
 ```
 
-For broker writes, the environment variable must exist in the process environment:
+Review the paper execution config before enabling broker writes:
 
-```bash
-export TRADING_COPILOT_PAPER_EXECUTION=enabled
+```json
+{
+  "paper_execution": {
+    "broker_writes_enabled": false,
+    "allow_entry_submit": false,
+    "allow_cancel": false,
+    "allow_protective_stop": false,
+    "allow_take_profit": false
+  }
+}
 ```
 
-Writing it only into `.env` is not enough for the current paper execution scripts. cc connect, cron, Codex automation, or shell wrappers must inject it into the launched process.
+The tracked default is intentionally all false. To enable a paper entry rollout on a deployment host, create an ignored host-local config such as `config/paper_execution.local.json`, set `broker_writes_enabled=true` and `allow_entry_submit=true`, and pass it with `--paper-execution-config`. Keep cancel, protective-stop, and take-profit gates false during the initial rollout.
 
 ## Pre-Market Dry Run
 
@@ -97,11 +105,11 @@ Check these fields before enabling execution:
 Only run this after reviewing the dry-run submission artifact:
 
 ```bash
-TRADING_COPILOT_PAPER_EXECUTION=enabled \
 python3 script/trading_copilot.py paper-trade-submit \
   --date "$DATE" \
   --session pre-market \
   --require-validation \
+  --paper-execution-config config/paper_execution.local.json \
   --execute
 ```
 
@@ -152,13 +160,10 @@ python3 script/trading_copilot.py paper-break-even-stop-plan --date "$DATE"
 Do not enable these execution commands in the initial rollout:
 
 ```bash
-TRADING_COPILOT_PAPER_EXECUTION=enabled \
 python3 script/trading_copilot.py paper-order-cancel --date "$DATE" --execute
 
-TRADING_COPILOT_PAPER_EXECUTION=enabled \
 python3 script/trading_copilot.py paper-protective-stop-plan --date "$DATE" --execute
 
-TRADING_COPILOT_PAPER_EXECUTION=enabled \
 python3 script/trading_copilot.py paper-take-profit-plan --date "$DATE" --execute
 ```
 
@@ -166,23 +171,39 @@ Reason: current protective-stop planning submits a stop for the full filled quan
 
 `paper-break-even-stop-plan` is plan-only. It does not cancel, replace, or submit broker orders.
 
-## Scheduler Switches
+## Execution Config
 
-Until a repository-level `config/paper_execution.json` exists, keep execution policy in the scheduler layer:
+Use a config file as the paper broker-write policy. The tracked `config/paper_execution.json` is the default all-off policy; deployment automation may pass an ignored host-local file such as `config/paper_execution.local.json`:
 
-```text
-PAPER_ENTRY_EXECUTE=true
-PAPER_EXIT_EXECUTE=false
-PAPER_CANCEL_EXECUTE=false
-TRADING_COPILOT_PAPER_EXECUTION=enabled
+```json
+{
+  "paper_execution": {
+    "broker_writes_enabled": true,
+    "allow_entry_submit": true,
+    "allow_cancel": false,
+    "allow_protective_stop": false,
+    "allow_take_profit": false
+  }
+}
 ```
 
 Interpretation:
 
-- If `PAPER_ENTRY_EXECUTE=true`, the scheduler may run `paper-trade-submit --execute` after the dry-run artifact has no blocking errors.
-- If `PAPER_EXIT_EXECUTE=false`, the scheduler must run protective-stop and TP1 workflows without `--execute`.
-- If `PAPER_CANCEL_EXECUTE=false`, the scheduler must run cancel planning without `--execute`.
-- `TRADING_COPILOT_PAPER_EXECUTION=enabled` is necessary but not sufficient; every broker write still needs its own `--execute`.
+- If `broker_writes_enabled=true` and `allow_entry_submit=true`, the scheduler may run `paper-trade-submit --execute` after the dry-run artifact has no blocking errors.
+- If `allow_protective_stop=false` and `allow_take_profit=false`, the scheduler must run protective-stop and TP1 workflows without `--execute`.
+- If `allow_cancel=false`, the scheduler must run cancel planning without `--execute`.
+- Every broker write still needs its own `--execute`; config alone never submits orders.
+
+All paper execution commands accept an alternate config path:
+
+```bash
+python3 script/trading_copilot.py paper-trade-submit \
+  --date "$DATE" \
+  --session pre-market \
+  --require-validation \
+  --paper-execution-config config/paper_execution.local.json \
+  --execute
+```
 
 ## Failure Policy
 
