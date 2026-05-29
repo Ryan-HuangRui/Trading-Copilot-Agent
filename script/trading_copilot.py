@@ -818,6 +818,44 @@ def run_paper_order_sync(args: argparse.Namespace) -> None:
     emit(response)
 
 
+def run_paper_event_ledger(args: argparse.Namespace) -> None:
+    command = [
+        "script/paper_event_ledger.py",
+        "--date",
+        args.date,
+        "--repo-root",
+        args.repo_root,
+    ]
+    if args.orders_journal:
+        command.extend(["--orders-journal", args.orders_journal])
+    if args.stops_journal:
+        command.extend(["--stops-journal", args.stops_journal])
+    if args.take_profit_journal:
+        command.extend(["--take-profit-journal", args.take_profit_journal])
+    if args.execution_state:
+        command.extend(["--execution-state", args.execution_state])
+    if args.events_journal:
+        command.extend(["--events-journal", args.events_journal])
+    if args.output:
+        command.extend(["--output", args.output])
+
+    proc = run_child(command)
+    stdout = parse_json_output(proc.stdout)
+    if proc.returncode != 0:
+        emit(failed_response("paper-event-ledger", command, proc), 1)
+
+    response = base_response("paper-event-ledger", command, stdout)
+    response["date"] = (stdout or {}).get("date") or args.date
+    artifacts = []
+    if stdout and stdout.get("output"):
+        artifacts.append(stdout["output"])
+    if stdout and stdout.get("events_journal"):
+        artifacts.append(stdout["events_journal"])
+    response["artifacts"] = artifacts
+    response["summary"] = (stdout or {}).get("summary")
+    emit(response)
+
+
 def run_paper_order_cancel(args: argparse.Namespace) -> None:
     command = [
         "script/paper_order_cancel.py",
@@ -1292,6 +1330,17 @@ def build_parser() -> argparse.ArgumentParser:
     paper_sync.add_argument("--output")
     paper_sync.add_argument("--repo-root", default=str(ROOT))
     paper_sync.set_defaults(func=run_paper_order_sync)
+
+    paper_events = sub.add_parser("paper-event-ledger", help="Project paper execution facts into the unified event ledger")
+    paper_events.add_argument("--date", required=True)
+    paper_events.add_argument("--orders-journal")
+    paper_events.add_argument("--stops-journal")
+    paper_events.add_argument("--take-profit-journal")
+    paper_events.add_argument("--execution-state")
+    paper_events.add_argument("--events-journal")
+    paper_events.add_argument("--output")
+    paper_events.add_argument("--repo-root", default=str(ROOT))
+    paper_events.set_defaults(func=run_paper_event_ledger)
 
     paper_cancel = sub.add_parser("paper-order-cancel", help="Build a dry-run cancel plan for expired paper entry orders")
     paper_cancel.add_argument("--date", required=True)

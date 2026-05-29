@@ -540,6 +540,36 @@ Required behavior:
 - The artifact must separate `cancel_candidates`, `blocked`, `executed`, and `errors`.
 - Executed cancel records must preserve `intent_id`, `broker_order_id`, `raw_request`, and `raw_response`.
 
+## paper-event-ledger
+
+Purpose: project submitted and observed paper execution facts into the unified event stream.
+
+Canonical command:
+
+```bash
+python3 script/trading_copilot.py paper-event-ledger --date <DATE>
+```
+
+Inputs:
+
+- `runtime/paper/<DATE>/paper-orders.jsonl`.
+- Optional `runtime/paper/<DATE>/paper-stop-orders.jsonl`.
+- Optional `runtime/paper/<DATE>/paper-take-profit-orders.jsonl`.
+- Optional `runtime/paper/<DATE>/paper-execution-state.json`.
+
+Output:
+
+- `runtime/journal/events.jsonl`
+- `report/<DATE>/paper-event-ledger.json`
+
+Required behavior:
+
+- Must be read-only with respect to broker APIs; it must not submit, cancel, replace, or adjust orders.
+- Must emit deterministic event ids so repeated runs for the same date replace the same workflow/date projection without duplicate events.
+- Must preserve existing events from other workflows or dates.
+- Must emit at least submitted events from paper journals and observed status events from `paper-execution-state.json` when available.
+- Event payloads must preserve `intent_id`, `source_signal_id`, `broker_order_id`, `symbol`, `side`, `quantity`, `remark`, and raw request/response fields when present.
+
 ## paper-trade-submit
 
 Purpose: prepare controlled paper order submissions from validated dry-run order previews.

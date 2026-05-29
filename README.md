@@ -61,6 +61,7 @@ python3 script/trading_copilot.py paper-account-snapshot --date <DATE>
 python3 script/trading_copilot.py paper-trade-preview --date <DATE> --session pre-market --require-validation
 python3 script/trading_copilot.py paper-trade-submit --date <DATE> --session pre-market --require-validation
 python3 script/trading_copilot.py paper-order-sync --date <DATE>
+python3 script/trading_copilot.py paper-event-ledger --date <DATE>
 python3 script/trading_copilot.py paper-order-cancel --date <DATE>
 python3 script/trading_copilot.py paper-protective-stop-plan --date <DATE>
 TRADING_COPILOT_PAPER_EXECUTION=enabled python3 script/trading_copilot.py paper-protective-stop-plan --date <DATE> --execute
@@ -129,6 +130,7 @@ python3 script/workflow_smoke_test.py --date <DATE> --week <YYYY-Www>
   - `python3 script/trading_copilot.py paper-trade-submit --date YYYY-MM-DD --session pre-market --require-validation`
   - `TRADING_COPILOT_PAPER_EXECUTION=enabled python3 script/trading_copilot.py paper-trade-submit --date YYYY-MM-DD --session pre-market --require-validation --execute`
   - `python3 script/trading_copilot.py paper-order-sync --date YYYY-MM-DD`
+  - `python3 script/trading_copilot.py paper-event-ledger --date YYYY-MM-DD`
   - `python3 script/trading_copilot.py paper-order-cancel --date YYYY-MM-DD`
   - `TRADING_COPILOT_PAPER_EXECUTION=enabled python3 script/trading_copilot.py paper-order-cancel --date YYYY-MM-DD --execute`
   - `python3 script/trading_copilot.py paper-protective-stop-plan --date YYYY-MM-DD`
@@ -137,8 +139,8 @@ python3 script/workflow_smoke_test.py --date <DATE> --week <YYYY-Www>
   - `TRADING_COPILOT_PAPER_EXECUTION=enabled python3 script/trading_copilot.py paper-take-profit-plan --date YYYY-MM-DD --execute`
   - `python3 script/trading_copilot.py paper-break-even-stop-plan --date YYYY-MM-DD`
   - `python3 script/trading_copilot.py paper-trade-review --date YYYY-MM-DD --session pre-market --append`
-  - 产物：`runtime/paper/YYYY-MM-DD/paper-account-snapshot.json`、`report/YYYY-MM-DD/paper-trade-preview.json`、`report/YYYY-MM-DD/paper-trade-submission.json`、`runtime/paper/YYYY-MM-DD/paper-orders.jsonl`、`runtime/paper/YYYY-MM-DD/paper-execution-state.json`、`report/YYYY-MM-DD/paper-order-cancel-plan.json`、`report/YYYY-MM-DD/paper-protective-stop-plan.json`、`runtime/paper/YYYY-MM-DD/paper-stop-orders.jsonl`、`report/YYYY-MM-DD/paper-take-profit-plan.json`、`runtime/paper/YYYY-MM-DD/paper-take-profit-orders.jsonl`、`report/YYYY-MM-DD/paper-break-even-stop-plan.json`、`report/YYYY-MM-DD/paper-trade-review.json`
-  - `paper-account-snapshot` 会校验 Longbridge 当前账户是 `lb_papertrading`；`paper-trade-preview` 输出 dry-run 订单预览；`paper-trade-submit` 默认 dry-run，只在 `--execute` 与 `TRADING_COPILOT_PAPER_EXECUTION=enabled` 同时满足后，通过独立 paper order adapter 提交模拟盘限价买入单；`paper-order-sync` 只读回放入场、保护止损、TP1 提交账本和模拟盘快照，并把 stop/TP1 状态回填到 entry；`paper-order-cancel` 默认 dry-run，只在双门禁后撤销过期未成交入场单；`paper-protective-stop-plan` 默认 dry-run，只在双门禁后为已成交 long entry 提交模拟盘 `sell MIT --trigger-price <stop>` 保护性止损单；`paper-take-profit-plan` 默认 dry-run，只在双门禁后为已成交 long entry 提交默认 50% 仓位的模拟盘 `sell LO --price <tp1>` TP1 分批止盈单；`paper-break-even-stop-plan` 仅生成 dry-run 止损移动计划，不执行撤单、替换或提交；`paper-trade-review` 优先用 `broker_order_id` / `remark` / `intent_id` 匹配已观察到的模拟成交并回写 journal
+  - 产物：`runtime/paper/YYYY-MM-DD/paper-account-snapshot.json`、`report/YYYY-MM-DD/paper-trade-preview.json`、`report/YYYY-MM-DD/paper-trade-submission.json`、`runtime/paper/YYYY-MM-DD/paper-orders.jsonl`、`runtime/paper/YYYY-MM-DD/paper-execution-state.json`、`runtime/journal/events.jsonl`、`report/YYYY-MM-DD/paper-event-ledger.json`、`report/YYYY-MM-DD/paper-order-cancel-plan.json`、`report/YYYY-MM-DD/paper-protective-stop-plan.json`、`runtime/paper/YYYY-MM-DD/paper-stop-orders.jsonl`、`report/YYYY-MM-DD/paper-take-profit-plan.json`、`runtime/paper/YYYY-MM-DD/paper-take-profit-orders.jsonl`、`report/YYYY-MM-DD/paper-break-even-stop-plan.json`、`report/YYYY-MM-DD/paper-trade-review.json`
+  - `paper-account-snapshot` 会校验 Longbridge 当前账户是 `lb_papertrading`；`paper-trade-preview` 输出 dry-run 订单预览；`paper-trade-submit` 默认 dry-run，只在 `--execute` 与 `TRADING_COPILOT_PAPER_EXECUTION=enabled` 同时满足后，通过独立 paper order adapter 提交模拟盘限价买入单；`paper-order-sync` 只读回放入场、保护止损、TP1 提交账本和模拟盘快照，并把 stop/TP1 状态回填到 entry；`paper-event-ledger` 将 paper 提交与成交状态投影到统一事件账本；`paper-order-cancel` 默认 dry-run，只在双门禁后撤销过期未成交入场单；`paper-protective-stop-plan` 默认 dry-run，只在双门禁后为已成交 long entry 提交模拟盘 `sell MIT --trigger-price <stop>` 保护性止损单；`paper-take-profit-plan` 默认 dry-run，只在双门禁后为已成交 long entry 提交默认 50% 仓位的模拟盘 `sell LO --price <tp1>` TP1 分批止盈单；`paper-break-even-stop-plan` 仅生成 dry-run 止损移动计划，不执行撤单、替换或提交；`paper-trade-review` 优先用 `broker_order_id` / `remark` / `intent_id` 匹配已观察到的模拟成交并回写 journal
 
 ## 实时盯盘
 - 支持多标的 5m 监控，默认只输出做多路径（可配置）

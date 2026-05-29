@@ -1,0 +1,197 @@
+import json
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "script"))
+
+import paper_event_ledger
+
+
+def write_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+
+def append_jsonl(path: Path, record: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+def order_record(**overrides) -> dict:
+    record = {
+        "kind": "paper_order",
+        "intent_id": "intent-1",
+        "source_signal_id": "sig-1",
+        "symbol": "MU",
+        "longbridge_symbol": "MU.US",
+        "side": "buy",
+        "order_type": "LO",
+        "quantity": 200,
+        "limit_price": 100,
+        "remark": "tca:intent-1",
+        "broker_order_id": "entry-o-1",
+        "submit_status": "submitted",
+        "submitted_at": "2026-05-26T13:30:00+00:00",
+    }
+    record.update(overrides)
+    return record
+
+
+def stop_record(**overrides) -> dict:
+    record = {
+        "kind": "paper_stop_order",
+        "intent_id": "intent-1",
+        "source_signal_id": "sig-1",
+        "entry_broker_order_id": "entry-o-1",
+        "symbol": "MU",
+        "longbridge_symbol": "MU.US",
+        "side": "sell",
+        "order_type": "MIT",
+        "quantity": 200,
+        "trigger_price": 95,
+        "remark": "tca-stop:intent-1",
+        "broker_order_id": "stop-o-1",
+        "submit_status": "submitted",
+        "submitted_at": "2026-05-26T14:00:00+00:00",
+    }
+    record.update(overrides)
+    return record
+
+
+def take_profit_record(**overrides) -> dict:
+    record = {
+        "kind": "paper_take_profit_order",
+        "intent_id": "intent-1",
+        "source_signal_id": "sig-1",
+        "entry_broker_order_id": "entry-o-1",
+        "symbol": "MU",
+        "longbridge_symbol": "MU.US",
+        "side": "sell",
+        "order_type": "LO",
+        "quantity": 100,
+        "limit_price": 112,
+        "remark": "tca-tp1:intent-1",
+        "broker_order_id": "tp-o-1",
+        "submit_status": "submitted",
+        "submitted_at": "2026-05-26T14:05:00+00:00",
+    }
+    record.update(overrides)
+    return record
+
+
+def execution_state() -> dict:
+    return {
+        "date": "2026-05-26",
+        "orders": [
+            {
+                "intent_id": "intent-1",
+                "source_signal_id": "sig-1",
+                "symbol": "MU",
+                "side": "buy",
+                "quantity": 200,
+                "broker_order_id": "entry-o-1",
+                "status": "filled",
+                "filled_quantity": 200,
+                "avg_fill_price": 100.2,
+            }
+        ],
+        "protective_stops": [
+            {
+                "kind": "paper_stop_order",
+                "intent_id": "intent-1",
+                "source_signal_id": "sig-1",
+                "entry_broker_order_id": "entry-o-1",
+                "symbol": "MU",
+                "side": "sell",
+                "quantity": 200,
+                "broker_order_id": "stop-o-1",
+                "status": "accepted",
+                "filled_quantity": 0,
+            }
+        ],
+        "take_profit_orders": [
+            {
+                "kind": "paper_take_profit_order",
+                "intent_id": "intent-1",
+                "source_signal_id": "sig-1",
+                "entry_broker_order_id": "entry-o-1",
+                "symbol": "MU",
+                "side": "sell",
+                "quantity": 100,
+                "broker_order_id": "tp-o-1",
+                "status": "filled",
+                "filled_quantity": 100,
+                "avg_fill_price": 112.1,
+            }
+        ],
+    }
+
+
+class PaperEventLedgerTest(unittest.TestCase):
+    def seed(self, root: Path) -> None:
+        base = root / "runtime" / "paper" / "2026-05-26"
+        append_jsonl(base / "paper-orders.jsonl", order_record())
+        append_jsonl(base / "paper-stop-orders.jsonl", stop_record())
+        append_jsonl(base / "paper-take-profit-orders.jsonl", take_profit_record())
+        write_json(base / "paper-execution-state.json", execution_state())
+
+    def test_event_ledger_projects_submitted_and_state_events_idempotently(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.seed(root)
+
+            first = paper_event_ledger.run(paper_event_ledger.build_args(repo_root=str(root), date="2026-05-26"))
+            second = paper_event_ledger.run(paper_event_ledger.build_args(repo_root=str(root), date="2026-05-26"))
+
+            self.assertEqual(first["summary"]["events_written_for_date"], second["summary"]["events_written_for_date"])
+            output = json.loads(Path(second["output"]).read_text(encoding="utf-8"))
+            events = output["events"]
+            event_types = {event["event_type"] for event in events}
+            self.assertIn("order_submitted", event_types)
+            self.assertIn("order_filled", event_types)
+            self.assertIn("stop_submitted", event_types)
+            self.assertIn("stop_accepted", event_types)
+            self.assertIn("take_profit_submitted", event_types)
+            self.assertIn("take_profit_filled", event_types)
+            journal = root / "runtime" / "journal" / "events.jsonl"
+            lines = [line for line in journal.read_text(encoding="utf-8").splitlines() if line.strip()]
+            self.assertEqual(len(lines), len(events))
+            event_ids = [json.loads(line)["event_id"] for line in lines]
+            self.assertEqual(len(event_ids), len(set(event_ids)))
+
+    def test_wrapper_exposes_event_ledger(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.seed(root)
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "script" / "trading_copilot.py"),
+                    "paper-event-ledger",
+                    "--repo-root",
+                    str(root),
+                    "--date",
+                    "2026-05-26",
+                ],
+                cwd=ROOT,
+                check=False,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, msg=proc.stderr or proc.stdout)
+            payload = json.loads(proc.stdout)
+            self.assertEqual(payload["workflow"], "paper-event-ledger")
+            self.assertEqual(payload["summary"]["events_written_for_date"], 6)
+            self.assertEqual(len(payload["artifacts"]), 2)
+
+
+if __name__ == "__main__":
+    unittest.main()
