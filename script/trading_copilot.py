@@ -814,6 +814,38 @@ def run_paper_order_sync(args: argparse.Namespace) -> None:
     emit(response)
 
 
+def run_paper_order_cancel(args: argparse.Namespace) -> None:
+    command = [
+        "script/paper_order_cancel.py",
+        "--date",
+        args.date,
+        "--repo-root",
+        args.repo_root,
+        "--expire-after-minutes",
+        str(args.expire_after_minutes),
+    ]
+    if args.state:
+        command.extend(["--state", args.state])
+    if args.output:
+        command.extend(["--output", args.output])
+    if args.now:
+        command.extend(["--now", args.now])
+    if args.execute:
+        command.append("--execute")
+
+    proc = run_child(command)
+    stdout = parse_json_output(proc.stdout)
+    if proc.returncode != 0:
+        emit(failed_response("paper-order-cancel", command, proc), 1)
+
+    response = base_response("paper-order-cancel", command, stdout)
+    response["date"] = (stdout or {}).get("date") or args.date
+    response["artifacts"] = [stdout["output"]] if stdout and stdout.get("output") else []
+    response["dry_run"] = (stdout or {}).get("dry_run")
+    response["summary"] = (stdout or {}).get("summary")
+    emit(response)
+
+
 def run_position_review(args: argparse.Namespace) -> None:
     command = [
         "script/position_review.py",
@@ -1150,6 +1182,16 @@ def build_parser() -> argparse.ArgumentParser:
     paper_sync.add_argument("--output")
     paper_sync.add_argument("--repo-root", default=str(ROOT))
     paper_sync.set_defaults(func=run_paper_order_sync)
+
+    paper_cancel = sub.add_parser("paper-order-cancel", help="Build a dry-run cancel plan for expired paper entry orders")
+    paper_cancel.add_argument("--date", required=True)
+    paper_cancel.add_argument("--state")
+    paper_cancel.add_argument("--output")
+    paper_cancel.add_argument("--expire-after-minutes", type=int, default=60)
+    paper_cancel.add_argument("--now")
+    paper_cancel.add_argument("--execute", action="store_true")
+    paper_cancel.add_argument("--repo-root", default=str(ROOT))
+    paper_cancel.set_defaults(func=run_paper_order_cancel)
 
     position = sub.add_parser("position-review", help="Review read-only positions against structured signals")
     position.add_argument("--date", required=True)

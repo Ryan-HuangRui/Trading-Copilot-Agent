@@ -19,6 +19,7 @@
 - `paper_trade_preview.py`: converts validated Trade Plan Cards into dry-run paper order previews.
 - `paper_trade_submit.py`: prepares controlled paper submissions from previews and risk guard output; defaults to dry-run and only submits through the gated paper order adapter when execution gates are explicitly enabled.
 - `paper_order_sync.py`: read-only paper order state sync from `paper-orders.jsonl` and paper account snapshots.
+- `paper_order_cancel.py`: dry-run cancel-plan builder for expired unfilled paper entry orders. It must not call broker cancel APIs until a guarded cancel adapter exists.
 - `paper_trade_review.py`: compares submitted/previewed paper orders with observed paper executions and can append matched paper fills to the journal.
 - `position_review.py`: compares read-only positions with a session-specific signal sidecar and writes review artifacts.
 - `data_quality.py`: checks daily snapshot data source/freshness, focused-symbol fallback, account price deltas, and abnormal moves.
@@ -49,6 +50,7 @@
 - Prepare dry-run paper submissions: `python3 script/trading_copilot.py paper-trade-submit --date 2026-05-06 --session pre-market --require-validation`.
 - Submit guarded paper entry orders: `TRADING_COPILOT_PAPER_EXECUTION=enabled python3 script/trading_copilot.py paper-trade-submit --date 2026-05-06 --session pre-market --require-validation --execute`.
 - Sync paper order state: `python3 script/trading_copilot.py paper-order-sync --date 2026-05-06`.
+- Build paper cancel plan: `python3 script/trading_copilot.py paper-order-cancel --date 2026-05-06`.
 - Review paper executions: `python3 script/trading_copilot.py paper-trade-review --date 2026-05-06 --session pre-market --append`.
 - Run position review: `python3 script/trading_copilot.py position-review --date 2026-05-06 --append`.
 - Run data quality review: `python3 script/trading_copilot.py data-quality --date 2026-05-06`.

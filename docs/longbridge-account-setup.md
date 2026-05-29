@@ -65,6 +65,12 @@ Sync submitted paper order state from the latest paper account snapshot:
 python3 script/trading_copilot.py paper-order-sync --date <DATE>
 ```
 
+Build a dry-run cancel plan for expired unfilled paper entry orders:
+
+```bash
+python3 script/trading_copilot.py paper-order-cancel --date <DATE>
+```
+
 Review observed paper executions against the preview and append matched paper fills:
 
 ```bash
@@ -96,6 +102,7 @@ Paper outputs:
 - `report/<DATE>/paper-trade-submission.json`
 - `runtime/paper/<DATE>/paper-orders.jsonl` when `paper-trade-submit --execute` succeeds
 - `runtime/paper/<DATE>/paper-execution-state.json`
+- `report/<DATE>/paper-order-cancel-plan.json`
 - `report/<DATE>/paper-trade-review.json`
 - matched paper fills in `runtime/journal/trades.jsonl` when `paper-trade-review --append` is used
 

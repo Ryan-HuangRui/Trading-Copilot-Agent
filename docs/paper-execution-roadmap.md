@@ -145,6 +145,8 @@ Recommended sequence:
 3. Add TP1 partial exits.
 4. Add break-even stop movement or trailing logic only after basic exits are stable.
 
+Implementation status: `paper-order-cancel` now generates a dry-run cancel plan for expired unfilled entry orders. It rejects `--execute` until a guarded cancel adapter is designed.
+
 All exit actions must use the same paper-account, env flag, execute flag, idempotency, and audit-log gates as entry submission.
 
 ## Milestone 4: Unified Trading Event Ledger

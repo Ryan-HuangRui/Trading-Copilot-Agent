@@ -128,8 +128,9 @@ Use `python3 script/trading_copilot.py learning-review --lookback-days 20` to ag
 3. Run `python3 script/trading_copilot.py paper-trade-submit --date <DATE> --session pre-market --require-validation` to prepare a dry-run controlled submission artifact.
 4. Only when the user explicitly wants simulated order submission, run `TRADING_COPILOT_PAPER_EXECUTION=enabled python3 script/trading_copilot.py paper-trade-submit --date <DATE> --session pre-market --require-validation --execute`.
 5. Run `python3 script/trading_copilot.py paper-order-sync --date <DATE>` after refreshing the paper account snapshot to sync submitted order state.
-6. Run `python3 script/trading_copilot.py paper-trade-review --date <DATE> --session pre-market --append` only after paper executions exist and should be recorded.
-7. Treat paper results as execution feedback. Do not promote paper P/L directly into `knowledge/refined/`.
+6. Run `python3 script/trading_copilot.py paper-order-cancel --date <DATE>` to prepare a dry-run cancel plan for expired unfilled entry orders; do not use `--execute`.
+7. Run `python3 script/trading_copilot.py paper-trade-review --date <DATE> --session pre-market --append` only after paper executions exist and should be recorded.
+8. Treat paper results as execution feedback. Do not promote paper P/L directly into `knowledge/refined/`.
 
 ### Symbol Analysis
 

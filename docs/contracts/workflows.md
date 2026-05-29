@@ -4,9 +4,10 @@ This repository is a trading research workflow package for Codex/Claude/OpenClaw
 
 All workflows must preserve the repository safety rules:
 
-- Never place real trades or call broker write APIs.
+- Never place real trades.
 - Read-only Longbridge account snapshots are allowed only through the account snapshot workflow; order placement, cancellation, replacement, and automatic position changes are prohibited.
-- Paper-trading workflows may read Longbridge paper-account orders/executions and generate dry-run order preview/submission artifacts only; they must not submit, cancel, replace, or automatically adjust orders until a dedicated paper order adapter is implemented.
+- Paper broker writes are allowed only through dedicated guarded paper adapters, only against `lb_papertrading`, and only for explicitly contracted operations.
+- Current paper write scope is limited to guarded entry limit-buy submission. Paper cancel/replace/stop/take-profit actions remain dry-run planning only until separately implemented.
 - Do not output deterministic buy/sell instructions.
 - Use scenarios, triggers, invalidation, risk, and `NO TRADE`.
 - Use `knowledge/refined/` as the only rule source for trading conclusions.
@@ -499,6 +500,32 @@ Required behavior:
 - Must match submitted orders by `broker_order_id`, then `remark`, then `intent_id`, then `symbol + side + quantity` fallback.
 - Must summarize order states including `submitted`, `accepted`, `partially_filled`, `filled`, `cancelled`, `rejected`, and `expired`.
 - Must preserve matched broker order and execution payloads for audit and later review.
+
+## paper-order-cancel
+
+Purpose: build a dry-run cancel plan for expired unfilled paper entry orders.
+
+Canonical command:
+
+```bash
+python3 script/trading_copilot.py paper-order-cancel --date <DATE>
+```
+
+Inputs:
+
+- `runtime/paper/<DATE>/paper-execution-state.json`.
+
+Output:
+
+- `report/<DATE>/paper-order-cancel-plan.json`
+
+Required behavior:
+
+- Current implementation is dry-run only and must not call broker cancel APIs.
+- `--execute` must be rejected until a guarded paper cancel adapter exists.
+- Only unfilled `submitted` or `accepted` entry orders with `broker_order_id` and `submitted_at` may become cancel candidates.
+- Filled and partially filled orders must be blocked from cancellation planning.
+- The artifact must separate `cancel_candidates`, `blocked`, `executed`, and `errors`.
 
 ## paper-trade-submit
 
