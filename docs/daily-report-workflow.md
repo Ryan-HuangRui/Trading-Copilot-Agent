@@ -2,6 +2,8 @@
 
 Production scheduling is expected to run through cc connect. cc connect triggers Codex and sends Feishu messages; the repository owns workflow contracts, validation, journal writes, and review generation. Do not run the same production pre-market or post-market workflow from both cc connect and Codex App automation.
 
+Paper execution is an execution extension to this report workflow, not a report-generation step. It consumes validated `pre-market-signals.json` / `post-market-signals.json` artifacts, and any paper broker write must run through a separate paper execution task. See `docs/paper-execution-runbook.md`.
+
 ## Responsibility split
 - `script/`: deterministic data work, market-date checks, path layout, cache fallback, and context generation.
 - `agent/`: report-generation prompts that Codex automation actually reads.
@@ -182,6 +184,7 @@ This is additive only. It may add new focus symbols from the pre-market plan, bu
 
 ## Analysis boundaries
 - Reports are research and process support only; they are not investment advice.
+- Paper execution tasks may consume validated report artifacts, but report tasks must not submit, cancel, replace, or modify broker orders.
 - Do not output deterministic buy/sell instructions.
 - Every candidate must include setup reference, trigger, invalidation, and risk constraint.
 - `--require-validation` on report extraction and Longbridge sync runs both report validation and trade-plan validation; do not continue when either gate fails.

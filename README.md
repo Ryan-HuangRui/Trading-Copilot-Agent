@@ -83,6 +83,7 @@ python3 script/workflow_smoke_test.py --date <DATE> --week <YYYY-Www>
 - `docs/contracts/journal.md`
 - `docs/cc-connect-scheduler.md`
 - `docs/longbridge-account-setup.md`
+- `docs/paper-execution-runbook.md`
 - `docs/paper-execution-roadmap.md`
 - `docs/workflows/`
 
@@ -127,6 +128,7 @@ python3 script/workflow_smoke_test.py --date <DATE> --week <YYYY-Www>
   - 产物：`runtime/account/YYYY-MM-DD/account-snapshot.json`、`report/YYYY-MM-DD/position-review.md`、`report/YYYY-MM-DD/position-review.json`
   - 配置：`config/position_review.json`
   - 若 `runtime/journal/trades.jsonl` 里有 `source_signal_id`，持仓复核会关联原始 signal、交易记录和估算 R
+- 模拟盘是盘前/盘后工作流的执行扩展层，依赖 `pre-market-signals.json` / `post-market-signals.json`，但 broker 写操作必须单独显式启动，不能混入报告生成任务。详细操作见 `docs/paper-execution-runbook.md`。
 - 模拟盘接入当前支持快照、订单预览、受控提交、订单同步、保护/退出计划和复盘：
   - `python3 script/trading_copilot.py paper-account-snapshot --date YYYY-MM-DD`
   - `python3 script/trading_copilot.py paper-trade-preview --date YYYY-MM-DD --session pre-market --require-validation`
