@@ -1,12 +1,13 @@
 # Longbridge Account Snapshot Setup
 
-This runbook covers the read-only account snapshot and position review workflow. It is for portfolio discipline checks only; it must not place, cancel, replace, modify, or submit orders.
+This runbook covers the read-only account snapshot, paper account snapshot, paper order preview/review, and position review workflows. These workflows support portfolio discipline and execution feedback only; they must not place, cancel, replace, modify, or submit orders.
 
 ## Safety Boundary
 
 - `script/longbridge_cli_adapter.py` owns Longbridge CLI access for account data.
 - Allowed operations are read-only account, assets, positions, portfolio, quote, and market lookups.
 - Order, cancel, replace, modify, trade, buy, sell, submit, and watchlist write tokens are rejected by the adapter.
+- `script/longbridge_paper_trade_adapter.py` is separate and only supports Longbridge paper accounts. It may read paper order and execution lists after verifying `account_channel=lb_papertrading`.
 - Downstream scripts read `runtime/account/<DATE>/account-snapshot.json` instead of calling Longbridge directly.
 
 ## Longbridge CLI Commands
@@ -32,6 +33,24 @@ Create the runtime account snapshot:
 python3 script/trading_copilot.py account-snapshot --date <DATE>
 ```
 
+Create the runtime paper account snapshot:
+
+```bash
+python3 script/trading_copilot.py paper-account-snapshot --date <DATE>
+```
+
+Build dry-run paper order previews from validated Trade Plan Cards:
+
+```bash
+python3 script/trading_copilot.py paper-trade-preview --date <DATE> --session pre-market --require-validation
+```
+
+Review observed paper executions against the preview and append matched paper fills:
+
+```bash
+python3 script/trading_copilot.py paper-trade-review --date <DATE> --session pre-market --append
+```
+
 Review positions against the same day's structured signals:
 
 ```bash
@@ -49,6 +68,13 @@ Outputs:
 - `report/<DATE>/position-review.md`
 - `report/<DATE>/position-review.json`
 - `runtime/journal/position_reviews.jsonl` when `--append` is used
+
+Paper outputs:
+
+- `runtime/paper/<DATE>/paper-account-snapshot.json`
+- `report/<DATE>/paper-trade-preview.json`
+- `report/<DATE>/paper-trade-review.json`
+- matched paper fills in `runtime/journal/trades.jsonl` when `paper-trade-review --append` is used
 
 ## Position Review Config
 

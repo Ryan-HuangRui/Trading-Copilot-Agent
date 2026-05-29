@@ -639,6 +639,108 @@ def run_account_snapshot(args: argparse.Namespace) -> None:
     emit(response)
 
 
+def run_paper_account_snapshot(args: argparse.Namespace) -> None:
+    command = [
+        "script/paper_account_snapshot.py",
+        "--timezone",
+        args.timezone,
+        "--repo-root",
+        args.repo_root,
+    ]
+    if args.date:
+        command.extend(["--date", args.date])
+    if args.input:
+        command.extend(["--input", args.input])
+    if args.output:
+        command.extend(["--output", args.output])
+    if args.longbridge_cli:
+        command.extend(["--longbridge-cli", args.longbridge_cli])
+
+    proc = run_child(command)
+    stdout = parse_json_output(proc.stdout)
+    if proc.returncode != 0:
+        emit(failed_response("paper-account-snapshot", command, proc), 1)
+
+    response = base_response("paper-account-snapshot", command, stdout)
+    response["date"] = (stdout or {}).get("date") or args.date
+    response["artifacts"] = [stdout["output"]] if stdout and stdout.get("output") else []
+    response["positions_count"] = (stdout or {}).get("positions_count")
+    response["orders_count"] = (stdout or {}).get("orders_count")
+    response["executions_count"] = (stdout or {}).get("executions_count")
+    response["account_channel"] = (stdout or {}).get("account_channel")
+    emit(response)
+
+
+def run_paper_trade_preview(args: argparse.Namespace) -> None:
+    command = [
+        "script/paper_trade_preview.py",
+        "--date",
+        args.date,
+        "--session",
+        args.session,
+        "--repo-root",
+        args.repo_root,
+        "--default-market",
+        args.default_market,
+        "--tif",
+        args.tif,
+    ]
+    if args.signals:
+        command.extend(["--signals", args.signals])
+    if args.account_snapshot:
+        command.extend(["--account-snapshot", args.account_snapshot])
+    if args.output:
+        command.extend(["--output", args.output])
+    if args.require_validation:
+        command.append("--require-validation")
+
+    proc = run_child(command)
+    stdout = parse_json_output(proc.stdout)
+    if proc.returncode != 0:
+        emit(failed_response("paper-trade-preview", command, proc), 1)
+
+    response = base_response("paper-trade-preview", command, stdout)
+    response["date"] = (stdout or {}).get("date") or args.date
+    response["artifacts"] = [stdout["output"]] if stdout and stdout.get("output") else []
+    response["summary"] = (stdout or {}).get("summary")
+    emit(response)
+
+
+def run_paper_trade_review(args: argparse.Namespace) -> None:
+    command = [
+        "script/paper_trade_review.py",
+        "--date",
+        args.date,
+        "--session",
+        args.session,
+        "--repo-root",
+        args.repo_root,
+        "--journal-dir",
+        args.journal_dir,
+    ]
+    if args.preview:
+        command.extend(["--preview", args.preview])
+    if args.paper_snapshot:
+        command.extend(["--paper-snapshot", args.paper_snapshot])
+    if args.output:
+        command.extend(["--output", args.output])
+    if args.append:
+        command.append("--append")
+
+    proc = run_child(command)
+    stdout = parse_json_output(proc.stdout)
+    if proc.returncode != 0:
+        emit(failed_response("paper-trade-review", command, proc), 1)
+
+    response = base_response("paper-trade-review", command, stdout)
+    response["date"] = (stdout or {}).get("date") or args.date
+    response["artifacts"] = [stdout["output"]] if stdout and stdout.get("output") else []
+    response["summary"] = (stdout or {}).get("summary")
+    response["appended"] = (stdout or {}).get("appended", [])
+    response["skipped_duplicates"] = (stdout or {}).get("skipped_duplicates", [])
+    emit(response)
+
+
 def run_position_review(args: argparse.Namespace) -> None:
     command = [
         "script/position_review.py",
@@ -918,6 +1020,38 @@ def build_parser() -> argparse.ArgumentParser:
     account.add_argument("--output")
     account.add_argument("--longbridge-cli")
     account.set_defaults(func=run_account_snapshot)
+
+    paper_account = sub.add_parser("paper-account-snapshot", help="Write a read-only Longbridge paper account snapshot")
+    paper_account.add_argument("--date")
+    paper_account.add_argument("--timezone", default="America/New_York")
+    paper_account.add_argument("--input")
+    paper_account.add_argument("--output")
+    paper_account.add_argument("--longbridge-cli")
+    paper_account.add_argument("--repo-root", default=str(ROOT))
+    paper_account.set_defaults(func=run_paper_account_snapshot)
+
+    paper_preview = sub.add_parser("paper-trade-preview", help="Build paper-trading order previews from trade plans")
+    paper_preview.add_argument("--date", required=True)
+    paper_preview.add_argument("--session", choices=["pre-market", "post-market"], required=True)
+    paper_preview.add_argument("--signals")
+    paper_preview.add_argument("--account-snapshot")
+    paper_preview.add_argument("--output")
+    paper_preview.add_argument("--default-market", default="US")
+    paper_preview.add_argument("--tif", default="day")
+    paper_preview.add_argument("--require-validation", action="store_true")
+    paper_preview.add_argument("--repo-root", default=str(ROOT))
+    paper_preview.set_defaults(func=run_paper_trade_preview)
+
+    paper_review = sub.add_parser("paper-trade-review", help="Review paper executions against order previews")
+    paper_review.add_argument("--date", required=True)
+    paper_review.add_argument("--session", choices=["pre-market", "post-market"], required=True)
+    paper_review.add_argument("--preview")
+    paper_review.add_argument("--paper-snapshot")
+    paper_review.add_argument("--output")
+    paper_review.add_argument("--append", action="store_true")
+    paper_review.add_argument("--journal-dir", default="runtime/journal")
+    paper_review.add_argument("--repo-root", default=str(ROOT))
+    paper_review.set_defaults(func=run_paper_trade_review)
 
     position = sub.add_parser("position-review", help="Review read-only positions against structured signals")
     position.add_argument("--date", required=True)

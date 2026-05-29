@@ -1,6 +1,6 @@
 ---
 name: trading-copilot
-description: Use this repo-local skill for Trading-Copilot-Agent market research workflows, including pre-market planning, post-market review, symbol analysis, monitor brief generation, research notes, and rule validation. The skill prepares or reviews trading research artifacts only; it must not place trades, call broker APIs, or output deterministic buy/sell instructions.
+description: Use this repo-local skill for Trading-Copilot-Agent market research workflows, including pre-market planning, post-market review, symbol analysis, monitor brief generation, research notes, rule validation, and paper-trading readiness review. The skill prepares or reviews trading research artifacts only; it must not place trades, call broker write APIs, or output deterministic buy/sell instructions.
 ---
 
 # Trading Copilot
@@ -28,7 +28,7 @@ Every workflow run should return or report the same status fields:
 
 ## Safety Rules
 
-- Never place real trades, call broker write APIs, or imply order execution. Read-only account snapshots are allowed only through the repository's account snapshot workflow.
+- Never place real trades, call broker write APIs, or imply order execution. Read-only account snapshots are allowed only through the repository's account snapshot workflow. Paper-trading workflows may read paper orders/executions and generate dry-run order previews only.
 - Do not output deterministic buy/sell instructions. Use scenarios, triggers, invalidation, risk, and `NO TRADE`.
 - For current or recent symbol analysis, fetch real market data first through the repository scripts or state that no concrete price conclusion can be made.
 - Use `knowledge/refined/` as the rule source for trading conclusions.
@@ -42,7 +42,7 @@ Every workflow run should return or report the same status fields:
 - `knowledge/refined/`: approved trading rules.
 - `docs/`: runbooks for automation and human operation.
 - `config/`: watchlists and local runtime state paths.
-- `raw_data/`, `report/`, `config/rate_limit_state.json`, and `config/longbridge_rate_limit_state.json`: generated or local runtime data, ignored by git.
+- `raw_data/`, `report/`, `runtime/`, `config/rate_limit_state.json`, and `config/longbridge_rate_limit_state.json`: generated or local runtime data, ignored by git.
 
 ## Core Workflows
 
@@ -120,6 +120,13 @@ Use `python3 script/trading_copilot.py learning-review --lookback-days 20` to ag
 1. Run `python3 script/trading_copilot.py account-snapshot --date <DATE>` to write a read-only account snapshot.
 2. Run `python3 script/trading_copilot.py position-review --date <DATE> --append`.
 3. Treat output as human-review prompts only. Do not output automatic buy/sell/adjustment instructions.
+
+### Paper Trading Readiness
+
+1. Run `python3 script/trading_copilot.py paper-account-snapshot --date <DATE>` to write a read-only paper account, order, and execution snapshot.
+2. Run `python3 script/trading_copilot.py paper-trade-preview --date <DATE> --session pre-market --require-validation` to convert complete Trade Plan Cards into dry-run order previews.
+3. Run `python3 script/trading_copilot.py paper-trade-review --date <DATE> --session pre-market --append` only after paper executions exist and should be recorded.
+4. Treat paper results as execution feedback. Do not promote paper P/L directly into `knowledge/refined/`.
 
 ### Symbol Analysis
 

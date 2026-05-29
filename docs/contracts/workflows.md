@@ -4,8 +4,9 @@ This repository is a trading research workflow package for Codex/Claude/OpenClaw
 
 All workflows must preserve the repository safety rules:
 
-- Never place real trades or call broker APIs.
+- Never place real trades or call broker write APIs.
 - Read-only Longbridge account snapshots are allowed only through the account snapshot workflow; order placement, cancellation, replacement, and automatic position changes are prohibited.
+- Paper-trading workflows may read Longbridge paper-account orders/executions and generate dry-run order previews only; they must not submit, cancel, replace, or automatically adjust orders.
 - Do not output deterministic buy/sell instructions.
 - Use scenarios, triggers, invalidation, risk, and `NO TRADE`.
 - Use `knowledge/refined/` as the only rule source for trading conclusions.
@@ -385,6 +386,88 @@ Required behavior:
 - `--dry-run` must show the exact Markdown block without writing.
 - `--apply` may append to `knowledge/evolution/validated_lessons.md`.
 - Promotion is still process guidance only; it must not edit `knowledge/refined/`.
+
+## paper-account-snapshot
+
+Purpose: write a read-only Longbridge paper account snapshot for execution-readiness checks and later paper-trade review.
+
+Canonical command:
+
+```bash
+python3 script/trading_copilot.py paper-account-snapshot --date <DATE>
+```
+
+Inputs:
+
+- Longbridge CLI `auth status`, `assets`, `positions`, today's `order` list, and `order executions`.
+- The workflow must verify `account_channel=lb_papertrading` before reading paper orders/executions.
+- Optional `--input` JSON fixture for tests.
+
+Output:
+
+- `runtime/paper/<DATE>/paper-account-snapshot.json`
+
+Required behavior:
+
+- Must be read-only.
+- Must reject non-paper Longbridge accounts.
+- Must not submit, cancel, replace, or modify orders.
+- The snapshot is an ignored runtime artifact and should not be committed.
+
+## paper-trade-preview
+
+Purpose: convert validated structured Trade Plan Cards into dry-run Longbridge paper order previews.
+
+Canonical command:
+
+```bash
+python3 script/trading_copilot.py paper-trade-preview --date <DATE> --session pre-market --require-validation
+```
+
+Inputs:
+
+- `report/<DATE>/pre-market-signals.json` or `report/<DATE>/post-market-signals.json`.
+- `runtime/paper/<DATE>/paper-account-snapshot.json`.
+- `knowledge/refined/setups/` through `validate-trade-plan`.
+
+Output:
+
+- `report/<DATE>/paper-trade-preview.json`
+
+Required behavior:
+
+- Default is dry-run only.
+- With `--require-validation`, a complete `conditional_executable` Trade Plan Card is required.
+- Quantity is computed from paper account net liquidation, `risk.max_account_risk_pct`, `risk.risk_per_share`, and available cash.
+- The output may include preview CLI commands for human/manual use, but the workflow must not execute them.
+- Unsupported directions or incomplete risk data must produce blocked previews, not orders.
+
+## paper-trade-review
+
+Purpose: compare dry-run paper order previews with observed Longbridge paper executions and append matched fills to the local journal.
+
+Canonical command:
+
+```bash
+python3 script/trading_copilot.py paper-trade-review --date <DATE> --session pre-market --append
+```
+
+Inputs:
+
+- `report/<DATE>/paper-trade-preview.json`.
+- `runtime/paper/<DATE>/paper-account-snapshot.json`.
+- Optional `runtime/journal/trades.jsonl` for duplicate detection.
+
+Output:
+
+- `report/<DATE>/paper-trade-review.json`
+- With `--append`, matched paper executions are appended to `runtime/journal/trades.jsonl`.
+
+Required behavior:
+
+- Must not infer an execution when no paper fill is observed.
+- Must append only matched paper fills, keyed by `source_signal_id` and paper order id.
+- Must keep paper execution feedback separate from plan quality and refined trading rules.
 
 Required behavior for outcome backfill:
 

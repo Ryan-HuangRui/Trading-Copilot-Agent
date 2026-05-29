@@ -2,7 +2,7 @@
 
 ## Scope and layout
 - This is a single Python trading-copilot project, not a monorepo.
-- `script/`: executable Python tools for market-data fetches, report context generation, monitor scans, read-only account snapshots, report delivery guards, and knowledge import.
+- `script/`: executable Python tools for market-data fetches, report context generation, monitor scans, read-only account snapshots, paper-trading previews/reviews, report delivery guards, and knowledge import.
 - `agent/`: Codex App automation execution prompts. Keep only prompts that automation actually reads.
 - `docs/`: runbooks for Codex App automation and human operation.
 - `knowledge/refined/`: approved trading rules. Use this for trading conclusions.
@@ -21,7 +21,7 @@
 ## Trading safety rules
 - `AGENTS.md` is engineering guidance for maintaining this repo; it is not a trading-analysis prompt.
 - This repo supports research and process discipline only; do not present output as investment advice.
-- Longbridge account workflows must be read-only. Never place orders, cancel orders, replace orders, or automatically adjust positions.
+- Longbridge account workflows must be read-only. Paper-trading workflows may read paper orders/executions and generate order previews, but must not submit, cancel, replace, or automatically adjust orders/positions.
 - Do not output deterministic buy/sell instructions. Use scenarios, triggers, invalidation, risk, and `NO TRADE` where appropriate.
 - For current/recent symbol analysis, fetch real market data first through the repository market-data provider stack or clearly state that no concrete price conclusion can be made.
 - Batch data fetches must respect provider rate-limit state files. Longbridge is the primary source; Twelve Data is the fallback source.

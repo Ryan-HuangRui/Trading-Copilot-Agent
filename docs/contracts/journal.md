@@ -19,6 +19,7 @@ runtime/learning/
 - `signals.jsonl`: planned or observed setup candidates extracted from reports or monitor scans.
 - `outcomes.jsonl`: computed signal outcome backfills from completed daily snapshots.
 - `trades.jsonl`: optional human-entered execution/outcome records.
+- Paper-trade review may append observed paper fills to `trades.jsonl`; these records are execution feedback, not strategy approval.
 - `reviews.jsonl`: post-market or weekly lessons linked back to reports, signals, or setups.
 - `position_reviews.jsonl`: read-only position risk and plan-consistency review records.
 - `runtime/learning/daily_lessons.jsonl`: candidate process lessons emitted by `plan-review --append-lessons`.
@@ -77,6 +78,9 @@ Recommended fields:
 - `result_r`
 - `lesson`
 - `source_signal_id`
+- `paper_order_id`
+- `paper_quantity`
+- `paper_side`
 
 ## `reviews.jsonl`
 
