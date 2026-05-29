@@ -21,7 +21,7 @@
 ## Trading safety rules
 - `AGENTS.md` is engineering guidance for maintaining this repo; it is not a trading-analysis prompt.
 - This repo supports research and process discipline only; do not present output as investment advice.
-- Longbridge account workflows must be read-only. Paper-trading workflows may read paper orders/executions and generate order previews, but must not submit, cancel, replace, or automatically adjust orders/positions.
+- Longbridge account workflows must be read-only. Paper-trading broker writes are allowed only in dedicated paper execution workflows, only against `lb_papertrading`, and only when both `--execute` and `TRADING_COPILOT_PAPER_EXECUTION=enabled` are present. Real-account writes remain forbidden.
 - Do not output deterministic buy/sell instructions. Use scenarios, triggers, invalidation, risk, and `NO TRADE` where appropriate.
 - For current/recent symbol analysis, fetch real market data first through the repository market-data provider stack or clearly state that no concrete price conclusion can be made.
 - Batch data fetches must respect provider rate-limit state files. Longbridge is the primary source; Twelve Data is the fallback source.

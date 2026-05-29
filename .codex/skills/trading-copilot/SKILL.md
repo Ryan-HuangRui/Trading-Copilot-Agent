@@ -130,9 +130,10 @@ Use `python3 script/trading_copilot.py learning-review --lookback-days 20` to ag
 5. Run `python3 script/trading_copilot.py paper-order-sync --date <DATE>` after refreshing the paper account snapshot to sync submitted order state.
 6. Run `python3 script/trading_copilot.py paper-order-cancel --date <DATE>` to prepare a dry-run cancel plan for expired unfilled entry orders.
 7. Only when the user explicitly wants simulated cancellation, run `TRADING_COPILOT_PAPER_EXECUTION=enabled python3 script/trading_copilot.py paper-order-cancel --date <DATE> --execute`.
-8. Run `python3 script/trading_copilot.py paper-protective-stop-plan --date <DATE>` to prepare a dry-run protective stop plan for filled long entries; do not use `--execute`.
-9. Run `python3 script/trading_copilot.py paper-trade-review --date <DATE> --session pre-market --append` only after paper executions exist and should be recorded.
-10. Treat paper results as execution feedback. Do not promote paper P/L directly into `knowledge/refined/`.
+8. Run `python3 script/trading_copilot.py paper-protective-stop-plan --date <DATE>` to prepare a dry-run protective stop plan for filled long entries.
+9. Only when the user explicitly wants simulated protective stop submission, run `TRADING_COPILOT_PAPER_EXECUTION=enabled python3 script/trading_copilot.py paper-protective-stop-plan --date <DATE> --execute`.
+10. Run `python3 script/trading_copilot.py paper-trade-review --date <DATE> --session pre-market --append` only after paper executions exist and should be recorded.
+11. Treat paper results as execution feedback. Do not promote paper P/L directly into `knowledge/refined/`.
 
 ### Symbol Analysis
 

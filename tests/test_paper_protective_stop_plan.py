@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -126,10 +127,85 @@ class PaperProtectiveStopPlanTest(unittest.TestCase):
             root = Path(tmp)
             self.seed_state(root, [filled_entry()])
 
-            with self.assertRaises(PermissionError):
-                paper_protective_stop_plan.run(
+            adapter = unittest.mock.Mock()
+            adapter.submit_protective_stop_order.return_value = {
+                "broker": "longbridge",
+                "account_channel": "lb_papertrading",
+                "broker_order_id": "stop-o-1",
+                "raw_request": {"command": ["order", "sell", "MU.US"]},
+                "raw_response": {"order_id": "stop-o-1", "status": "submitted"},
+            }
+
+            with patch.object(paper_protective_stop_plan, "LongbridgePaperOrderAdapter", return_value=adapter):
+                result = paper_protective_stop_plan.run(
                     paper_protective_stop_plan.build_args(repo_root=str(root), date="2026-05-26", execute=True)
                 )
+
+            self.assertFalse(result["dry_run"])
+            self.assertEqual(result["summary"]["submitted"], 1)
+            adapter.submit_protective_stop_order.assert_called_once()
+            stop_intent = adapter.submit_protective_stop_order.call_args.args[0]
+            self.assertEqual(stop_intent["order_type"], "MIT")
+            self.assertEqual(stop_intent["trigger_price"], 95.0)
+            self.assertEqual(adapter.submit_protective_stop_order.call_args.kwargs["execute"], True)
+            payload = json.loads(Path(result["output"]).read_text(encoding="utf-8"))
+            self.assertEqual(payload["submitted"][0]["broker_order_id"], "stop-o-1")
+            stops_path = root / "runtime" / "paper" / "2026-05-26" / "paper-stop-orders.jsonl"
+            record = json.loads(stops_path.read_text(encoding="utf-8").strip())
+            self.assertEqual(record["intent_id"], "intent-1")
+            self.assertEqual(record["broker_order_id"], "stop-o-1")
+
+    def test_execute_skips_duplicate_stop_journal_without_calling_adapter(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.seed_state(root, [filled_entry()])
+            stops_path = root / "runtime" / "paper" / "2026-05-26" / "paper-stop-orders.jsonl"
+            stops_path.parent.mkdir(parents=True, exist_ok=True)
+            stops_path.write_text(json.dumps({"intent_id": "intent-1", "broker_order_id": "stop-o-1"}) + "\n", encoding="utf-8")
+            adapter = unittest.mock.Mock()
+
+            with patch.object(paper_protective_stop_plan, "LongbridgePaperOrderAdapter", return_value=adapter):
+                result = paper_protective_stop_plan.run(
+                    paper_protective_stop_plan.build_args(repo_root=str(root), date="2026-05-26", execute=True)
+                )
+
+            adapter.submit_protective_stop_order.assert_not_called()
+            self.assertEqual(result["summary"]["stop_candidates"], 0)
+            self.assertEqual(result["summary"]["blocked"], 1)
+            payload = json.loads(Path(result["output"]).read_text(encoding="utf-8"))
+            self.assertEqual(payload["blocked"][0]["reason"], "protective stop already submitted")
+
+    def test_execute_records_error_and_continues_other_stops(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.seed_state(
+                root,
+                [
+                    filled_entry(intent_id="intent-1", broker_order_id="entry-o-1"),
+                    filled_entry(intent_id="intent-2", broker_order_id="entry-o-2"),
+                ],
+            )
+            adapter = unittest.mock.Mock()
+            adapter.submit_protective_stop_order.side_effect = [
+                RuntimeError("broker rejected stop"),
+                {
+                    "broker": "longbridge",
+                    "account_channel": "lb_papertrading",
+                    "broker_order_id": "stop-o-2",
+                    "raw_request": {"command": ["order", "sell", "MU.US"]},
+                    "raw_response": {"order_id": "stop-o-2", "status": "submitted"},
+                },
+            ]
+
+            with patch.object(paper_protective_stop_plan, "LongbridgePaperOrderAdapter", return_value=adapter):
+                result = paper_protective_stop_plan.run(
+                    paper_protective_stop_plan.build_args(repo_root=str(root), date="2026-05-26", execute=True)
+                )
+
+            self.assertEqual(result["summary"]["submitted"], 1)
+            self.assertEqual(result["summary"]["errors"], 1)
+            payload = json.loads(Path(result["output"]).read_text(encoding="utf-8"))
+            self.assertIn("broker rejected stop", payload["errors"][0]["error"])
 
     def test_wrapper_exposes_protective_stop_plan(self):
         with tempfile.TemporaryDirectory() as tmp:

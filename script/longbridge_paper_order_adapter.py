@@ -144,3 +144,61 @@ class LongbridgePaperOrderAdapter:
             },
             "raw_response": raw_response if isinstance(raw_response, dict) else {"response": raw_response},
         }
+
+    def validate_protective_stop_intent(self, intent: dict[str, Any]) -> None:
+        if intent.get("side") != "sell":
+            raise ValueError("only sell side is supported for protective stops")
+        if intent.get("order_type") != "MIT":
+            raise ValueError("only MIT stop orders are supported")
+        if int(intent.get("quantity") or 0) <= 0:
+            raise ValueError("quantity must be > 0")
+        if not intent.get("longbridge_symbol"):
+            raise ValueError("longbridge_symbol is required")
+        if float(intent.get("trigger_price") or 0) <= 0:
+            raise ValueError("trigger_price must be > 0")
+
+    def submit_protective_stop_order(
+        self,
+        intent: dict[str, Any],
+        *,
+        execute: bool,
+        env: Mapping[str, str] | None = None,
+    ) -> dict[str, Any]:
+        self.validate_protective_stop_intent(intent)
+        self.ensure_write_allowed(execute=execute, action="submit", env=env)
+        account_channel = self.assert_paper_account()
+        quantity = str(int(intent["quantity"]))
+        trigger_price = format_decimal(float(intent["trigger_price"]))
+        remark = str(intent.get("remark") or f"tca-stop:{intent['intent_id']}")
+        command = [
+            "order",
+            "sell",
+            str(intent["longbridge_symbol"]),
+            quantity,
+            "--order-type",
+            "MIT",
+            "--trigger-price",
+            trigger_price,
+            "--tif",
+            str(intent.get("tif") or "gtc"),
+            "--remark",
+            remark,
+            "--format",
+            "json",
+            "-y",
+        ]
+        raw_response = self.run_json(command)
+        broker_order_id = None
+        if isinstance(raw_response, dict):
+            broker_order_id = raw_response.get("order_id") or raw_response.get("id") or raw_response.get("broker_order_id")
+        return {
+            "broker": "longbridge",
+            "account_channel": account_channel or PAPER_ACCOUNT_CHANNEL,
+            "broker_order_id": str(broker_order_id) if broker_order_id else None,
+            "raw_request": {
+                "command": command,
+                "intent_id": intent["intent_id"],
+                "remark": remark,
+            },
+            "raw_response": raw_response if isinstance(raw_response, dict) else {"response": raw_response},
+        }

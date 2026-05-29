@@ -862,6 +862,10 @@ def run_paper_protective_stop_plan(args: argparse.Namespace) -> None:
         command.extend(["--state", args.state])
     if args.output:
         command.extend(["--output", args.output])
+    if args.stops_journal:
+        command.extend(["--stops-journal", args.stops_journal])
+    if args.longbridge_cli:
+        command.extend(["--longbridge-cli", args.longbridge_cli])
     if args.execute:
         command.append("--execute")
 
@@ -1226,11 +1230,13 @@ def build_parser() -> argparse.ArgumentParser:
     paper_cancel.add_argument("--repo-root", default=str(ROOT))
     paper_cancel.set_defaults(func=run_paper_order_cancel)
 
-    paper_stop = sub.add_parser("paper-protective-stop-plan", help="Build a dry-run protective stop plan for filled paper entries")
+    paper_stop = sub.add_parser("paper-protective-stop-plan", help="Build or submit guarded protective stops for filled paper entries")
     paper_stop.add_argument("--date", required=True)
     paper_stop.add_argument("--state")
     paper_stop.add_argument("--output")
+    paper_stop.add_argument("--stops-journal")
     paper_stop.add_argument("--tif", default="gtc")
+    paper_stop.add_argument("--longbridge-cli")
     paper_stop.add_argument("--execute", action="store_true")
     paper_stop.add_argument("--repo-root", default=str(ROOT))
     paper_stop.set_defaults(func=run_paper_protective_stop_plan)

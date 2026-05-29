@@ -12,7 +12,7 @@
 - `longbridge_cli_adapter.py`: read-only Longbridge CLI guard. Do not add order/write commands.
 - `longbridge_account_snapshot.py`: read-only account/position snapshot writer under `runtime/account/`.
 - `longbridge_paper_trade_adapter.py`: Longbridge paper-account guard and read-only paper order/execution fetcher.
-- `longbridge_paper_order_adapter.py`: gated Longbridge paper order writer. It must remain paper-only and currently supports limit buy submission and cancel through explicit execute/env gates.
+- `longbridge_paper_order_adapter.py`: gated Longbridge paper order writer. It must remain paper-only and currently supports limit buy submission, cancel, and protective stop submission through explicit execute/env gates.
 - `paper_account_snapshot.py`: read-only paper account, order, and execution snapshot writer under `runtime/paper/`.
 - `paper_order_models.py`: stable paper intent/order record builders and idempotency keys.
 - `paper_risk_guard.py`: deterministic execution-safety checks for paper order intents.
@@ -20,7 +20,7 @@
 - `paper_trade_submit.py`: prepares controlled paper submissions from previews and risk guard output; defaults to dry-run and only submits through the gated paper order adapter when execution gates are explicitly enabled.
 - `paper_order_sync.py`: read-only paper order state sync from `paper-orders.jsonl` and paper account snapshots.
 - `paper_order_cancel.py`: cancel-plan builder for expired unfilled paper entry orders; defaults to dry-run and only cancels through the gated paper order adapter when execution gates are explicitly enabled.
-- `paper_protective_stop_plan.py`: dry-run protective stop planner for filled long paper entries. It must not call broker write APIs until a guarded stop adapter exists.
+- `paper_protective_stop_plan.py`: protective stop planner for filled long paper entries. It defaults to dry-run and only submits paper stops through the gated paper order adapter when execution gates are explicitly enabled.
 - `paper_trade_review.py`: compares submitted/previewed paper orders with observed paper executions and can append matched paper fills to the journal.
 - `position_review.py`: compares read-only positions with a session-specific signal sidecar and writes review artifacts.
 - `data_quality.py`: checks daily snapshot data source/freshness, focused-symbol fallback, account price deltas, and abnormal moves.
@@ -54,6 +54,7 @@
 - Build paper cancel plan: `python3 script/trading_copilot.py paper-order-cancel --date 2026-05-06`.
 - Cancel guarded expired paper entry orders: `TRADING_COPILOT_PAPER_EXECUTION=enabled python3 script/trading_copilot.py paper-order-cancel --date 2026-05-06 --execute`.
 - Build protective stop plan: `python3 script/trading_copilot.py paper-protective-stop-plan --date 2026-05-06`.
+- Submit guarded paper protective stops: `TRADING_COPILOT_PAPER_EXECUTION=enabled python3 script/trading_copilot.py paper-protective-stop-plan --date 2026-05-06 --execute`.
 - Review paper executions: `python3 script/trading_copilot.py paper-trade-review --date 2026-05-06 --session pre-market --append`.
 - Run position review: `python3 script/trading_copilot.py position-review --date 2026-05-06 --append`.
 - Run data quality review: `python3 script/trading_copilot.py data-quality --date 2026-05-06`.

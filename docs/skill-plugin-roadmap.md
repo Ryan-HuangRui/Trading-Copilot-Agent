@@ -79,4 +79,4 @@ Boundary:
 - External engines remain adapters.
 - Human confirmation remains required.
 - Research conclusions stay separate from order execution.
-- Paper workflows must not submit orders; they only validate readiness and review observed paper executions.
+- Paper broker writes must stay out of public skill prompts and remain confined to guarded repository workflows with explicit execution gates.

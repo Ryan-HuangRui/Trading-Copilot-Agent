@@ -145,7 +145,7 @@ Recommended sequence:
 3. Add TP1 partial exits.
 4. Add break-even stop movement or trailing logic only after basic exits are stable.
 
-Implementation status: `paper-order-cancel` now generates a dry-run cancel plan for expired unfilled entry orders and can execute those cancels through the guarded paper adapter when `--execute` and `TRADING_COPILOT_PAPER_EXECUTION=enabled` are both set. `paper-protective-stop-plan` now generates a dry-run `sell MIT --trigger-price <stop>` plan for filled long entries; broker submission of stop orders remains out of scope until a guarded stop adapter is implemented.
+Implementation status: `paper-order-cancel` now generates a dry-run cancel plan for expired unfilled entry orders and can execute those cancels through the guarded paper adapter when `--execute` and `TRADING_COPILOT_PAPER_EXECUTION=enabled` are both set. `paper-protective-stop-plan` now generates a `sell MIT --trigger-price <stop>` plan for filled long entries and can submit those protective stops through the guarded paper adapter under the same execution gates.
 
 All exit actions must use the same paper-account, env flag, execute flag, idempotency, and audit-log gates as entry submission.
 

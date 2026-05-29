@@ -1,6 +1,6 @@
 # Longbridge Account Snapshot Setup
 
-This runbook covers the read-only account snapshot, paper account snapshot, paper order preview/submit/cancel/review, and position review workflows. Production account workflows remain read-only. Paper writes are limited to guarded Longbridge paper-account entry orders and expired unfilled entry-order cancellation.
+This runbook covers the read-only account snapshot, paper account snapshot, paper order preview/submit/cancel/protective-stop/review, and position review workflows. Production account workflows remain read-only. Paper writes are limited to guarded Longbridge paper-account entry orders, expired unfilled entry-order cancellation, and protective stop submission.
 
 ## Safety Boundary
 
@@ -8,7 +8,7 @@ This runbook covers the read-only account snapshot, paper account snapshot, pape
 - Allowed operations are read-only account, assets, positions, portfolio, quote, and market lookups.
 - Order, cancel, replace, modify, trade, buy, sell, submit, and watchlist write tokens are rejected by the adapter.
 - `script/longbridge_paper_trade_adapter.py` is separate and only supports Longbridge paper accounts. It may read paper order and execution lists after verifying `account_channel=lb_papertrading`.
-- `script/longbridge_paper_order_adapter.py` is the only broker-write adapter. It requires `account_channel=lb_papertrading`, `--execute`, and `TRADING_COPILOT_PAPER_EXECUTION=enabled`, and currently supports simulated limit buy entry orders plus expired unfilled entry-order cancellation.
+- `script/longbridge_paper_order_adapter.py` is the only broker-write adapter. It requires `account_channel=lb_papertrading`, `--execute`, and `TRADING_COPILOT_PAPER_EXECUTION=enabled`, and currently supports simulated limit buy entry orders, expired unfilled entry-order cancellation, and protective stop submission.
 - Downstream scripts read `runtime/account/<DATE>/account-snapshot.json` instead of calling Longbridge directly.
 
 ## Longbridge CLI Commands
@@ -84,6 +84,13 @@ Build a dry-run protective stop plan for filled long paper entries:
 python3 script/trading_copilot.py paper-protective-stop-plan --date <DATE>
 ```
 
+Submit guarded paper protective stops for filled long entries:
+
+```bash
+TRADING_COPILOT_PAPER_EXECUTION=enabled \
+python3 script/trading_copilot.py paper-protective-stop-plan --date <DATE> --execute
+```
+
 Review observed paper executions against the preview and append matched paper fills:
 
 ```bash
@@ -117,6 +124,7 @@ Paper outputs:
 - `runtime/paper/<DATE>/paper-execution-state.json`
 - `report/<DATE>/paper-order-cancel-plan.json`
 - `report/<DATE>/paper-protective-stop-plan.json`
+- `runtime/paper/<DATE>/paper-stop-orders.jsonl` when `paper-protective-stop-plan --execute` succeeds
 - `report/<DATE>/paper-trade-review.json`
 - matched paper fills in `runtime/journal/trades.jsonl` when `paper-trade-review --append` is used
 

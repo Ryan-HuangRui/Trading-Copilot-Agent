@@ -37,6 +37,19 @@ def order_intent() -> dict:
     )
 
 
+def stop_intent() -> dict:
+    return {
+        "intent_id": "intent-1",
+        "longbridge_symbol": "MU.US",
+        "side": "sell",
+        "order_type": "MIT",
+        "quantity": 200,
+        "trigger_price": 95,
+        "tif": "gtc",
+        "remark": "tca-stop:intent-1",
+    }
+
+
 class LongbridgePaperOrderAdapterTest(unittest.TestCase):
     def test_submit_requires_execute_flag(self):
         adapter = LongbridgePaperOrderAdapter(cli="/bin/longbridge")
@@ -154,6 +167,74 @@ class LongbridgePaperOrderAdapterTest(unittest.TestCase):
         self.assertEqual(result["broker_order_id"], "order-1")
         self.assertEqual(result["raw_response"], {"order_id": "order-1", "status": "cancelled"})
         self.assertEqual(calls[1], ["order", "cancel", "order-1", "--format", "json", "-y"])
+
+    def test_protective_stop_requires_execute_flag(self):
+        adapter = LongbridgePaperOrderAdapter(cli="/bin/longbridge")
+
+        with self.assertRaises(PermissionError):
+            adapter.submit_protective_stop_order(
+                stop_intent(),
+                execute=False,
+                env={"TRADING_COPILOT_PAPER_EXECUTION": "enabled"},
+            )
+
+    def test_protective_stop_requires_env_flag(self):
+        adapter = LongbridgePaperOrderAdapter(cli="/bin/longbridge")
+
+        with self.assertRaises(PermissionError):
+            adapter.submit_protective_stop_order(stop_intent(), execute=True, env={})
+
+    def test_protective_stop_rejects_unsupported_shape(self):
+        adapter = LongbridgePaperOrderAdapter(cli="/bin/longbridge")
+
+        with self.assertRaises(ValueError):
+            adapter.submit_protective_stop_order(
+                {**stop_intent(), "order_type": "LO"},
+                execute=True,
+                env={"TRADING_COPILOT_PAPER_EXECUTION": "enabled"},
+            )
+
+    def test_protective_stop_builds_safe_command_and_records_raw_response(self):
+        adapter = LongbridgePaperOrderAdapter(cli="/bin/longbridge")
+        calls = []
+
+        def fake_run(args):
+            calls.append(args)
+            if args[:2] == ["auth", "status"]:
+                return {"account": {"account_channel": "lb_papertrading"}, "token": {"status": "valid"}}
+            if args[:2] == ["order", "sell"]:
+                return {"order_id": "stop-o-1", "status": "submitted"}
+            raise AssertionError(args)
+
+        with patch.object(adapter, "run_json", side_effect=fake_run):
+            result = adapter.submit_protective_stop_order(
+                stop_intent(),
+                execute=True,
+                env={"TRADING_COPILOT_PAPER_EXECUTION": "enabled"},
+            )
+
+        self.assertEqual(result["broker_order_id"], "stop-o-1")
+        self.assertEqual(result["raw_response"], {"order_id": "stop-o-1", "status": "submitted"})
+        self.assertEqual(
+            calls[1],
+            [
+                "order",
+                "sell",
+                "MU.US",
+                "200",
+                "--order-type",
+                "MIT",
+                "--trigger-price",
+                "95",
+                "--tif",
+                "gtc",
+                "--remark",
+                "tca-stop:intent-1",
+                "--format",
+                "json",
+                "-y",
+            ],
+        )
 
 
 if __name__ == "__main__":

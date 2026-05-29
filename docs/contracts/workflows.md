@@ -579,7 +579,7 @@ Required behavior:
 
 ## paper-protective-stop-plan
 
-Purpose: build a dry-run protective stop plan for filled long paper entries.
+Purpose: build a protective stop plan for filled long paper entries, and optionally submit those stops to the Longbridge paper account through the guarded paper adapter.
 
 Canonical command:
 
@@ -587,21 +587,33 @@ Canonical command:
 python3 script/trading_copilot.py paper-protective-stop-plan --date <DATE>
 ```
 
+Execution command:
+
+```bash
+TRADING_COPILOT_PAPER_EXECUTION=enabled \
+python3 script/trading_copilot.py paper-protective-stop-plan --date <DATE> --execute
+```
+
 Inputs:
 
 - `runtime/paper/<DATE>/paper-execution-state.json`.
+- Optional `runtime/paper/<DATE>/paper-stop-orders.jsonl` for duplicate detection.
 
 Output:
 
 - `report/<DATE>/paper-protective-stop-plan.json`
+- `runtime/paper/<DATE>/paper-stop-orders.jsonl` only when `--execute` successfully submits a protective stop.
 
 Required behavior:
 
-- Current implementation is dry-run only and must not call broker write APIs.
-- `--execute` must be rejected until a guarded paper stop adapter exists.
+- Default behavior is dry-run and must not call broker write APIs.
+- Broker stop submission requires both `--execute` and `TRADING_COPILOT_PAPER_EXECUTION=enabled`.
+- Broker stop submission must use only `script/longbridge_paper_order_adapter.py`.
 - Only fully filled long buy entries with positive `stop_price`, positive filled quantity, and no existing protective stop may become stop candidates.
 - The first stop plan uses Longbridge `sell` `MIT` with `--trigger-price <stop_price>` and `tif=gtc` by default.
+- Duplicate `intent_id` values already present in `paper-stop-orders.jsonl` must be blocked.
 - The artifact must separate `stop_candidates`, `blocked`, `submitted`, and `errors`.
+- Successful stop records must preserve `intent_id`, `entry_broker_order_id`, `broker_order_id`, `remark`, `raw_request`, `raw_response`, and `submitted_at`.
 
 Required behavior for outcome backfill:
 
