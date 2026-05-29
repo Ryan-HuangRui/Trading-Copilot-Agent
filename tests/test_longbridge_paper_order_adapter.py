@@ -8,7 +8,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "script"))
 
-from longbridge_paper_order_adapter import LongbridgePaperOrderAdapter
+from longbridge_paper_order_adapter import LongbridgePaperOrderAdapter, parse_json_output
 from paper_order_models import build_order_intent
 
 
@@ -76,6 +76,13 @@ def take_profit_intent() -> dict:
 
 
 class LongbridgePaperOrderAdapterTest(unittest.TestCase):
+    def test_parse_json_output_accepts_cli_progress_prefix(self):
+        payload = parse_json_output(
+            'Submitting Buy order: 89 ORCL.US @ 205\n{"order_id": "order-1"}'
+        )
+
+        self.assertEqual(payload, {"order_id": "order-1"})
+
     def test_submit_requires_execute_flag(self):
         adapter = LongbridgePaperOrderAdapter(cli="/bin/longbridge", paper_execution_config=write_config())
 

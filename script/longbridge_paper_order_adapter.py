@@ -17,6 +17,27 @@ def format_decimal(value: float) -> str:
     return f"{value:.4f}".rstrip("0").rstrip(".")
 
 
+def parse_json_output(output: str) -> Any:
+    text = output.strip()
+    if not text:
+        return None
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        decoder = json.JSONDecoder()
+        for index, char in enumerate(text):
+            if char not in "[{":
+                continue
+            try:
+                payload, end = decoder.raw_decode(text[index:])
+            except json.JSONDecodeError:
+                continue
+            if text[index + end :].strip():
+                continue
+            return payload
+        raise
+
+
 class LongbridgePaperOrderAdapter:
     def __init__(self, cli: str | None = None, paper_execution_config: dict[str, Any] | None = None) -> None:
         self.cli = cli or shutil.which("longbridge") or str(Path.home() / ".local" / "bin" / "longbridge")
@@ -33,7 +54,7 @@ class LongbridgePaperOrderAdapter:
         if not output:
             return None
         try:
-            return json.loads(output)
+            return parse_json_output(output)
         except json.JSONDecodeError as exc:
             raise RuntimeError(f"Longbridge CLI did not return JSON: {output[:200]}") from exc
 
