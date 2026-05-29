@@ -622,6 +622,32 @@ Required behavior:
 - Must aggregate by setup and symbol with planned count, submitted count, filled count, cancelled/expired count, average R, median R, win rate, average slippage, false-trigger rate, and no-fill-then-win rate where evidence exists.
 - Must preserve source review paths and keep unavailable metrics as `null` rather than inventing values.
 
+## paper-learning-lessons
+
+Purpose: feed paper execution review candidate lessons into the existing runtime learning loop.
+
+Canonical command:
+
+```bash
+python3 script/trading_copilot.py paper-learning-lessons --date <DATE> --append
+```
+
+Inputs:
+
+- `report/<DATE>/paper-execution-review.json`.
+
+Outputs:
+
+- `report/<DATE>/paper-learning-lessons.json`
+- With `--append`, `runtime/learning/daily_lessons.jsonl`
+
+Required behavior:
+
+- Must write runtime candidate lessons only; it must not modify `knowledge/refined/`.
+- Must be idempotent for repeated runs of the same paper review lessons.
+- Lessons must use `lesson_type=paper_execution`, `status=candidate`, and preserve symbol/setup/evidence/source ids where available.
+- Promotion remains gated by `learning-review` and explicit human-approved `promote-lesson --apply`.
+
 ## paper-trade-submit
 
 Purpose: prepare controlled paper order submissions from validated dry-run order previews.

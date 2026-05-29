@@ -77,6 +77,12 @@ Generate a paper execution quality review:
 python3 script/trading_copilot.py paper-execution-review --date <DATE>
 ```
 
+Append paper execution candidate lessons into the runtime learning queue:
+
+```bash
+python3 script/trading_copilot.py paper-learning-lessons --date <DATE> --append
+```
+
 Aggregate paper execution reviews by setup and symbol:
 
 ```bash
@@ -163,6 +169,8 @@ Paper outputs:
 - `report/<DATE>/paper-event-ledger.json`
 - `report/<DATE>/paper-execution-review.json`
 - `report/<DATE>/paper-execution-review.md`
+- `report/<DATE>/paper-learning-lessons.json`
+- `runtime/learning/daily_lessons.jsonl` when `paper-learning-lessons --append` is used
 - `report/strategy/paper-strategy-review.json`
 - `report/strategy/paper-strategy-review.md`
 - `report/<DATE>/paper-order-cancel-plan.json`

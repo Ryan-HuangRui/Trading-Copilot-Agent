@@ -263,6 +263,8 @@ Disallowed writes:
 
 - Direct automatic edits to `knowledge/refined/`
 
+Implementation status: `paper-learning-lessons` extracts candidate lessons from paper execution reviews into `runtime/learning/daily_lessons.jsonl` with idempotent append behavior. Existing `learning-review` and human-approved `promote-lesson` remain the only path toward validated lessons.
+
 ## Operating Principle
 
 The project may become a Longbridge paper execution system, but it must not become an uncontrolled LLM trading agent. Every automated action must be backed by validated structured inputs, deterministic risk checks, broker account guards, idempotent state, and audit evidence.

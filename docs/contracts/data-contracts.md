@@ -192,7 +192,7 @@ python3 script/trading_copilot.py plan-review --date <DATE> --append-lessons
 Expected fields:
 
 - `date`: review date.
-- `lesson_type`: currently `plan_quality`.
+  - `lesson_type`: `plan_quality`, `position_discipline`, or `paper_execution`.
 - `symbol`, `setup`: evidence scope.
 - `problem`: concise issue key such as `missing_take_profit`.
 - `evidence`: short evidence strings.

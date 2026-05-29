@@ -130,16 +130,17 @@ Use `python3 script/trading_copilot.py learning-review --lookback-days 20` to ag
 5. Run `python3 script/trading_copilot.py paper-order-sync --date <DATE>` after refreshing the paper account snapshot to sync submitted entry, stop, and TP1 order state.
 6. Run `python3 script/trading_copilot.py paper-event-ledger --date <DATE>` to project submitted and observed paper execution facts into `runtime/journal/events.jsonl`.
 7. Run `python3 script/trading_copilot.py paper-execution-review --date <DATE>` to generate paper execution quality JSON/Markdown without promoting lessons.
-8. Run `python3 script/trading_copilot.py paper-strategy-review` to aggregate paper execution reviews by setup and symbol.
-9. Run `python3 script/trading_copilot.py paper-order-cancel --date <DATE>` to prepare a dry-run cancel plan for expired unfilled entry orders.
-10. Only when the user explicitly wants simulated cancellation, run `TRADING_COPILOT_PAPER_EXECUTION=enabled python3 script/trading_copilot.py paper-order-cancel --date <DATE> --execute`.
-11. Run `python3 script/trading_copilot.py paper-protective-stop-plan --date <DATE>` to prepare a dry-run protective stop plan for filled long entries.
-12. Only when the user explicitly wants simulated protective stop submission, run `TRADING_COPILOT_PAPER_EXECUTION=enabled python3 script/trading_copilot.py paper-protective-stop-plan --date <DATE> --execute`.
-13. Run `python3 script/trading_copilot.py paper-take-profit-plan --date <DATE>` to prepare a dry-run TP1 partial-exit plan for filled long entries.
-14. Only when the user explicitly wants simulated TP1 submission, run `TRADING_COPILOT_PAPER_EXECUTION=enabled python3 script/trading_copilot.py paper-take-profit-plan --date <DATE> --execute`.
-15. Run `python3 script/trading_copilot.py paper-break-even-stop-plan --date <DATE>` to prepare a dry-run break-even stop movement plan after TP1 fill evidence exists. This workflow is plan-only and must not cancel, replace, or submit broker orders.
-16. Run `python3 script/trading_copilot.py paper-trade-review --date <DATE> --session pre-market --append` only after paper executions exist and should be recorded.
-17. Treat paper results as execution feedback. Do not promote paper P/L directly into `knowledge/refined/`.
+8. Run `python3 script/trading_copilot.py paper-learning-lessons --date <DATE> --append` to append paper execution candidate lessons into the runtime learning queue.
+9. Run `python3 script/trading_copilot.py paper-strategy-review` to aggregate paper execution reviews by setup and symbol.
+10. Run `python3 script/trading_copilot.py paper-order-cancel --date <DATE>` to prepare a dry-run cancel plan for expired unfilled entry orders.
+11. Only when the user explicitly wants simulated cancellation, run `TRADING_COPILOT_PAPER_EXECUTION=enabled python3 script/trading_copilot.py paper-order-cancel --date <DATE> --execute`.
+12. Run `python3 script/trading_copilot.py paper-protective-stop-plan --date <DATE>` to prepare a dry-run protective stop plan for filled long entries.
+13. Only when the user explicitly wants simulated protective stop submission, run `TRADING_COPILOT_PAPER_EXECUTION=enabled python3 script/trading_copilot.py paper-protective-stop-plan --date <DATE> --execute`.
+14. Run `python3 script/trading_copilot.py paper-take-profit-plan --date <DATE>` to prepare a dry-run TP1 partial-exit plan for filled long entries.
+15. Only when the user explicitly wants simulated TP1 submission, run `TRADING_COPILOT_PAPER_EXECUTION=enabled python3 script/trading_copilot.py paper-take-profit-plan --date <DATE> --execute`.
+16. Run `python3 script/trading_copilot.py paper-break-even-stop-plan --date <DATE>` to prepare a dry-run break-even stop movement plan after TP1 fill evidence exists. This workflow is plan-only and must not cancel, replace, or submit broker orders.
+17. Run `python3 script/trading_copilot.py paper-trade-review --date <DATE> --session pre-market --append` only after paper executions exist and should be recorded.
+18. Treat paper results as execution feedback. Do not promote paper P/L directly into `knowledge/refined/`.
 
 ### Symbol Analysis
 

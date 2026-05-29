@@ -21,6 +21,7 @@
 - `paper_order_sync.py`: read-only paper order state sync from entry/stop/TP1 journals and paper account snapshots.
 - `paper_event_ledger.py`: read-only projection from paper journals/execution state into `runtime/journal/events.jsonl`.
 - `paper_execution_review.py`: deterministic paper execution quality review that writes JSON/Markdown and candidate lessons without editing refined rules.
+- `paper_learning_lessons.py`: extracts paper execution candidate lessons into `runtime/learning/daily_lessons.jsonl` without promoting rules.
 - `paper_strategy_review.py`: aggregate paper execution reviews by setup and symbol without editing refined rules.
 - `paper_order_cancel.py`: cancel-plan builder for expired unfilled paper entry orders; defaults to dry-run and only cancels through the gated paper order adapter when execution gates are explicitly enabled.
 - `paper_protective_stop_plan.py`: protective stop planner for filled long paper entries. It defaults to dry-run and only submits paper stops through the gated paper order adapter when execution gates are explicitly enabled.
@@ -58,6 +59,7 @@
 - Sync paper order state: `python3 script/trading_copilot.py paper-order-sync --date 2026-05-06`.
 - Project paper events: `python3 script/trading_copilot.py paper-event-ledger --date 2026-05-06`.
 - Review paper execution quality: `python3 script/trading_copilot.py paper-execution-review --date 2026-05-06`.
+- Append paper learning candidates: `python3 script/trading_copilot.py paper-learning-lessons --date 2026-05-06 --append`.
 - Aggregate paper strategy evidence: `python3 script/trading_copilot.py paper-strategy-review`.
 - Build paper cancel plan: `python3 script/trading_copilot.py paper-order-cancel --date 2026-05-06`.
 - Cancel guarded expired paper entry orders: `TRADING_COPILOT_PAPER_EXECUTION=enabled python3 script/trading_copilot.py paper-order-cancel --date 2026-05-06 --execute`.
