@@ -47,7 +47,7 @@ Acceptance:
 
 Goal: automatically submit Longbridge paper entry limit buy orders from validated plans.
 
-Implementation status: order models, risk guard, dry-run submission, guarded Longbridge paper order adapter, and `paper-trade-submit --execute` integration are implemented. The next Milestone 1 hardening item is fixture smoke coverage for the paper submit chain.
+Implementation status: order models, risk guard, dry-run submission, guarded Longbridge paper order adapter, `paper-trade-submit --execute` integration, and fixture smoke coverage are implemented.
 
 Scope:
 
@@ -122,6 +122,8 @@ Planned components:
 
 - `script/paper_order_sync.py`
 - `runtime/paper/<DATE>/paper-execution-state.json`
+
+Implementation status: the first read-only `paper-order-sync` command is implemented, and `paper-trade-review` now prefers submitted-order matching data before legacy symbol-side matching.
 
 Matching order:
 

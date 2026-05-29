@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from journal_append import append_jsonl
+from paper_order_sync import broker_order_id, contains_trace, load_order_records, match_by_symbol_side_quantity
 from signal_artifacts import read_json
 
 
@@ -32,6 +33,13 @@ def default_output_path(repo_root: Path, date: str, explicit_path: str | None) -
     return repo_root / "report" / date / "paper-trade-review.json"
 
 
+def default_orders_path(repo_root: Path, date: str, explicit_path: str | None) -> Path:
+    if explicit_path:
+        path = Path(explicit_path)
+        return path if path.is_absolute() else repo_root / path
+    return repo_root / "runtime" / "paper" / date / "paper-orders.jsonl"
+
+
 def journal_path(repo_root: Path, journal_dir: str) -> Path:
     base = Path(journal_dir)
     if not base.is_absolute():
@@ -47,23 +55,103 @@ def as_float(value: Any) -> float | None:
 
 
 def execution_key(execution: dict[str, Any]) -> tuple[str, str]:
-    return (str(execution.get("symbol") or "").upper(), str(execution.get("side") or "").lower())
+    return (symbol_key(execution), str(execution.get("side") or "").lower())
 
 
-def trade_record(date: str, order: dict[str, Any], execution: dict[str, Any]) -> dict[str, Any]:
+def symbol_key(payload: dict[str, Any]) -> str:
+    value = str(payload.get("longbridge_symbol") or payload.get("symbol") or "").upper()
+    if "." in value:
+        return value.split(".", 1)[0]
+    return value
+
+
+def submitted_order_for_preview(order: dict[str, Any], submitted_orders: list[dict[str, Any]]) -> dict[str, Any] | None:
+    signal_id = str(order.get("signal_id") or "")
+    for submitted in submitted_orders:
+        if str(submitted.get("source_signal_id") or "") == signal_id:
+            return submitted
+    return None
+
+
+def find_execution_for_order(
+    order: dict[str, Any],
+    submitted_order: dict[str, Any] | None,
+    executions: list[dict[str, Any]],
+    used_execution_indexes: set[int],
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    available = [(index, execution) for index, execution in enumerate(executions) if index not in used_execution_indexes]
+    if submitted_order:
+        submitted_broker_order_id = str(submitted_order.get("broker_order_id") or "").strip()
+        if submitted_broker_order_id:
+            for index, execution in available:
+                if broker_order_id(execution) == submitted_broker_order_id:
+                    used_execution_indexes.add(index)
+                    return execution, {"method": "broker_order_id"}
+
+        remark = str(submitted_order.get("remark") or "")
+        if remark:
+            for index, execution in available:
+                if contains_trace(execution, remark):
+                    used_execution_indexes.add(index)
+                    return execution, {"method": "remark"}
+
+        intent_id = str(submitted_order.get("intent_id") or "")
+        if intent_id:
+            for index, execution in available:
+                if contains_trace(execution, intent_id):
+                    used_execution_indexes.add(index)
+                    return execution, {"method": "intent_id"}
+
+        fallback = match_by_symbol_side_quantity(submitted_order, [execution for _, execution in available])
+        if fallback:
+            for index, execution in available:
+                if execution is fallback:
+                    used_execution_indexes.add(index)
+                    return execution, {"method": "symbol_side_quantity"}
+
+    key = (symbol_key(order), str(order.get("side") or "").lower())
+    for index, execution in available:
+        if execution_key(execution) == key:
+            used_execution_indexes.add(index)
+            return execution, {"method": "symbol_side"}
+    return None, {"method": "none"}
+
+
+def slippage_pct(planned_entry: float | None, entry: float | None) -> float | None:
+    if planned_entry is None or planned_entry == 0 or entry is None:
+        return None
+    return round((entry - planned_entry) / planned_entry * 100, 4)
+
+
+def trade_record(
+    date: str,
+    order: dict[str, Any],
+    execution: dict[str, Any],
+    submitted_order: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    planned_entry = as_float(order.get("entry_price")) or as_float((submitted_order or {}).get("limit_price"))
+    entry = as_float(execution.get("price")) or planned_entry
+    source_signal_id = (submitted_order or {}).get("source_signal_id") or order.get("signal_id")
+    order_id = broker_order_id(execution) or (submitted_order or {}).get("broker_order_id")
     return {
         "kind": "trade",
+        "mode": "paper",
         "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "date": date,
         "symbol": order.get("symbol"),
         "status": "entered",
         "planned_setup": order.get("setup"),
-        "entry": as_float(execution.get("price")) or as_float(order.get("entry_price")),
-        "stop": as_float(order.get("stop_price")),
-        "source_signal_id": order.get("signal_id"),
-        "paper_order_id": execution.get("order_id"),
+        "entry": entry,
+        "planned_entry": planned_entry,
+        "stop": as_float(order.get("stop_price")) or as_float((submitted_order or {}).get("stop_price")),
+        "take_profit": as_float(order.get("take_profit")) or as_float((submitted_order or {}).get("take_profit")),
+        "source_signal_id": source_signal_id,
+        "intent_id": (submitted_order or {}).get("intent_id"),
+        "broker_order_id": order_id,
+        "paper_order_id": order_id,
         "paper_quantity": as_float(execution.get("quantity")),
         "paper_side": execution.get("side"),
+        "slippage_pct": slippage_pct(planned_entry, entry),
     }
 
 
@@ -86,8 +174,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     repo_root = Path(args.repo_root).resolve()
     preview_path = default_preview_path(repo_root, args.date, args.preview)
     snapshot_path = default_snapshot_path(repo_root, args.date, args.paper_snapshot)
+    orders_path = default_orders_path(repo_root, args.date, args.orders_journal)
     preview = read_json(preview_path)
     snapshot = read_json(snapshot_path)
+    submitted_orders = load_order_records(orders_path)
     orders = preview.get("orders")
     executions = snapshot.get("executions")
     if not isinstance(orders, list):
@@ -95,27 +185,33 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     if not isinstance(executions, list):
         raise ValueError(f"{snapshot_path}: executions must be an array")
 
-    execution_by_key: dict[tuple[str, str], list[dict[str, Any]]] = {}
-    for execution in executions:
-        if isinstance(execution, dict):
-            execution_by_key.setdefault(execution_key(execution), []).append(execution)
-
     reviews = []
     trade_records = []
+    used_execution_indexes: set[int] = set()
     for order in orders:
         if not isinstance(order, dict):
             continue
         if order.get("status") != "ready":
             reviews.append({"order": order, "paper_status": "preview_blocked", "execution": None})
             continue
-        key = (str(order.get("longbridge_symbol") or "").upper(), str(order.get("side") or "").lower())
-        matches = execution_by_key.get(key, [])
-        if not matches:
-            reviews.append({"order": order, "paper_status": "no_paper_execution", "execution": None})
+        submitted_order = submitted_order_for_preview(order, submitted_orders)
+        if submitted_orders and not submitted_order:
+            reviews.append(
+                {
+                    "order": order,
+                    "submitted_order": None,
+                    "paper_status": "no_paper_execution",
+                    "execution": None,
+                    "match": {"method": "none"},
+                }
+            )
             continue
-        execution = matches[0]
-        reviews.append({"order": order, "paper_status": "filled", "execution": execution})
-        trade_records.append(trade_record(args.date, order, execution))
+        execution, match = find_execution_for_order(order, submitted_order, executions, used_execution_indexes)
+        if not execution:
+            reviews.append({"order": order, "submitted_order": submitted_order, "paper_status": "no_paper_execution", "execution": None, "match": match})
+            continue
+        reviews.append({"order": order, "submitted_order": submitted_order, "paper_status": "filled", "execution": execution, "match": match})
+        trade_records.append(trade_record(args.date, order, execution, submitted_order))
 
     output = default_output_path(repo_root, args.date, args.output)
     summary = {
@@ -144,6 +240,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "source_preview": str(preview_path),
         "source_paper_snapshot": str(snapshot_path),
+        "source_orders_journal": str(orders_path) if orders_path.exists() else None,
         "summary": summary,
         "reviews": reviews,
         "appended": appended,
@@ -168,6 +265,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--session", choices=["pre-market", "post-market"], required=True)
     parser.add_argument("--preview")
     parser.add_argument("--paper-snapshot")
+    parser.add_argument("--orders-journal")
     parser.add_argument("--output")
     parser.add_argument("--append", action="store_true")
     parser.add_argument("--journal-dir", default="runtime/journal")

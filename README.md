@@ -60,6 +60,7 @@ python3 script/trading_copilot.py account-snapshot --date <DATE>
 python3 script/trading_copilot.py paper-account-snapshot --date <DATE>
 python3 script/trading_copilot.py paper-trade-preview --date <DATE> --session pre-market --require-validation
 python3 script/trading_copilot.py paper-trade-submit --date <DATE> --session pre-market --require-validation
+python3 script/trading_copilot.py paper-order-sync --date <DATE>
 python3 script/trading_copilot.py paper-trade-review --date <DATE> --session pre-market --append
 python3 script/trading_copilot.py position-review --date <DATE> --config config/position_review.json --append
 python3 script/workflow_smoke_test.py --date <DATE> --week <YYYY-Www>
@@ -116,14 +117,15 @@ python3 script/workflow_smoke_test.py --date <DATE> --week <YYYY-Www>
   - 产物：`runtime/account/YYYY-MM-DD/account-snapshot.json`、`report/YYYY-MM-DD/position-review.md`、`report/YYYY-MM-DD/position-review.json`
   - 配置：`config/position_review.json`
   - 若 `runtime/journal/trades.jsonl` 里有 `source_signal_id`，持仓复核会关联原始 signal、交易记录和估算 R
-- 模拟盘接入当前支持快照、订单预览、提交 dry-run 和复盘；真实 broker 写入仍未接入：
+- 模拟盘接入当前支持快照、订单预览、受控提交、订单同步和复盘：
   - `python3 script/trading_copilot.py paper-account-snapshot --date YYYY-MM-DD`
   - `python3 script/trading_copilot.py paper-trade-preview --date YYYY-MM-DD --session pre-market --require-validation`
   - `python3 script/trading_copilot.py paper-trade-submit --date YYYY-MM-DD --session pre-market --require-validation`
   - `TRADING_COPILOT_PAPER_EXECUTION=enabled python3 script/trading_copilot.py paper-trade-submit --date YYYY-MM-DD --session pre-market --require-validation --execute`
+  - `python3 script/trading_copilot.py paper-order-sync --date YYYY-MM-DD`
   - `python3 script/trading_copilot.py paper-trade-review --date YYYY-MM-DD --session pre-market --append`
-  - 产物：`runtime/paper/YYYY-MM-DD/paper-account-snapshot.json`、`report/YYYY-MM-DD/paper-trade-preview.json`、`report/YYYY-MM-DD/paper-trade-submission.json`、`runtime/paper/YYYY-MM-DD/paper-orders.jsonl`、`report/YYYY-MM-DD/paper-trade-review.json`
-  - `paper-account-snapshot` 会校验 Longbridge 当前账户是 `lb_papertrading`；`paper-trade-preview` 输出 dry-run 订单预览；`paper-trade-submit` 默认 dry-run，只在 `--execute` 与 `TRADING_COPILOT_PAPER_EXECUTION=enabled` 同时满足后，通过独立 paper order adapter 提交模拟盘限价买入单；`paper-trade-review` 只把已观察到的模拟成交回写 journal
+  - 产物：`runtime/paper/YYYY-MM-DD/paper-account-snapshot.json`、`report/YYYY-MM-DD/paper-trade-preview.json`、`report/YYYY-MM-DD/paper-trade-submission.json`、`runtime/paper/YYYY-MM-DD/paper-orders.jsonl`、`runtime/paper/YYYY-MM-DD/paper-execution-state.json`、`report/YYYY-MM-DD/paper-trade-review.json`
+  - `paper-account-snapshot` 会校验 Longbridge 当前账户是 `lb_papertrading`；`paper-trade-preview` 输出 dry-run 订单预览；`paper-trade-submit` 默认 dry-run，只在 `--execute` 与 `TRADING_COPILOT_PAPER_EXECUTION=enabled` 同时满足后，通过独立 paper order adapter 提交模拟盘限价买入单；`paper-order-sync` 只读回放提交账本和模拟盘快照；`paper-trade-review` 优先用 `broker_order_id` / `remark` / `intent_id` 匹配已观察到的模拟成交并回写 journal
 
 ## 实时盯盘
 - 支持多标的 5m 监控，默认只输出做多路径（可配置）

@@ -237,6 +237,110 @@ class PaperTradingWorkflowTest(unittest.TestCase):
             self.assertEqual(record["source_signal_id"], "sig-1")
             self.assertEqual(record["paper_order_id"], "o-1")
 
+    def test_paper_trade_review_prefers_submitted_order_id_over_symbol_side(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            preview = root / "report" / "2026-05-26" / "paper-trade-preview.json"
+            snapshot = root / "runtime" / "paper" / "2026-05-26" / "paper-account-snapshot.json"
+            orders_journal = root / "runtime" / "paper" / "2026-05-26" / "paper-orders.jsonl"
+            write_json(
+                preview,
+                {
+                    "date": "2026-05-26",
+                    "session": "pre-market",
+                    "orders": [
+                        {
+                            "signal_id": "sig-1",
+                            "symbol": "MU",
+                            "longbridge_symbol": "MU.US",
+                            "side": "buy",
+                            "quantity": 100,
+                            "entry_price": 100,
+                            "stop_price": 95,
+                            "take_profit": 112,
+                            "setup": "breakout_pullback_continuation.md",
+                            "status": "ready",
+                        },
+                        {
+                            "signal_id": "sig-2",
+                            "symbol": "MU",
+                            "longbridge_symbol": "MU.US",
+                            "side": "buy",
+                            "quantity": 200,
+                            "entry_price": 100,
+                            "stop_price": 95,
+                            "take_profit": 112,
+                            "setup": "breakout_pullback_continuation.md",
+                            "status": "ready",
+                        },
+                    ],
+                },
+            )
+            orders_journal.parent.mkdir(parents=True, exist_ok=True)
+            orders_journal.write_text(
+                json.dumps(
+                    {
+                        "intent_id": "intent-2",
+                        "source_signal_id": "sig-2",
+                        "broker_order_id": "o-2",
+                        "remark": "tca:intent-2",
+                        "symbol": "MU",
+                        "longbridge_symbol": "MU.US",
+                        "side": "buy",
+                        "quantity": 200,
+                        "limit_price": 100,
+                        "stop_price": 95,
+                        "take_profit": 112,
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            write_json(
+                snapshot,
+                {
+                    **paper_snapshot(),
+                    "executions": [
+                        {
+                            "order_id": "o-2",
+                            "symbol": "MU",
+                            "market": "US",
+                            "side": "buy",
+                            "quantity": 200,
+                            "price": 100.2,
+                        }
+                    ],
+                },
+            )
+
+            proc = self.run_script(
+                "paper_trade_review.py",
+                "--repo-root",
+                str(root),
+                "--date",
+                "2026-05-26",
+                "--session",
+                "pre-market",
+                "--orders-journal",
+                str(orders_journal),
+                "--append",
+            )
+
+            self.assertEqual(proc.returncode, 0, msg=proc.stderr or proc.stdout)
+            payload = json.loads(proc.stdout)
+            self.assertEqual(payload["summary"]["filled"], 1)
+            review = json.loads((root / "report" / "2026-05-26" / "paper-trade-review.json").read_text(encoding="utf-8"))
+            filled = [item for item in review["reviews"] if item["paper_status"] == "filled"]
+            self.assertEqual(filled[0]["match"]["method"], "broker_order_id")
+            trades_path = root / "runtime" / "journal" / "trades.jsonl"
+            record = json.loads(trades_path.read_text(encoding="utf-8").strip())
+            self.assertEqual(record["source_signal_id"], "sig-2")
+            self.assertEqual(record["intent_id"], "intent-2")
+            self.assertEqual(record["broker_order_id"], "o-2")
+            self.assertEqual(record["planned_entry"], 100.0)
+            self.assertEqual(record["take_profit"], 112.0)
+            self.assertAlmostEqual(record["slippage_pct"], 0.2)
+
     def test_wrapper_exposes_paper_preview(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

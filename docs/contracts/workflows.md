@@ -458,6 +458,7 @@ Inputs:
 
 - `report/<DATE>/paper-trade-preview.json`.
 - `runtime/paper/<DATE>/paper-account-snapshot.json`.
+- Optional `runtime/paper/<DATE>/paper-orders.jsonl` for precise submitted-order matching.
 - Optional `runtime/journal/trades.jsonl` for duplicate detection.
 
 Output:
@@ -469,7 +470,35 @@ Required behavior:
 
 - Must not infer an execution when no paper fill is observed.
 - Must append only matched paper fills, keyed by `source_signal_id` and paper order id.
+- When `paper-orders.jsonl` exists, matching must prefer `broker_order_id`, then `remark`, then `intent_id`, and use symbol-side fallback only for compatibility.
+- Appended paper trade records should include `mode`, `intent_id`, `broker_order_id`, `planned_entry`, `entry`, `stop`, `take_profit`, `paper_quantity`, `paper_side`, and `slippage_pct` when available.
 - Must keep paper execution feedback separate from plan quality and refined trading rules.
+
+## paper-order-sync
+
+Purpose: sync submitted paper order records with the latest Longbridge paper account snapshot.
+
+Canonical command:
+
+```bash
+python3 script/trading_copilot.py paper-order-sync --date <DATE>
+```
+
+Inputs:
+
+- `runtime/paper/<DATE>/paper-orders.jsonl`.
+- `runtime/paper/<DATE>/paper-account-snapshot.json`.
+
+Output:
+
+- `runtime/paper/<DATE>/paper-execution-state.json`
+
+Required behavior:
+
+- Must be read-only; it must not submit, cancel, replace, or adjust orders.
+- Must match submitted orders by `broker_order_id`, then `remark`, then `intent_id`, then `symbol + side + quantity` fallback.
+- Must summarize order states including `submitted`, `accepted`, `partially_filled`, `filled`, `cancelled`, `rejected`, and `expired`.
+- Must preserve matched broker order and execution payloads for audit and later review.
 
 ## paper-trade-submit
 

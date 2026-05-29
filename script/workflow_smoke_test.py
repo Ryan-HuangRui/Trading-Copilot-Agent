@@ -12,6 +12,10 @@ import feishu_summary
 import journal_review
 import learning_review
 import longbridge_account_snapshot
+import paper_account_snapshot
+import paper_trade_preview
+import paper_trade_review
+import paper_trade_submit
 import plan_review
 import position_review
 import validate_report
@@ -97,6 +101,57 @@ def run(args: argparse.Namespace) -> dict:
         )
         steps["position-review"] = position_review.run(position_args)
 
+    if args.paper_input:
+        paper_account_args = argparse.Namespace(
+            repo_root=str(repo_root),
+            date=args.date,
+            timezone=args.timezone,
+            input=args.paper_input,
+            output=args.paper_output,
+            longbridge_cli=None,
+        )
+        steps["paper-account-snapshot"] = paper_account_snapshot.run(paper_account_args)
+        paper_preview_args = argparse.Namespace(
+            repo_root=str(repo_root),
+            date=args.date,
+            session=args.session,
+            signals=None,
+            account_snapshot=steps["paper-account-snapshot"].get("output"),
+            output=None,
+            require_validation=True,
+            default_market="US",
+            tif="day",
+        )
+        steps["paper-trade-preview"] = paper_trade_preview.run(paper_preview_args)
+        paper_submit_args = argparse.Namespace(
+            repo_root=str(repo_root),
+            date=args.date,
+            session=args.session,
+            preview=steps["paper-trade-preview"].get("output"),
+            account_snapshot=steps["paper-account-snapshot"].get("output"),
+            orders_journal=None,
+            signals=None,
+            output=None,
+            require_validation=True,
+            execute=False,
+            longbridge_cli=None,
+            max_daily_risk_pct=3.0,
+            max_daily_orders=3,
+        )
+        steps["paper-trade-submit"] = paper_trade_submit.run(paper_submit_args)
+        paper_review_args = argparse.Namespace(
+            repo_root=str(repo_root),
+            date=args.date,
+            session=args.session,
+            preview=steps["paper-trade-preview"].get("output"),
+            paper_snapshot=steps["paper-account-snapshot"].get("output"),
+            orders_journal=None,
+            output=None,
+            append=True,
+            journal_dir=args.journal_dir,
+        )
+        steps["paper-trade-review"] = paper_trade_review.run(paper_review_args)
+
     daily_args = argparse.Namespace(
         repo_root=str(repo_root),
         date=args.date,
@@ -171,6 +226,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--account-input", help="Fixture payload for account-snapshot smoke coverage")
     parser.add_argument("--account-output", help="Optional account snapshot output path")
     parser.add_argument("--account-snapshot", help="Existing account snapshot path for position-review smoke coverage")
+    parser.add_argument("--paper-input", help="Fixture payload for paper account/submit/review smoke coverage")
+    parser.add_argument("--paper-output", help="Optional paper account snapshot output path")
     parser.add_argument("--position-config", help="Optional position review config path")
     parser.add_argument("--journal-dir", default="runtime/journal")
     parser.add_argument("--learning-dir", default="runtime/learning")

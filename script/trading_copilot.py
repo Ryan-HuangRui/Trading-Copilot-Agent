@@ -722,6 +722,8 @@ def run_paper_trade_review(args: argparse.Namespace) -> None:
         command.extend(["--preview", args.preview])
     if args.paper_snapshot:
         command.extend(["--paper-snapshot", args.paper_snapshot])
+    if args.orders_journal:
+        command.extend(["--orders-journal", args.orders_journal])
     if args.output:
         command.extend(["--output", args.output])
     if args.append:
@@ -781,6 +783,33 @@ def run_paper_trade_submit(args: argparse.Namespace) -> None:
     response["date"] = (stdout or {}).get("date") or args.date
     response["artifacts"] = [stdout["output"]] if stdout and stdout.get("output") else []
     response["dry_run"] = (stdout or {}).get("dry_run")
+    response["summary"] = (stdout or {}).get("summary")
+    emit(response)
+
+
+def run_paper_order_sync(args: argparse.Namespace) -> None:
+    command = [
+        "script/paper_order_sync.py",
+        "--date",
+        args.date,
+        "--repo-root",
+        args.repo_root,
+    ]
+    if args.orders_journal:
+        command.extend(["--orders-journal", args.orders_journal])
+    if args.paper_snapshot:
+        command.extend(["--paper-snapshot", args.paper_snapshot])
+    if args.output:
+        command.extend(["--output", args.output])
+
+    proc = run_child(command)
+    stdout = parse_json_output(proc.stdout)
+    if proc.returncode != 0:
+        emit(failed_response("paper-order-sync", command, proc), 1)
+
+    response = base_response("paper-order-sync", command, stdout)
+    response["date"] = (stdout or {}).get("date") or args.date
+    response["artifacts"] = [stdout["output"]] if stdout and stdout.get("output") else []
     response["summary"] = (stdout or {}).get("summary")
     emit(response)
 
@@ -1091,6 +1120,7 @@ def build_parser() -> argparse.ArgumentParser:
     paper_review.add_argument("--session", choices=["pre-market", "post-market"], required=True)
     paper_review.add_argument("--preview")
     paper_review.add_argument("--paper-snapshot")
+    paper_review.add_argument("--orders-journal")
     paper_review.add_argument("--output")
     paper_review.add_argument("--append", action="store_true")
     paper_review.add_argument("--journal-dir", default="runtime/journal")
@@ -1112,6 +1142,14 @@ def build_parser() -> argparse.ArgumentParser:
     paper_submit.add_argument("--max-daily-orders", type=int, default=3)
     paper_submit.add_argument("--repo-root", default=str(ROOT))
     paper_submit.set_defaults(func=run_paper_trade_submit)
+
+    paper_sync = sub.add_parser("paper-order-sync", help="Sync submitted paper order state from a paper account snapshot")
+    paper_sync.add_argument("--date", required=True)
+    paper_sync.add_argument("--orders-journal")
+    paper_sync.add_argument("--paper-snapshot")
+    paper_sync.add_argument("--output")
+    paper_sync.add_argument("--repo-root", default=str(ROOT))
+    paper_sync.set_defaults(func=run_paper_order_sync)
 
     position = sub.add_parser("position-review", help="Review read-only positions against structured signals")
     position.add_argument("--date", required=True)

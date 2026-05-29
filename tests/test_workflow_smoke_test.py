@@ -41,10 +41,17 @@ class WorkflowSmokeTest(unittest.TestCase):
                             {
                                 "symbol": "MU",
                                 "setup": "breakout_pullback_continuation.md",
+                                "direction": "long",
                                 "trigger": {"type": "break_above", "price": 100, "text": "突破 100"},
                                 "invalidation": {"type": "break_below", "price": 95, "text": "跌破 95"},
-                                "risk": {"max_risk_pct": 1},
+                                "risk": {"max_risk_pct": 1, "max_account_risk_pct": 1, "risk_per_share": 5},
                                 "status": "planned",
+                                "plan_type": "trade_plan",
+                                "execution_status": "conditional_executable",
+                                "entry": {"trigger_price": 100, "order_type": "LO"},
+                                "stop": {"initial_stop": 95},
+                                "take_profit": {"tp1": 112},
+                                "execution_rules": {"skip_conditions": ["market turns risk-off"]},
                             }
                         ],
                     },
@@ -112,6 +119,27 @@ class WorkflowSmokeTest(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            paper_fixture = root / "paper-fixture.json"
+            paper_fixture.write_text(
+                json.dumps(
+                    {
+                        "auth": {"account": {"account_channel": "lb_papertrading"}, "token": {"status": "valid"}},
+                        "account": [{"net_assets": "100000", "total_cash": "25000", "currency": "USD"}],
+                        "positions": [],
+                        "orders": [{"order_id": "paper-o-1", "symbol": "MU.US", "side": "buy", "quantity": 200}],
+                        "executions": [
+                            {
+                                "order_id": "paper-o-1",
+                                "symbol": "MU.US",
+                                "side": "buy",
+                                "quantity": 200,
+                                "price": 100.2,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
 
             proc = subprocess.run(
                 [
@@ -125,6 +153,8 @@ class WorkflowSmokeTest(unittest.TestCase):
                     "2026-W22",
                     "--account-input",
                     str(account_fixture),
+                    "--paper-input",
+                    str(paper_fixture),
                 ],
                 check=False,
                 text=True,
@@ -138,11 +168,22 @@ class WorkflowSmokeTest(unittest.TestCase):
             self.assertEqual(payload["steps"]["validate-trade-plan"]["validation"]["status"], "pass")
             self.assertIn("account-snapshot", payload["steps"])
             self.assertIn("position-review", payload["steps"])
+            self.assertIn("paper-account-snapshot", payload["steps"])
+            self.assertIn("paper-trade-preview", payload["steps"])
+            self.assertIn("paper-trade-submit", payload["steps"])
+            self.assertIn("paper-trade-review", payload["steps"])
+            self.assertEqual(payload["steps"]["paper-trade-preview"]["summary"]["ready"], 1)
+            self.assertEqual(payload["steps"]["paper-trade-submit"]["summary"]["ready"], 1)
+            self.assertEqual(payload["steps"]["paper-trade-review"]["summary"]["filled"], 1)
             self.assertTrue((root / "report" / "2026-05-26" / "self-review.md").exists())
             self.assertTrue((root / "report" / "2026-05-26" / "plan-review.md").exists())
             self.assertTrue((root / "report" / "learning" / "pattern-review.md").exists())
             self.assertTrue((root / "report" / "2026-05-26" / "feishu-summary.md").exists())
             self.assertTrue((root / "report" / "2026-05-26" / "position-review.json").exists())
+            self.assertTrue((root / "runtime" / "paper" / "2026-05-26" / "paper-account-snapshot.json").exists())
+            self.assertTrue((root / "report" / "2026-05-26" / "paper-trade-preview.json").exists())
+            self.assertTrue((root / "report" / "2026-05-26" / "paper-trade-submission.json").exists())
+            self.assertTrue((root / "report" / "2026-05-26" / "paper-trade-review.json").exists())
             self.assertTrue((root / "report" / "weekly" / "2026-W22.md").exists())
 
 
