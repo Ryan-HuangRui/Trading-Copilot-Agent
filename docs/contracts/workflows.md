@@ -570,6 +570,33 @@ Required behavior:
 - Must emit at least submitted events from paper journals and observed status events from `paper-execution-state.json` when available.
 - Event payloads must preserve `intent_id`, `source_signal_id`, `broker_order_id`, `symbol`, `side`, `quantity`, `remark`, and raw request/response fields when present.
 
+## paper-execution-review
+
+Purpose: analyze individual paper orders and trades from synced execution state.
+
+Canonical command:
+
+```bash
+python3 script/trading_copilot.py paper-execution-review --date <DATE>
+```
+
+Inputs:
+
+- `report/<DATE>/paper-trade-preview.json`.
+- `runtime/paper/<DATE>/paper-execution-state.json`.
+
+Output:
+
+- `report/<DATE>/paper-execution-review.json`
+- `report/<DATE>/paper-execution-review.md`
+
+Required behavior:
+
+- Must be review-only; it must not submit, cancel, replace, sync broker state, or modify refined rules.
+- Must report plan adherence, slippage, fill quality, risk discipline, planned RR, realized/result R when exit evidence exists, and unavailable MFE/MAE when intraday path data is missing.
+- Result R must use actual entry-to-exit P/L divided by planned initial risk per share.
+- Candidate lessons may be emitted as review observations, but they must not be promoted into `knowledge/refined/`.
+
 ## paper-trade-submit
 
 Purpose: prepare controlled paper order submissions from validated dry-run order previews.

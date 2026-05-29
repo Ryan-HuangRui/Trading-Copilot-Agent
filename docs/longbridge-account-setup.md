@@ -71,6 +71,12 @@ Project submitted and observed paper facts into the unified event ledger:
 python3 script/trading_copilot.py paper-event-ledger --date <DATE>
 ```
 
+Generate a paper execution quality review:
+
+```bash
+python3 script/trading_copilot.py paper-execution-review --date <DATE>
+```
+
 Build a dry-run cancel plan for expired unfilled paper entry orders:
 
 ```bash
@@ -149,6 +155,8 @@ Paper outputs:
 - `runtime/paper/<DATE>/paper-execution-state.json`, including synced entry, protective stop, and TP1 state when the corresponding journals exist
 - `runtime/journal/events.jsonl`
 - `report/<DATE>/paper-event-ledger.json`
+- `report/<DATE>/paper-execution-review.json`
+- `report/<DATE>/paper-execution-review.md`
 - `report/<DATE>/paper-order-cancel-plan.json`
 - `report/<DATE>/paper-protective-stop-plan.json`
 - `runtime/paper/<DATE>/paper-stop-orders.jsonl` when `paper-protective-stop-plan --execute` succeeds

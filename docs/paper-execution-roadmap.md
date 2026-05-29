@@ -200,6 +200,8 @@ Review dimensions:
 
 Reviews may create learning candidates, but must not edit `knowledge/refined/`.
 
+Implementation status: `paper-execution-review` writes JSON and Markdown reviews from `paper-trade-preview.json` plus synced `paper-execution-state.json`, including plan adherence, slippage, fill quality, risk discipline, planned RR, result R when exit evidence exists, and candidate lessons without modifying refined rules.
+
 ## Milestone 6: Strategy-Level Paper Review
 
 Goal: aggregate paper execution evidence by setup and context.
