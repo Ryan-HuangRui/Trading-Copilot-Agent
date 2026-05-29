@@ -789,6 +789,50 @@ def run_paper_trade_submit(args: argparse.Namespace) -> None:
     emit(response)
 
 
+def run_paper_order_recover(args: argparse.Namespace) -> None:
+    command = [
+        "script/paper_order_recover.py",
+        "--date",
+        args.date,
+        "--session",
+        args.session,
+        "--broker-order-id",
+        args.broker_order_id,
+        "--repo-root",
+        args.repo_root,
+    ]
+    if args.preview:
+        command.extend(["--preview", args.preview])
+    if args.paper_snapshot:
+        command.extend(["--paper-snapshot", args.paper_snapshot])
+    if args.orders_journal:
+        command.extend(["--orders-journal", args.orders_journal])
+    if args.order_detail:
+        command.extend(["--order-detail", args.order_detail])
+    if args.symbol:
+        command.extend(["--symbol", args.symbol])
+    if args.intent_id:
+        command.extend(["--intent-id", args.intent_id])
+    if args.output:
+        command.extend(["--output", args.output])
+    if args.longbridge_cli:
+        command.extend(["--longbridge-cli", args.longbridge_cli])
+    if args.append:
+        command.append("--append")
+
+    proc = run_child(command)
+    stdout = parse_json_output(proc.stdout)
+    if proc.returncode != 0:
+        emit(failed_response("paper-order-recover", command, proc), 1)
+
+    response = base_response("paper-order-recover", command, stdout)
+    response["date"] = (stdout or {}).get("date") or args.date
+    response["artifacts"] = [stdout["output"]] if stdout and stdout.get("output") else []
+    response["summary"] = (stdout or {}).get("summary")
+    response["appended"] = (stdout or {}).get("appended")
+    emit(response)
+
+
 def run_paper_order_sync(args: argparse.Namespace) -> None:
     command = [
         "script/paper_order_sync.py",
@@ -1421,6 +1465,22 @@ def build_parser() -> argparse.ArgumentParser:
     paper_submit.add_argument("--paper-execution-config")
     paper_submit.add_argument("--repo-root", default=str(ROOT))
     paper_submit.set_defaults(func=run_paper_trade_submit)
+
+    paper_recover = sub.add_parser("paper-order-recover", help="Recover a submitted paper order into the local journal")
+    paper_recover.add_argument("--date", required=True)
+    paper_recover.add_argument("--session", choices=["pre-market", "post-market"], required=True)
+    paper_recover.add_argument("--broker-order-id", required=True)
+    paper_recover.add_argument("--preview")
+    paper_recover.add_argument("--paper-snapshot")
+    paper_recover.add_argument("--orders-journal")
+    paper_recover.add_argument("--order-detail")
+    paper_recover.add_argument("--symbol")
+    paper_recover.add_argument("--intent-id")
+    paper_recover.add_argument("--output")
+    paper_recover.add_argument("--append", action="store_true")
+    paper_recover.add_argument("--longbridge-cli")
+    paper_recover.add_argument("--repo-root", default=str(ROOT))
+    paper_recover.set_defaults(func=run_paper_order_recover)
 
     paper_sync = sub.add_parser("paper-order-sync", help="Sync submitted paper order state from a paper account snapshot")
     paper_sync.add_argument("--date", required=True)

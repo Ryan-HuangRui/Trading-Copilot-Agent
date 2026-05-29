@@ -321,6 +321,21 @@ Required scheduler gates:
 
 Successful execution writes `runtime/paper/<DATE>/paper-orders.jsonl`. Re-runs must rely on duplicate `intent_id` checks and should report `skipped_duplicates` instead of submitting duplicate orders.
 
+After a successful or partially successful execution attempt, the scheduler should refresh paper account state and run the read-only follow-up chain:
+
+```bash
+python3 script/trading_copilot.py paper-account-snapshot --date <DATE>
+python3 script/trading_copilot.py paper-order-sync --date <DATE>
+python3 script/trading_copilot.py paper-event-ledger --date <DATE>
+python3 script/trading_copilot.py paper-execution-review --date <DATE>
+```
+
+If the broker accepted an order but the local journal was not written, do not re-run `paper-trade-submit --execute`. Recover the accepted order id first:
+
+```bash
+python3 script/trading_copilot.py paper-order-recover --date <DATE> --session pre-market --broker-order-id <ORDER_ID> --append
+```
+
 ### Task F: Paper Order Sync And Review
 
 Recommended cc connect instruction:

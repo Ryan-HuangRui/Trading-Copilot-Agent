@@ -122,6 +122,19 @@ report/<DATE>/paper-trade-submission.json
 
 `paper-orders.jsonl` is written only for successfully submitted broker orders. Re-running the command should skip duplicate `intent_id` values.
 
+If Longbridge accepts the paper order but local journal recording fails, recover the accepted order instead of re-running execution:
+
+```bash
+python3 script/trading_copilot.py paper-account-snapshot --date "$DATE"
+python3 script/trading_copilot.py paper-order-recover \
+  --date "$DATE" \
+  --session pre-market \
+  --broker-order-id "<ORDER_ID>" \
+  --append
+```
+
+`paper-order-recover` is a local journal recovery workflow. It does not submit, cancel, or replace broker orders, and it skips duplicate `intent_id` or `broker_order_id` records.
+
 ## Intraday And Post-Market Sync
 
 Use these read-only or runtime-only commands to sync observed broker state and produce reviews:

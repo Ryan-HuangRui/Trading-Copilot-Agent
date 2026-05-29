@@ -505,6 +505,42 @@ Required behavior:
 - Must enrich entry orders with matched stop/TP1 fields such as `protective_stop_order_id`, `stop_status`, `take_profit_order_id`, `tp1_status`, `tp1_filled_quantity`, and `remaining_quantity`.
 - Must preserve matched broker order and execution payloads for audit and later review.
 
+## paper-order-recover
+
+Purpose: recover a broker-submitted paper entry order into the local paper order journal when the broker accepted the order but local submission recording failed.
+
+Canonical dry-run command:
+
+```bash
+python3 script/trading_copilot.py paper-order-recover --date <DATE> --session pre-market --broker-order-id <ORDER_ID>
+```
+
+Append command:
+
+```bash
+python3 script/trading_copilot.py paper-order-recover --date <DATE> --session pre-market --broker-order-id <ORDER_ID> --append
+```
+
+Inputs:
+
+- `report/<DATE>/paper-trade-preview.json`.
+- `runtime/paper/<DATE>/paper-account-snapshot.json` when available, which must show `account_channel=lb_papertrading`.
+- Longbridge `order detail <ORDER_ID> --format json`, or a JSON fixture through `--order-detail`.
+- Optional `runtime/paper/<DATE>/paper-orders.jsonl` for duplicate detection.
+
+Output:
+
+- `report/<DATE>/paper-order-recover.json`
+- `runtime/paper/<DATE>/paper-orders.jsonl` only when `--append` is used and no duplicate exists.
+
+Required behavior:
+
+- Must not submit, cancel, replace, or adjust broker orders.
+- Must only recover ready entry buy LO paper orders.
+- Must match the broker order detail to exactly one ready preview order by symbol, side, quantity, order type, and limit price.
+- Must skip duplicate `intent_id` or `broker_order_id` values already present in `paper-orders.jsonl`.
+- Recovered records must preserve `intent_id`, `broker_order_id`, `remark`, reconstructed `raw_request`, full broker `raw_response`, and recovery timestamp.
+
 ## paper-order-cancel
 
 Purpose: build a dry-run cancel plan for expired unfilled paper entry orders.

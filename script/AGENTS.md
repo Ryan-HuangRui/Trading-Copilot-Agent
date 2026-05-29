@@ -18,6 +18,7 @@
 - `paper_risk_guard.py`: deterministic execution-safety checks for paper order intents.
 - `paper_trade_preview.py`: converts validated Trade Plan Cards into dry-run paper order previews.
 - `paper_trade_submit.py`: prepares controlled paper submissions from previews and risk guard output; defaults to dry-run and only submits through the gated paper order adapter when execution gates are explicitly enabled.
+- `paper_order_recover.py`: recovers a broker-submitted paper entry order into `paper-orders.jsonl` from Longbridge order detail without submitting, cancelling, or replacing broker orders.
 - `paper_order_sync.py`: read-only paper order state sync from entry/stop/TP1 journals and paper account snapshots.
 - `paper_event_ledger.py`: read-only projection from paper journals/execution state into `runtime/journal/events.jsonl`.
 - `paper_execution_review.py`: deterministic paper execution quality review that writes JSON/Markdown and candidate lessons without editing refined rules.
@@ -56,6 +57,7 @@
 - Build paper order previews: `python3 script/trading_copilot.py paper-trade-preview --date 2026-05-06 --session pre-market --require-validation`.
 - Prepare dry-run paper submissions: `python3 script/trading_copilot.py paper-trade-submit --date 2026-05-06 --session pre-market --require-validation`.
 - Submit guarded paper entry orders after enabling `paper_execution.broker_writes_enabled=true` and `paper_execution.allow_entry_submit=true` in `config/paper_execution.json`: `python3 script/trading_copilot.py paper-trade-submit --date 2026-05-06 --session pre-market --require-validation --execute`.
+- Recover an already-submitted paper entry order into the local journal: `python3 script/trading_copilot.py paper-order-recover --date 2026-05-06 --session pre-market --broker-order-id <ORDER_ID> --append`.
 - Sync paper order state: `python3 script/trading_copilot.py paper-order-sync --date 2026-05-06`.
 - Project paper events: `python3 script/trading_copilot.py paper-event-ledger --date 2026-05-06`.
 - Review paper execution quality: `python3 script/trading_copilot.py paper-execution-review --date 2026-05-06`.
