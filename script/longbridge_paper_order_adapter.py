@@ -43,14 +43,17 @@ class LongbridgePaperOrderAdapter:
         self.cli = cli or shutil.which("longbridge") or str(Path.home() / ".local" / "bin" / "longbridge")
         self.paper_execution_config = normalize_paper_execution_config(paper_execution_config)
 
-    def run_json(self, args: list[str]) -> Any:
+    def run_text(self, args: list[str]) -> str:
         if not Path(self.cli).exists() and shutil.which(self.cli) is None:
             raise RuntimeError(f"Longbridge CLI not found: {self.cli}")
         proc = subprocess.run([self.cli, *args], check=False, text=True, capture_output=True)
         if proc.returncode != 0:
             detail = (proc.stderr or proc.stdout).strip()
             raise RuntimeError(f"Longbridge CLI failed: {detail}")
-        output = proc.stdout.strip()
+        return proc.stdout.strip()
+
+    def run_json(self, args: list[str]) -> Any:
+        output = self.run_text(args)
         if not output:
             return None
         try:
@@ -136,7 +139,16 @@ class LongbridgePaperOrderAdapter:
         self.ensure_write_allowed(execute=execute, action="cancel")
         account_channel = self.assert_paper_account()
         command = ["order", "cancel", order_id, "--format", "json", "-y"]
-        raw_response = self.run_json(command)
+        output = self.run_text(command)
+        if output:
+            try:
+                raw_response = parse_json_output(output)
+            except json.JSONDecodeError:
+                if order_id not in output or "cancel" not in output.lower():
+                    raise RuntimeError(f"Longbridge CLI did not return JSON: {output[:200]}")
+                raw_response = {"order_id": order_id, "status": "cancelled", "response": output}
+        else:
+            raw_response = {"order_id": order_id, "status": "cancelled", "response": ""}
         response_order_id = order_id
         if isinstance(raw_response, dict):
             response_order_id = str(raw_response.get("order_id") or raw_response.get("id") or raw_response.get("broker_order_id") or order_id)

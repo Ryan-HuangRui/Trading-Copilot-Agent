@@ -187,14 +187,27 @@ class LongbridgePaperOrderAdapterTest(unittest.TestCase):
             raise AssertionError(args)
 
         with patch.object(adapter, "run_json", side_effect=fake_run):
-            result = adapter.cancel_order(
-                "order-1",
-                execute=True,
-            )
+            with patch.object(adapter, "run_text", return_value='{"order_id": "order-1", "status": "cancelled"}') as run_text:
+                result = adapter.cancel_order(
+                    "order-1",
+                    execute=True,
+                )
 
         self.assertEqual(result["broker_order_id"], "order-1")
         self.assertEqual(result["raw_response"], {"order_id": "order-1", "status": "cancelled"})
-        self.assertEqual(calls[1], ["order", "cancel", "order-1", "--format", "json", "-y"])
+        run_text.assert_called_once_with(["order", "cancel", "order-1", "--format", "json", "-y"])
+
+    def test_cancel_order_accepts_text_success_response(self):
+        adapter = LongbridgePaperOrderAdapter(cli="/bin/longbridge", paper_execution_config=write_config())
+
+        with patch.object(adapter, "run_json", return_value={"account": {"account_channel": "lb_papertrading"}, "token": {"status": "valid"}}):
+            with patch.object(adapter, "run_text", return_value="Order order-1 cancelled."):
+                result = adapter.cancel_order("order-1", execute=True)
+
+        self.assertEqual(result["broker_order_id"], "order-1")
+        self.assertEqual(result["raw_response"]["order_id"], "order-1")
+        self.assertEqual(result["raw_response"]["status"], "cancelled")
+        self.assertEqual(result["raw_response"]["response"], "Order order-1 cancelled.")
 
     def test_protective_stop_requires_execute_flag(self):
         adapter = LongbridgePaperOrderAdapter(cli="/bin/longbridge", paper_execution_config=write_config())
