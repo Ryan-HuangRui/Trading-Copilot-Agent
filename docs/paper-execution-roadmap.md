@@ -235,6 +235,8 @@ Core metrics:
 - false trigger rate
 - no-fill-then-win rate
 
+Implementation status: `paper-strategy-review` aggregates discovered or explicitly provided paper execution reviews by setup and symbol, writing JSON and Markdown strategy-level evidence without editing refined rules.
+
 ## Milestone 7: Learning Loop
 
 Goal: feed paper execution evidence into the existing learning workflow without allowing automatic rule mutation.

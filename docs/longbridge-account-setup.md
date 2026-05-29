@@ -77,6 +77,12 @@ Generate a paper execution quality review:
 python3 script/trading_copilot.py paper-execution-review --date <DATE>
 ```
 
+Aggregate paper execution reviews by setup and symbol:
+
+```bash
+python3 script/trading_copilot.py paper-strategy-review
+```
+
 Build a dry-run cancel plan for expired unfilled paper entry orders:
 
 ```bash
@@ -157,6 +163,8 @@ Paper outputs:
 - `report/<DATE>/paper-event-ledger.json`
 - `report/<DATE>/paper-execution-review.json`
 - `report/<DATE>/paper-execution-review.md`
+- `report/strategy/paper-strategy-review.json`
+- `report/strategy/paper-strategy-review.md`
 - `report/<DATE>/paper-order-cancel-plan.json`
 - `report/<DATE>/paper-protective-stop-plan.json`
 - `runtime/paper/<DATE>/paper-stop-orders.jsonl` when `paper-protective-stop-plan --execute` succeeds

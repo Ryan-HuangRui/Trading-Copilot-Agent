@@ -890,6 +890,35 @@ def run_paper_execution_review(args: argparse.Namespace) -> None:
     emit(response)
 
 
+def run_paper_strategy_review(args: argparse.Namespace) -> None:
+    command = [
+        "script/paper_strategy_review.py",
+        "--repo-root",
+        args.repo_root,
+    ]
+    for review in args.review or []:
+        command.extend(["--review", review])
+    if args.output:
+        command.extend(["--output", args.output])
+    if args.markdown_output:
+        command.extend(["--markdown-output", args.markdown_output])
+
+    proc = run_child(command)
+    stdout = parse_json_output(proc.stdout)
+    if proc.returncode != 0:
+        emit(failed_response("paper-strategy-review", command, proc), 1)
+
+    response = base_response("paper-strategy-review", command, stdout)
+    artifacts = []
+    if stdout and stdout.get("output"):
+        artifacts.append(stdout["output"])
+    if stdout and stdout.get("markdown"):
+        artifacts.append(stdout["markdown"])
+    response["artifacts"] = artifacts
+    response["summary"] = (stdout or {}).get("summary")
+    emit(response)
+
+
 def run_paper_order_cancel(args: argparse.Namespace) -> None:
     command = [
         "script/paper_order_cancel.py",
@@ -1384,6 +1413,13 @@ def build_parser() -> argparse.ArgumentParser:
     paper_exec_review.add_argument("--markdown-output")
     paper_exec_review.add_argument("--repo-root", default=str(ROOT))
     paper_exec_review.set_defaults(func=run_paper_execution_review)
+
+    paper_strategy_review = sub.add_parser("paper-strategy-review", help="Aggregate paper execution reviews by setup and symbol")
+    paper_strategy_review.add_argument("--review", action="append", default=[])
+    paper_strategy_review.add_argument("--output")
+    paper_strategy_review.add_argument("--markdown-output")
+    paper_strategy_review.add_argument("--repo-root", default=str(ROOT))
+    paper_strategy_review.set_defaults(func=run_paper_strategy_review)
 
     paper_cancel = sub.add_parser("paper-order-cancel", help="Build a dry-run cancel plan for expired paper entry orders")
     paper_cancel.add_argument("--date", required=True)

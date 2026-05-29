@@ -597,6 +597,31 @@ Required behavior:
 - Result R must use actual entry-to-exit P/L divided by planned initial risk per share.
 - Candidate lessons may be emitted as review observations, but they must not be promoted into `knowledge/refined/`.
 
+## paper-strategy-review
+
+Purpose: aggregate paper execution evidence by setup and symbol.
+
+Canonical command:
+
+```bash
+python3 script/trading_copilot.py paper-strategy-review
+```
+
+Inputs:
+
+- `report/<DATE>/paper-execution-review.json` files, discovered automatically or passed with repeated `--review`.
+
+Output:
+
+- `report/strategy/paper-strategy-review.json`
+- `report/strategy/paper-strategy-review.md`
+
+Required behavior:
+
+- Must be aggregate review only; it must not submit orders, sync broker state, or modify refined rules.
+- Must aggregate by setup and symbol with planned count, submitted count, filled count, cancelled/expired count, average R, median R, win rate, average slippage, false-trigger rate, and no-fill-then-win rate where evidence exists.
+- Must preserve source review paths and keep unavailable metrics as `null` rather than inventing values.
+
 ## paper-trade-submit
 
 Purpose: prepare controlled paper order submissions from validated dry-run order previews.
