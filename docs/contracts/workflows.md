@@ -577,6 +577,32 @@ Required behavior:
 - The submission artifact must separate `ready`, `submitted`, `blocked`, `skipped_duplicates`, and `errors`.
 - Successful submit records must preserve `intent_id`, `broker_order_id`, `remark`, `raw_request`, `raw_response`, and `submitted_at`.
 
+## paper-protective-stop-plan
+
+Purpose: build a dry-run protective stop plan for filled long paper entries.
+
+Canonical command:
+
+```bash
+python3 script/trading_copilot.py paper-protective-stop-plan --date <DATE>
+```
+
+Inputs:
+
+- `runtime/paper/<DATE>/paper-execution-state.json`.
+
+Output:
+
+- `report/<DATE>/paper-protective-stop-plan.json`
+
+Required behavior:
+
+- Current implementation is dry-run only and must not call broker write APIs.
+- `--execute` must be rejected until a guarded paper stop adapter exists.
+- Only fully filled long buy entries with positive `stop_price`, positive filled quantity, and no existing protective stop may become stop candidates.
+- The first stop plan uses Longbridge `sell` `MIT` with `--trigger-price <stop_price>` and `tif=gtc` by default.
+- The artifact must separate `stop_candidates`, `blocked`, `submitted`, and `errors`.
+
 Required behavior for outcome backfill:
 
 - Pre-market signals target the same date as the signal.

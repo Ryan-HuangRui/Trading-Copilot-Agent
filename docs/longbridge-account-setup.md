@@ -78,6 +78,12 @@ TRADING_COPILOT_PAPER_EXECUTION=enabled \
 python3 script/trading_copilot.py paper-order-cancel --date <DATE> --execute
 ```
 
+Build a dry-run protective stop plan for filled long paper entries:
+
+```bash
+python3 script/trading_copilot.py paper-protective-stop-plan --date <DATE>
+```
+
 Review observed paper executions against the preview and append matched paper fills:
 
 ```bash
@@ -110,6 +116,7 @@ Paper outputs:
 - `runtime/paper/<DATE>/paper-orders.jsonl` when `paper-trade-submit --execute` succeeds
 - `runtime/paper/<DATE>/paper-execution-state.json`
 - `report/<DATE>/paper-order-cancel-plan.json`
+- `report/<DATE>/paper-protective-stop-plan.json`
 - `report/<DATE>/paper-trade-review.json`
 - matched paper fills in `runtime/journal/trades.jsonl` when `paper-trade-review --append` is used
 

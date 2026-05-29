@@ -848,6 +848,36 @@ def run_paper_order_cancel(args: argparse.Namespace) -> None:
     emit(response)
 
 
+def run_paper_protective_stop_plan(args: argparse.Namespace) -> None:
+    command = [
+        "script/paper_protective_stop_plan.py",
+        "--date",
+        args.date,
+        "--repo-root",
+        args.repo_root,
+        "--tif",
+        args.tif,
+    ]
+    if args.state:
+        command.extend(["--state", args.state])
+    if args.output:
+        command.extend(["--output", args.output])
+    if args.execute:
+        command.append("--execute")
+
+    proc = run_child(command)
+    stdout = parse_json_output(proc.stdout)
+    if proc.returncode != 0:
+        emit(failed_response("paper-protective-stop-plan", command, proc), 1)
+
+    response = base_response("paper-protective-stop-plan", command, stdout)
+    response["date"] = (stdout or {}).get("date") or args.date
+    response["artifacts"] = [stdout["output"]] if stdout and stdout.get("output") else []
+    response["dry_run"] = (stdout or {}).get("dry_run")
+    response["summary"] = (stdout or {}).get("summary")
+    emit(response)
+
+
 def run_position_review(args: argparse.Namespace) -> None:
     command = [
         "script/position_review.py",
@@ -1195,6 +1225,15 @@ def build_parser() -> argparse.ArgumentParser:
     paper_cancel.add_argument("--execute", action="store_true")
     paper_cancel.add_argument("--repo-root", default=str(ROOT))
     paper_cancel.set_defaults(func=run_paper_order_cancel)
+
+    paper_stop = sub.add_parser("paper-protective-stop-plan", help="Build a dry-run protective stop plan for filled paper entries")
+    paper_stop.add_argument("--date", required=True)
+    paper_stop.add_argument("--state")
+    paper_stop.add_argument("--output")
+    paper_stop.add_argument("--tif", default="gtc")
+    paper_stop.add_argument("--execute", action="store_true")
+    paper_stop.add_argument("--repo-root", default=str(ROOT))
+    paper_stop.set_defaults(func=run_paper_protective_stop_plan)
 
     position = sub.add_parser("position-review", help="Review read-only positions against structured signals")
     position.add_argument("--date", required=True)
