@@ -488,6 +488,8 @@ python3 script/trading_copilot.py paper-order-sync --date <DATE>
 Inputs:
 
 - `runtime/paper/<DATE>/paper-orders.jsonl`.
+- Optional `runtime/paper/<DATE>/paper-stop-orders.jsonl`.
+- Optional `runtime/paper/<DATE>/paper-take-profit-orders.jsonl`.
 - `runtime/paper/<DATE>/paper-account-snapshot.json`.
 
 Output:
@@ -497,8 +499,10 @@ Output:
 Required behavior:
 
 - Must be read-only; it must not submit, cancel, replace, or adjust orders.
-- Must match submitted orders by `broker_order_id`, then `remark`, then `intent_id`, then `symbol + side + quantity` fallback.
+- Must match submitted entry, protective stop, and TP1 orders by `broker_order_id`, then `remark`, then `intent_id`, then `symbol + side + quantity` fallback.
 - Must summarize order states including `submitted`, `accepted`, `partially_filled`, `filled`, `cancelled`, `rejected`, and `expired`.
+- Must include `protective_stops`, `take_profit_orders`, and `exit_summary` in the execution state when those journals exist.
+- Must enrich entry orders with matched stop/TP1 fields such as `protective_stop_order_id`, `stop_status`, `take_profit_order_id`, `tp1_status`, `tp1_filled_quantity`, and `remaining_quantity`.
 - Must preserve matched broker order and execution payloads for audit and later review.
 
 ## paper-order-cancel

@@ -140,7 +140,7 @@ Paper outputs:
 - `report/<DATE>/paper-trade-preview.json`
 - `report/<DATE>/paper-trade-submission.json`
 - `runtime/paper/<DATE>/paper-orders.jsonl` when `paper-trade-submit --execute` succeeds
-- `runtime/paper/<DATE>/paper-execution-state.json`
+- `runtime/paper/<DATE>/paper-execution-state.json`, including synced entry, protective stop, and TP1 state when the corresponding journals exist
 - `report/<DATE>/paper-order-cancel-plan.json`
 - `report/<DATE>/paper-protective-stop-plan.json`
 - `runtime/paper/<DATE>/paper-stop-orders.jsonl` when `paper-protective-stop-plan --execute` succeeds

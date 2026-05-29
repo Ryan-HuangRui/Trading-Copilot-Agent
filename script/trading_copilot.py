@@ -797,6 +797,10 @@ def run_paper_order_sync(args: argparse.Namespace) -> None:
     ]
     if args.orders_journal:
         command.extend(["--orders-journal", args.orders_journal])
+    if args.stops_journal:
+        command.extend(["--stops-journal", args.stops_journal])
+    if args.take_profit_journal:
+        command.extend(["--take-profit-journal", args.take_profit_journal])
     if args.paper_snapshot:
         command.extend(["--paper-snapshot", args.paper_snapshot])
     if args.output:
@@ -1282,6 +1286,8 @@ def build_parser() -> argparse.ArgumentParser:
     paper_sync = sub.add_parser("paper-order-sync", help="Sync submitted paper order state from a paper account snapshot")
     paper_sync.add_argument("--date", required=True)
     paper_sync.add_argument("--orders-journal")
+    paper_sync.add_argument("--stops-journal")
+    paper_sync.add_argument("--take-profit-journal")
     paper_sync.add_argument("--paper-snapshot")
     paper_sync.add_argument("--output")
     paper_sync.add_argument("--repo-root", default=str(ROOT))

@@ -21,6 +21,14 @@ def default_orders_path(repo_root: Path, date: str, explicit_path: str | None) -
     return resolve_path(repo_root, explicit_path, repo_root / "runtime" / "paper" / date / "paper-orders.jsonl")
 
 
+def default_stops_path(repo_root: Path, date: str, explicit_path: str | None) -> Path:
+    return resolve_path(repo_root, explicit_path, repo_root / "runtime" / "paper" / date / "paper-stop-orders.jsonl")
+
+
+def default_take_profit_path(repo_root: Path, date: str, explicit_path: str | None) -> Path:
+    return resolve_path(repo_root, explicit_path, repo_root / "runtime" / "paper" / date / "paper-take-profit-orders.jsonl")
+
+
 def default_snapshot_path(repo_root: Path, date: str, explicit_path: str | None) -> Path:
     return resolve_path(repo_root, explicit_path, repo_root / "runtime" / "paper" / date / "paper-account-snapshot.json")
 
@@ -225,12 +233,85 @@ def synced_order(intent: dict[str, Any], broker_orders: list[dict[str, Any]], ex
     }
 
 
+def synced_exit_order(intent: dict[str, Any], broker_orders: list[dict[str, Any]], executions: list[dict[str, Any]]) -> dict[str, Any]:
+    synced = synced_order(intent, broker_orders, executions)
+    synced["kind"] = intent.get("kind")
+    synced["entry_broker_order_id"] = intent.get("entry_broker_order_id")
+    synced["trigger_price"] = intent.get("trigger_price")
+    synced["take_profit"] = intent.get("take_profit")
+    synced["exit_fraction"] = intent.get("exit_fraction")
+    return synced
+
+
+def status_counts(items: list[dict[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in items:
+        status = str(item.get("status") or "unknown")
+        counts[status] = counts.get(status, 0) + 1
+    return counts
+
+
+def status_summary(items: list[dict[str, Any]]) -> dict[str, int]:
+    counts = status_counts(items)
+    return {
+        "total": len(items),
+        "submitted": counts.get("submitted", 0),
+        "accepted": counts.get("accepted", 0),
+        "partially_filled": counts.get("partially_filled", 0),
+        "filled": counts.get("filled", 0),
+        "cancelled": counts.get("cancelled", 0),
+        "rejected": counts.get("rejected", 0),
+        "expired": counts.get("expired", 0),
+        "unknown": counts.get("unknown", 0),
+    }
+
+
+def first_by_intent(items: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    indexed: dict[str, dict[str, Any]] = {}
+    for item in items:
+        intent_id = str(item.get("intent_id") or "")
+        if intent_id and intent_id not in indexed:
+            indexed[intent_id] = item
+    return indexed
+
+
+def enrich_entry_with_exits(
+    entry: dict[str, Any],
+    *,
+    protective_stop: dict[str, Any] | None,
+    take_profit: dict[str, Any] | None,
+) -> dict[str, Any]:
+    enriched = dict(entry)
+    if protective_stop:
+        enriched["protective_stop_order_id"] = protective_stop.get("broker_order_id")
+        enriched["stop_order_id"] = protective_stop.get("broker_order_id")
+        enriched["stop_status"] = protective_stop.get("status")
+        enriched["current_stop_price"] = protective_stop.get("trigger_price")
+        enriched["stop_filled_quantity"] = protective_stop.get("filled_quantity")
+    if take_profit:
+        filled_quantity = as_float(take_profit.get("filled_quantity")) or 0.0
+        entry_filled_quantity = as_float(entry.get("filled_quantity")) or 0.0
+        remaining_quantity = max(0.0, entry_filled_quantity - filled_quantity)
+        enriched["take_profit_order_id"] = take_profit.get("broker_order_id")
+        enriched["tp1_order_id"] = take_profit.get("broker_order_id")
+        enriched["take_profit_status"] = take_profit.get("status")
+        enriched["tp1_status"] = take_profit.get("status")
+        enriched["take_profit_filled_quantity"] = filled_quantity
+        enriched["tp1_filled_quantity"] = filled_quantity
+        enriched["remaining_quantity"] = int(remaining_quantity) if remaining_quantity == int(remaining_quantity) else remaining_quantity
+    return enriched
+
+
 def run(args: argparse.Namespace) -> dict[str, Any]:
     repo_root = Path(args.repo_root).resolve()
     orders_path = default_orders_path(repo_root, args.date, args.orders_journal)
+    stops_path = default_stops_path(repo_root, args.date, args.stops_journal)
+    take_profit_path = default_take_profit_path(repo_root, args.date, args.take_profit_journal)
     snapshot_path = default_snapshot_path(repo_root, args.date, args.paper_snapshot)
     output = default_output_path(repo_root, args.date, args.output)
     submitted_orders = load_order_records(orders_path)
+    submitted_stops = load_order_records(stops_path)
+    submitted_take_profits = load_order_records(take_profit_path)
     snapshot = read_json(snapshot_path)
     broker_orders = snapshot.get("orders") if isinstance(snapshot.get("orders"), list) else []
     executions = snapshot.get("executions") if isinstance(snapshot.get("executions"), list) else []
@@ -239,28 +320,43 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         for order in submitted_orders
         if isinstance(order, dict) and order.get("intent_id")
     ]
-    status_counts: dict[str, int] = {}
-    for order in synced:
-        status = str(order.get("status") or "unknown")
-        status_counts[status] = status_counts.get(status, 0) + 1
-    summary = {
-        "total": len(synced),
-        "submitted": status_counts.get("submitted", 0),
-        "accepted": status_counts.get("accepted", 0),
-        "partially_filled": status_counts.get("partially_filled", 0),
-        "filled": status_counts.get("filled", 0),
-        "cancelled": status_counts.get("cancelled", 0),
-        "rejected": status_counts.get("rejected", 0),
-        "expired": status_counts.get("expired", 0),
-        "unknown": status_counts.get("unknown", 0),
+    synced_stops = [
+        synced_exit_order(order, broker_orders, executions)
+        for order in submitted_stops
+        if isinstance(order, dict) and order.get("intent_id")
+    ]
+    synced_take_profits = [
+        synced_exit_order(order, broker_orders, executions)
+        for order in submitted_take_profits
+        if isinstance(order, dict) and order.get("intent_id")
+    ]
+    stops_by_intent = first_by_intent(synced_stops)
+    take_profits_by_intent = first_by_intent(synced_take_profits)
+    enriched_orders = [
+        enrich_entry_with_exits(
+            order,
+            protective_stop=stops_by_intent.get(str(order.get("intent_id") or "")),
+            take_profit=take_profits_by_intent.get(str(order.get("intent_id") or "")),
+        )
+        for order in synced
+    ]
+    summary = status_summary(enriched_orders)
+    exit_summary = {
+        "protective_stops": status_summary(synced_stops),
+        "take_profit_orders": status_summary(synced_take_profits),
     }
     payload = {
         "date": args.date,
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "source_orders_journal": str(orders_path),
+        "source_stops_journal": str(stops_path),
+        "source_take_profit_journal": str(take_profit_path),
         "source_paper_snapshot": str(snapshot_path),
         "summary": summary,
-        "orders": synced,
+        "exit_summary": exit_summary,
+        "orders": enriched_orders,
+        "protective_stops": synced_stops,
+        "take_profit_orders": synced_take_profits,
         "safety_note": "Read-only paper order sync. This workflow does not submit, cancel, or replace orders.",
     }
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -272,6 +368,8 @@ def build_args(**overrides: Any) -> argparse.Namespace:
     values = {
         "date": None,
         "orders_journal": None,
+        "stops_journal": None,
+        "take_profit_journal": None,
         "paper_snapshot": None,
         "output": None,
         "repo_root": str(Path(__file__).resolve().parents[1]),
@@ -284,6 +382,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Sync submitted paper orders with a paper account snapshot")
     parser.add_argument("--date", required=True)
     parser.add_argument("--orders-journal")
+    parser.add_argument("--stops-journal")
+    parser.add_argument("--take-profit-journal")
     parser.add_argument("--paper-snapshot")
     parser.add_argument("--output")
     parser.add_argument("--repo-root", default=str(Path(__file__).resolve().parents[1]))

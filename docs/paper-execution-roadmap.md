@@ -123,7 +123,7 @@ Planned components:
 - `script/paper_order_sync.py`
 - `runtime/paper/<DATE>/paper-execution-state.json`
 
-Implementation status: the first read-only `paper-order-sync` command is implemented, and `paper-trade-review` now prefers submitted-order matching data before legacy symbol-side matching.
+Implementation status: the read-only `paper-order-sync` command is implemented for entry orders, protective stops, and TP1 take-profit orders. It writes `protective_stops`, `take_profit_orders`, `exit_summary`, and enriched entry fields that later exit planning can consume. `paper-trade-review` now prefers submitted-order matching data before legacy symbol-side matching.
 
 Matching order:
 

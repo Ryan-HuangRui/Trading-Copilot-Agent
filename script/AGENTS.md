@@ -18,7 +18,7 @@
 - `paper_risk_guard.py`: deterministic execution-safety checks for paper order intents.
 - `paper_trade_preview.py`: converts validated Trade Plan Cards into dry-run paper order previews.
 - `paper_trade_submit.py`: prepares controlled paper submissions from previews and risk guard output; defaults to dry-run and only submits through the gated paper order adapter when execution gates are explicitly enabled.
-- `paper_order_sync.py`: read-only paper order state sync from `paper-orders.jsonl` and paper account snapshots.
+- `paper_order_sync.py`: read-only paper order state sync from entry/stop/TP1 journals and paper account snapshots.
 - `paper_order_cancel.py`: cancel-plan builder for expired unfilled paper entry orders; defaults to dry-run and only cancels through the gated paper order adapter when execution gates are explicitly enabled.
 - `paper_protective_stop_plan.py`: protective stop planner for filled long paper entries. It defaults to dry-run and only submits paper stops through the gated paper order adapter when execution gates are explicitly enabled.
 - `paper_take_profit_plan.py`: TP1 partial-exit planner for filled long paper entries. It defaults to dry-run and only submits paper take-profit orders through the gated paper order adapter when execution gates are explicitly enabled.
