@@ -52,6 +52,13 @@ class LongbridgePaperOrderAdapter:
         if values.get(PAPER_EXECUTION_ENV) != "enabled":
             raise PermissionError(f"{PAPER_EXECUTION_ENV}=enabled is required to submit paper orders")
 
+    def ensure_write_allowed(self, *, execute: bool, action: str, env: Mapping[str, str] | None = None) -> None:
+        if not execute:
+            raise PermissionError(f"--execute is required to {action} paper orders")
+        values = env if env is not None else os.environ
+        if values.get(PAPER_EXECUTION_ENV) != "enabled":
+            raise PermissionError(f"{PAPER_EXECUTION_ENV}=enabled is required to {action} paper orders")
+
     def validate_limit_buy_intent(self, intent: dict[str, Any]) -> None:
         if intent.get("side") != "buy":
             raise ValueError("only buy side is supported")
@@ -72,7 +79,7 @@ class LongbridgePaperOrderAdapter:
         env: Mapping[str, str] | None = None,
     ) -> dict[str, Any]:
         self.validate_limit_buy_intent(intent)
-        self.ensure_submit_allowed(execute=execute, env=env)
+        self.ensure_write_allowed(execute=execute, action="submit", env=env)
         account_channel = self.assert_paper_account()
         quantity = str(int(intent["quantity"]))
         price = format_decimal(float(intent["limit_price"]))
@@ -106,6 +113,34 @@ class LongbridgePaperOrderAdapter:
                 "command": command,
                 "intent_id": intent["intent_id"],
                 "remark": remark,
+            },
+            "raw_response": raw_response if isinstance(raw_response, dict) else {"response": raw_response},
+        }
+
+    def cancel_order(
+        self,
+        broker_order_id: str,
+        *,
+        execute: bool,
+        env: Mapping[str, str] | None = None,
+    ) -> dict[str, Any]:
+        order_id = str(broker_order_id or "").strip()
+        if not order_id:
+            raise ValueError("broker_order_id is required")
+        self.ensure_write_allowed(execute=execute, action="cancel", env=env)
+        account_channel = self.assert_paper_account()
+        command = ["order", "cancel", order_id, "--format", "json", "-y"]
+        raw_response = self.run_json(command)
+        response_order_id = order_id
+        if isinstance(raw_response, dict):
+            response_order_id = str(raw_response.get("order_id") or raw_response.get("id") or raw_response.get("broker_order_id") or order_id)
+        return {
+            "broker": "longbridge",
+            "account_channel": account_channel or PAPER_ACCOUNT_CHANNEL,
+            "broker_order_id": response_order_id,
+            "raw_request": {
+                "command": command,
+                "broker_order_id": order_id,
             },
             "raw_response": raw_response if isinstance(raw_response, dict) else {"response": raw_response},
         }

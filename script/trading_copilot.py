@@ -830,6 +830,8 @@ def run_paper_order_cancel(args: argparse.Namespace) -> None:
         command.extend(["--output", args.output])
     if args.now:
         command.extend(["--now", args.now])
+    if args.longbridge_cli:
+        command.extend(["--longbridge-cli", args.longbridge_cli])
     if args.execute:
         command.append("--execute")
 
@@ -1189,6 +1191,7 @@ def build_parser() -> argparse.ArgumentParser:
     paper_cancel.add_argument("--output")
     paper_cancel.add_argument("--expire-after-minutes", type=int, default=60)
     paper_cancel.add_argument("--now")
+    paper_cancel.add_argument("--longbridge-cli")
     paper_cancel.add_argument("--execute", action="store_true")
     paper_cancel.add_argument("--repo-root", default=str(ROOT))
     paper_cancel.set_defaults(func=run_paper_order_cancel)

@@ -125,9 +125,10 @@ python3 script/workflow_smoke_test.py --date <DATE> --week <YYYY-Www>
   - `TRADING_COPILOT_PAPER_EXECUTION=enabled python3 script/trading_copilot.py paper-trade-submit --date YYYY-MM-DD --session pre-market --require-validation --execute`
   - `python3 script/trading_copilot.py paper-order-sync --date YYYY-MM-DD`
   - `python3 script/trading_copilot.py paper-order-cancel --date YYYY-MM-DD`
+  - `TRADING_COPILOT_PAPER_EXECUTION=enabled python3 script/trading_copilot.py paper-order-cancel --date YYYY-MM-DD --execute`
   - `python3 script/trading_copilot.py paper-trade-review --date YYYY-MM-DD --session pre-market --append`
   - 产物：`runtime/paper/YYYY-MM-DD/paper-account-snapshot.json`、`report/YYYY-MM-DD/paper-trade-preview.json`、`report/YYYY-MM-DD/paper-trade-submission.json`、`runtime/paper/YYYY-MM-DD/paper-orders.jsonl`、`runtime/paper/YYYY-MM-DD/paper-execution-state.json`、`report/YYYY-MM-DD/paper-order-cancel-plan.json`、`report/YYYY-MM-DD/paper-trade-review.json`
-  - `paper-account-snapshot` 会校验 Longbridge 当前账户是 `lb_papertrading`；`paper-trade-preview` 输出 dry-run 订单预览；`paper-trade-submit` 默认 dry-run，只在 `--execute` 与 `TRADING_COPILOT_PAPER_EXECUTION=enabled` 同时满足后，通过独立 paper order adapter 提交模拟盘限价买入单；`paper-order-sync` 只读回放提交账本和模拟盘快照；`paper-order-cancel` 当前只生成过期未成交入场单撤单计划，不调用 broker cancel；`paper-trade-review` 优先用 `broker_order_id` / `remark` / `intent_id` 匹配已观察到的模拟成交并回写 journal
+  - `paper-account-snapshot` 会校验 Longbridge 当前账户是 `lb_papertrading`；`paper-trade-preview` 输出 dry-run 订单预览；`paper-trade-submit` 默认 dry-run，只在 `--execute` 与 `TRADING_COPILOT_PAPER_EXECUTION=enabled` 同时满足后，通过独立 paper order adapter 提交模拟盘限价买入单；`paper-order-sync` 只读回放提交账本和模拟盘快照；`paper-order-cancel` 默认 dry-run，只在双门禁后撤销过期未成交入场单；`paper-trade-review` 优先用 `broker_order_id` / `remark` / `intent_id` 匹配已观察到的模拟成交并回写 journal
 
 ## 实时盯盘
 - 支持多标的 5m 监控，默认只输出做多路径（可配置）

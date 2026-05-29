@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -109,13 +110,21 @@ class PaperOrderCancelTest(unittest.TestCase):
             self.assertEqual(reasons["missing-id"], "broker_order_id is required for cancel")
             self.assertEqual(reasons["newer"], "entry order has not exceeded max open duration")
 
-    def test_execute_is_rejected_until_cancel_adapter_exists(self):
+    def test_execute_cancels_candidates_with_adapter(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             self.seed_state(root, [order_state()])
 
-            with self.assertRaises(PermissionError):
-                paper_order_cancel.run(
+            adapter = unittest.mock.Mock()
+            adapter.cancel_order.return_value = {
+                "broker": "longbridge",
+                "account_channel": "lb_papertrading",
+                "broker_order_id": "paper-o-1",
+                "raw_request": {"command": ["order", "cancel", "paper-o-1"]},
+                "raw_response": {"order_id": "paper-o-1", "status": "cancelled"},
+            }
+            with patch.object(paper_order_cancel, "LongbridgePaperOrderAdapter", return_value=adapter):
+                result = paper_order_cancel.run(
                     paper_order_cancel.build_args(
                         repo_root=str(root),
                         date="2026-05-26",
@@ -124,6 +133,51 @@ class PaperOrderCancelTest(unittest.TestCase):
                         execute=True,
                     )
                 )
+
+            self.assertFalse(result["dry_run"])
+            self.assertEqual(result["summary"]["executed"], 1)
+            adapter.cancel_order.assert_called_once_with("paper-o-1", execute=True)
+            payload = json.loads(Path(result["output"]).read_text(encoding="utf-8"))
+            self.assertEqual(payload["executed"][0]["broker_order_id"], "paper-o-1")
+            self.assertEqual(payload["executed"][0]["raw_response"]["status"], "cancelled")
+
+    def test_execute_records_error_and_continues_other_cancels(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.seed_state(
+                root,
+                [
+                    order_state(intent_id="intent-1", broker_order_id="paper-o-1"),
+                    order_state(intent_id="intent-2", broker_order_id="paper-o-2"),
+                ],
+            )
+            adapter = unittest.mock.Mock()
+            adapter.cancel_order.side_effect = [
+                RuntimeError("broker rejected cancel"),
+                {
+                    "broker": "longbridge",
+                    "account_channel": "lb_papertrading",
+                    "broker_order_id": "paper-o-2",
+                    "raw_request": {"command": ["order", "cancel", "paper-o-2"]},
+                    "raw_response": {"order_id": "paper-o-2", "status": "cancelled"},
+                },
+            ]
+
+            with patch.object(paper_order_cancel, "LongbridgePaperOrderAdapter", return_value=adapter):
+                result = paper_order_cancel.run(
+                    paper_order_cancel.build_args(
+                        repo_root=str(root),
+                        date="2026-05-26",
+                        now="2026-05-26T14:45:00+00:00",
+                        expire_after_minutes=60,
+                        execute=True,
+                    )
+                )
+
+            self.assertEqual(result["summary"]["executed"], 1)
+            self.assertEqual(result["summary"]["errors"], 1)
+            payload = json.loads(Path(result["output"]).read_text(encoding="utf-8"))
+            self.assertIn("broker rejected cancel", payload["errors"][0]["error"])
 
     def test_wrapper_exposes_paper_order_cancel(self):
         with tempfile.TemporaryDirectory() as tmp:

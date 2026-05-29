@@ -7,7 +7,7 @@ All workflows must preserve the repository safety rules:
 - Never place real trades.
 - Read-only Longbridge account snapshots are allowed only through the account snapshot workflow; order placement, cancellation, replacement, and automatic position changes are prohibited.
 - Paper broker writes are allowed only through dedicated guarded paper adapters, only against `lb_papertrading`, and only for explicitly contracted operations.
-- Current paper write scope is limited to guarded entry limit-buy submission. Paper cancel/replace/stop/take-profit actions remain dry-run planning only until separately implemented.
+- Current paper write scope is limited to guarded entry limit-buy submission and guarded cancellation of expired unfilled entry orders. Paper replace/stop/take-profit actions remain dry-run planning only until separately implemented.
 - Do not output deterministic buy/sell instructions.
 - Use scenarios, triggers, invalidation, risk, and `NO TRADE`.
 - Use `knowledge/refined/` as the only rule source for trading conclusions.
@@ -511,6 +511,13 @@ Canonical command:
 python3 script/trading_copilot.py paper-order-cancel --date <DATE>
 ```
 
+Execute command:
+
+```bash
+TRADING_COPILOT_PAPER_EXECUTION=enabled \
+python3 script/trading_copilot.py paper-order-cancel --date <DATE> --execute
+```
+
 Inputs:
 
 - `runtime/paper/<DATE>/paper-execution-state.json`.
@@ -521,11 +528,13 @@ Output:
 
 Required behavior:
 
-- Current implementation is dry-run only and must not call broker cancel APIs.
-- `--execute` must be rejected until a guarded paper cancel adapter exists.
+- Default behavior is dry-run and must not call broker cancel APIs.
+- Broker cancellation requires both `--execute` and `TRADING_COPILOT_PAPER_EXECUTION=enabled`.
+- Broker cancellation must use only `script/longbridge_paper_order_adapter.py`.
 - Only unfilled `submitted` or `accepted` entry orders with `broker_order_id` and `submitted_at` may become cancel candidates.
 - Filled and partially filled orders must be blocked from cancellation planning.
 - The artifact must separate `cancel_candidates`, `blocked`, `executed`, and `errors`.
+- Executed cancel records must preserve `intent_id`, `broker_order_id`, `raw_request`, and `raw_response`.
 
 ## paper-trade-submit
 

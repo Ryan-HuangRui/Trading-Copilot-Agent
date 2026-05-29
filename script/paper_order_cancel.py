@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from longbridge_paper_order_adapter import LongbridgePaperOrderAdapter
 from signal_artifacts import read_json
 
 
@@ -99,8 +100,6 @@ def cancel_candidate_or_block(order: dict[str, Any], *, now: datetime, expire_af
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
-    if args.execute:
-        raise PermissionError("paper-order-cancel --execute is not implemented until a guarded cancel adapter exists")
     repo_root = Path(args.repo_root).resolve()
     state_path = default_state_path(repo_root, args.date, args.state)
     output = default_output_path(repo_root, args.date, args.output)
@@ -111,6 +110,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     current_time = now_utc(args.now)
     cancel_candidates: list[dict[str, Any]] = []
     blocked: list[dict[str, Any]] = []
+    executed: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
     for order in orders:
         if not isinstance(order, dict):
             continue
@@ -123,26 +124,47 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             cancel_candidates.append(record)
         else:
             blocked.append(record)
+    if args.execute and cancel_candidates:
+        adapter = LongbridgePaperOrderAdapter(cli=args.longbridge_cli)
+        for candidate in cancel_candidates:
+            try:
+                cancel_result = adapter.cancel_order(str(candidate["broker_order_id"]), execute=True)
+                executed.append(
+                    {
+                        **candidate,
+                        "cancel_status": "cancelled",
+                        "account_channel": cancel_result.get("account_channel"),
+                        "raw_request": cancel_result.get("raw_request") if isinstance(cancel_result.get("raw_request"), dict) else {},
+                        "raw_response": cancel_result.get("raw_response") if isinstance(cancel_result.get("raw_response"), dict) else {},
+                    }
+                )
+            except Exception as exc:
+                errors.append({**candidate, "error": str(exc)})
     summary = {
         "total": len([order for order in orders if isinstance(order, dict)]),
         "cancel_candidates": len(cancel_candidates),
         "blocked": len(blocked),
-        "executed": 0,
+        "executed": len(executed),
+        "errors": len(errors),
     }
     payload = {
         "date": args.date,
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "dry_run": True,
-        "execute_requested": False,
+        "dry_run": not args.execute,
+        "execute_requested": bool(args.execute),
         "source_execution_state": str(state_path),
         "expire_after_minutes": args.expire_after_minutes,
         "now": current_time.isoformat(timespec="seconds"),
         "cancel_candidates": cancel_candidates,
         "blocked": blocked,
-        "executed": [],
-        "errors": [],
+        "executed": executed,
+        "errors": errors,
         "summary": summary,
-        "safety_note": "Dry-run cancel plan only. This workflow does not call broker cancel APIs.",
+        "safety_note": (
+            "Dry-run cancel plan only. This workflow does not call broker cancel APIs."
+            if not args.execute
+            else "Executed paper cancellations through guarded Longbridge paper adapter."
+        ),
     }
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -150,7 +172,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "status": "success",
         "date": args.date,
         "output": str(output),
-        "dry_run": True,
+        "dry_run": payload["dry_run"],
         "summary": summary,
     }
 
@@ -163,6 +185,7 @@ def build_args(**overrides: Any) -> argparse.Namespace:
         "expire_after_minutes": 60,
         "now": None,
         "execute": False,
+        "longbridge_cli": None,
         "repo_root": str(Path(__file__).resolve().parents[1]),
     }
     values.update(overrides)
@@ -176,7 +199,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output")
     parser.add_argument("--expire-after-minutes", type=int, default=60)
     parser.add_argument("--now")
-    parser.add_argument("--execute", action="store_true", help="Reserved; rejected until a guarded paper cancel adapter exists")
+    parser.add_argument("--execute", action="store_true", help="Cancel passing candidates through the guarded paper adapter")
+    parser.add_argument("--longbridge-cli")
     parser.add_argument("--repo-root", default=str(Path(__file__).resolve().parents[1]))
     return parser
 

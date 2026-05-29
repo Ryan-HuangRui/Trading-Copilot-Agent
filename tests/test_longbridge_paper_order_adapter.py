@@ -114,6 +114,47 @@ class LongbridgePaperOrderAdapterTest(unittest.TestCase):
                 env={"TRADING_COPILOT_PAPER_EXECUTION": "enabled"},
             )
 
+    def test_cancel_requires_execute_flag(self):
+        adapter = LongbridgePaperOrderAdapter(cli="/bin/longbridge")
+
+        with self.assertRaises(PermissionError):
+            adapter.cancel_order("order-1", execute=False, env={"TRADING_COPILOT_PAPER_EXECUTION": "enabled"})
+
+    def test_cancel_requires_env_flag(self):
+        adapter = LongbridgePaperOrderAdapter(cli="/bin/longbridge")
+
+        with self.assertRaises(PermissionError):
+            adapter.cancel_order("order-1", execute=True, env={})
+
+    def test_cancel_rejects_missing_broker_order_id(self):
+        adapter = LongbridgePaperOrderAdapter(cli="/bin/longbridge")
+
+        with self.assertRaises(ValueError):
+            adapter.cancel_order("", execute=True, env={"TRADING_COPILOT_PAPER_EXECUTION": "enabled"})
+
+    def test_cancel_order_builds_safe_command_and_records_raw_response(self):
+        adapter = LongbridgePaperOrderAdapter(cli="/bin/longbridge")
+        calls = []
+
+        def fake_run(args):
+            calls.append(args)
+            if args[:2] == ["auth", "status"]:
+                return {"account": {"account_channel": "lb_papertrading"}, "token": {"status": "valid"}}
+            if args[:2] == ["order", "cancel"]:
+                return {"order_id": "order-1", "status": "cancelled"}
+            raise AssertionError(args)
+
+        with patch.object(adapter, "run_json", side_effect=fake_run):
+            result = adapter.cancel_order(
+                "order-1",
+                execute=True,
+                env={"TRADING_COPILOT_PAPER_EXECUTION": "enabled"},
+            )
+
+        self.assertEqual(result["broker_order_id"], "order-1")
+        self.assertEqual(result["raw_response"], {"order_id": "order-1", "status": "cancelled"})
+        self.assertEqual(calls[1], ["order", "cancel", "order-1", "--format", "json", "-y"])
+
 
 if __name__ == "__main__":
     unittest.main()
