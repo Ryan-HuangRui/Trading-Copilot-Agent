@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "date": "2026-05-26",
+  "evidence": [
+    {
+      "evidence_id": "2026-05-26:fundamentals:MU:fixture",
+      "source": "tests/fixtures/agent_research/provider_contract_fixture.json",
+      "source_type": "fundamentals",
+      "as_of": "2026-05-26",
+      "symbol": "MU",
+      "summary": "Fixture fundamentals placeholder for contract validation only.",
+      "confidence": 0.5,
+      "limitations": ["fixture only", "no live fundamentals source connected"]
+    },
+    {
+      "evidence_id": "2026-05-26:news:MU:fixture",
+      "source": "tests/fixtures/agent_research/provider_contract_fixture.json",
+      "source_type": "news",
+      "published_at": "2026-05-26T12:00:00Z",
+      "symbol": "MU",
+      "summary": "Fixture news placeholder for contract validation only.",
+      "confidence": 0.5,
+      "limitations": ["fixture only", "no live news source connected"]
+    },
+    {
+      "evidence_id": "2026-05-26:sentiment:MU:fixture",
+      "source": "tests/fixtures/agent_research/provider_contract_fixture.json",
+      "source_type": "sentiment",
+      "as_of": "2026-05-26",
+      "symbol": "MU",
+      "summary": "Fixture sentiment placeholder; sentiment must not be treated as a standalone trading signal.",
+      "confidence": 0.4,
+      "limitations": ["fixture only", "sentiment cannot raise execution status"]
+    }
+  ]
+}

@@ -71,6 +71,26 @@ Required top-level fields:
 
 Reports may contain heuristic scores, but must distinguish them from factual evidence and derived market metrics. Reports must not contain direct buy/sell/order instructions.
 
+## Phase 1 Data Tools
+
+Phase 1 introduces deterministic local tools. They do not call an LLM and do not write broker commands.
+
+```bash
+python3 script/agent_market_data.py --date <DATE> --symbol MU --snapshot report/<DATE>/daily-snapshot.json
+python3 script/agent_technicals.py --date <DATE> --symbol MU --market-data report/<DATE>/agents/market-data.json
+```
+
+`agent_market_data.py` reads an existing `daily-snapshot.json` or `pre-market-context.json`, preserves Longbridge/Twelve provider metadata, and emits evidence with source/freshness/confidence/limitations fields.
+
+`agent_technicals.py` reads the market-data artifact and computes deterministic OHLCV-derived metrics such as SMA, ATR, RSI, volume averages, and close-change percentage.
+
+`config/agent_research.json` defines the provider policy. In Phase 1, fundamentals, news, and sentiment providers are fixture-only contracts:
+
+- `mode=fixture`
+- `live_enabled=false`
+- no API credentials required
+- sentiment evidence cannot raise execution status
+
 ## Decision Artifact
 
 `decision.json` is the structured output of role reasoning. It may help draft a Trade Plan Card, but it is not itself an order.

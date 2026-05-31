@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "market_data": {
+    "primary_source": "longbridge",
+    "fallback_source": "twelve",
+    "fixture_mode": true
+  },
+  "providers": {
+    "fundamentals": {
+      "mode": "fixture",
+      "live_enabled": false,
+      "required_evidence_fields": [
+        "evidence_id",
+        "source",
+        "source_type",
+        "as_of",
+        "symbol",
+        "summary",
+        "confidence",
+        "limitations"
+      ]
+    },
+    "news": {
+      "mode": "fixture",
+      "live_enabled": false,
+      "required_evidence_fields": [
+        "evidence_id",
+        "source",
+        "source_type",
+        "published_at",
+        "symbol",
+        "summary",
+        "confidence",
+        "limitations"
+      ]
+    },
+    "sentiment": {
+      "mode": "fixture",
+      "live_enabled": false,
+      "required_evidence_fields": [
+        "evidence_id",
+        "source",
+        "source_type",
+        "as_of",
+        "symbol",
+        "summary",
+        "confidence",
+        "limitations"
+      ]
+    }
+  },
+  "safety": {
+    "decision_artifacts_not_orders": true,
+    "memory_can_raise_execution_status": false,
+    "broker_writes_allowed": false
+  }
+}
