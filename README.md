@@ -1,6 +1,6 @@
 # Trading Copilot Agent
 
-为美股交易提供结构化支持：复盘、价格行为分析、行情数据获取、盘前计划、盘后复盘。
+为美股交易提供结构化支持：复盘、价格行为分析、行情数据获取、盘前计划、盘后复盘、TradingAgents 风格证据增强、模拟盘 dry-run / 受控执行。
 
 ## 目录结构
 
@@ -24,11 +24,20 @@ cp .env.example .env
 # 默认使用已登录的 Longbridge CLI 获取行情；如需 Twelve Data fallback，编辑 .env 填入 TWELVE_DATA_API_KEY
 ```
 
+推荐验证：
+
+```bash
+python3 -m py_compile script/*.py
+python3 -m unittest discover tests
+python3 script/trading_day_guard.py --date 2026-05-06 --format text
+```
+
 ## 职责分层
 
 - `script/`：只做确定性数据工作，包括交易日判断、行情拉取、限频、缓存、context 生成。
 - `script/market_data_provider.py`：行情源入口，默认 Longbridge CLI，Twelve Data 作为 fallback。
 - `script/trading_copilot.py`：面向 agent 的统一 workflow wrapper，返回 `status/date/artifacts/skipped/reason`。
+- `script/agent_market_data.py` / `script/agent_technicals.py` / `script/agent_research_reports.py` / `script/agent_decision.py`：TradingAgents 风格 artifact-first 证据链路。
 - `agent/`：Codex App 自动化生成报告时实际读取的 Prompt，目前只保留盘前和盘后两个执行 Prompt。
 - `knowledge/refined/`：唯一交易规则源。
 - `docs/`：调度流程和运维说明。
@@ -42,10 +51,21 @@ cp .env.example .env
 ```bash
 python3 script/trading_copilot.py trading-day-check --date 2026-05-06
 python3 script/trading_copilot.py pre-market-plan --watchlist config/watchlist.json --skip-non-trading-day
+python3 script/trading_copilot.py pre-market-plan --watchlist config/watchlist.json --skip-non-trading-day --include-agent-research
 python3 script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day --include-journal-signals --include-position-symbols
+python3 script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day --include-journal-signals --include-position-symbols --include-agent-research
 python3 script/trading_copilot.py monitor-brief --state config/monitor_state.json --interval 5min
+python3 script/trading_copilot.py agent-research-context --date <DATE> --symbol <SYMBOL>
+python3 script/trading_copilot.py agent-research-reports --date <DATE> --symbol <SYMBOL>
+python3 script/trading_copilot.py validate-agent-reports --date <DATE> --symbol <SYMBOL>
+python3 script/trading_copilot.py agent-decision --date <DATE> --symbol <SYMBOL>
+python3 script/trading_copilot.py validate-agent-decision --date <DATE> --symbol <SYMBOL>
+python3 script/trading_copilot.py agent-memory-review --date <DATE> --symbol <SYMBOL>
+python3 script/trading_copilot.py agent-memory-append --decision report/<DATE>/agents/<SYMBOL>/decision.json --outcome-status <STATUS> --reflection "<TEXT>"
+python3 script/trading_copilot.py agent-memory-export
 python3 script/trading_copilot.py validate-report --session pre-market --date <DATE>
 python3 script/trading_copilot.py validate-trade-plan --session pre-market --date <DATE>
+python3 script/trading_copilot.py validate-trade-plan --session monitor --date <DATE>
 python3 script/trading_copilot.py extract-report-signals --session pre-market --date <DATE> --require-validation --append
 python3 script/trading_copilot.py backfill-signal-outcomes --date <DATE> --append
 python3 script/trading_copilot.py plan-review --date <DATE> --append-lessons
@@ -56,11 +76,14 @@ python3 script/trading_copilot.py promote-lesson --pattern-id <PATTERN_ID> --dry
 python3 script/trading_copilot.py daily-self-review --date <DATE> --append
 python3 script/trading_copilot.py weekly-review --week <YYYY-Www> --append
 python3 script/trading_copilot.py extract-monitor-signals --append
+python3 script/trading_copilot.py extract-monitor-signals --date <DATE>
 python3 script/trading_copilot.py account-snapshot --date <DATE>
 python3 script/trading_copilot.py paper-account-snapshot --date <DATE>
 python3 script/trading_copilot.py paper-trade-preview --date <DATE> --session pre-market --require-validation
+python3 script/trading_copilot.py paper-trade-preview --date <DATE> --session monitor --require-validation
 python3 script/trading_copilot.py paper-trade-submit --date <DATE> --session pre-market --require-validation
 python3 script/trading_copilot.py paper-trade-submit --date <DATE> --session pre-market --require-validation --execute
+python3 script/trading_copilot.py paper-trade-submit --date <DATE> --session monitor --require-validation
 python3 script/trading_copilot.py paper-order-sync --date <DATE>
 python3 script/trading_copilot.py paper-event-ledger --date <DATE>
 python3 script/trading_copilot.py paper-execution-review --date <DATE>
@@ -82,6 +105,7 @@ python3 script/workflow_smoke_test.py --date <DATE> --week <YYYY-Www>
 - `docs/contracts/workflows.md`
 - `docs/contracts/data-contracts.md`
 - `docs/contracts/journal.md`
+- `docs/contracts/agent-research.md`
 - `docs/cc-connect-scheduler.md`
 - `docs/longbridge-account-setup.md`
 - `docs/paper-execution-runbook.md`
@@ -113,6 +137,82 @@ python3 script/workflow_smoke_test.py --date <DATE> --week <YYYY-Www>
 - 分析过程由 Agent 完成，脚本只做交易日判断、数据准备、指标摘要与限频控制
 - 详细 runbook：`docs/daily-report-workflow.md`
 
+## TradingAgents 风格证据增强
+
+本仓库现在支持 artifact-first 的多角色投研增强链路，默认不替代原有盘前/盘后报告，只作为可选证据输入：
+
+```text
+market/context snapshot
+  -> agent_market_data.py
+  -> agent_technicals.py
+  -> agent_research_reports.py
+  -> agent_decision.py
+  -> validate-agent-reports / validate-agent-decision
+  -> optional next_agent_inputs for pre/post report generation
+```
+
+单独运行：
+
+```bash
+python3 script/trading_copilot.py agent-research-context --date YYYY-MM-DD --symbol MU
+python3 script/agent_market_data.py --date YYYY-MM-DD --symbol MU
+python3 script/agent_technicals.py --date YYYY-MM-DD --symbol MU
+python3 script/trading_copilot.py agent-research-reports --date YYYY-MM-DD --symbol MU
+python3 script/trading_copilot.py validate-agent-reports --date YYYY-MM-DD --symbol MU
+python3 script/trading_copilot.py agent-decision --date YYYY-MM-DD --symbol MU
+python3 script/trading_copilot.py validate-agent-decision --date YYYY-MM-DD --symbol MU
+```
+
+其中 `agent-research-context` 是集成骨架与调度契约；真正用于报告证据增强的是后续 market data、technicals、reports、decision 和 validator 产物。盘前/盘后生产流程建议直接使用 `--include-agent-research`，由 wrapper 串联这些步骤并把 artifact path 注入 `next_agent_inputs`。
+
+接入盘前/盘后：
+
+```bash
+python3 script/trading_copilot.py pre-market-plan --watchlist config/watchlist.json --skip-non-trading-day --include-agent-research
+python3 script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day --include-journal-signals --include-position-symbols --include-agent-research
+```
+
+产物默认写入：
+
+- `report/YYYY-MM-DD/agents/market-data.json`
+- `report/YYYY-MM-DD/agents/technicals.json`
+- `report/YYYY-MM-DD/agents/<SYMBOL>/market_report.json`
+- `report/YYYY-MM-DD/agents/<SYMBOL>/technicals_report.json`
+- `report/YYYY-MM-DD/agents/<SYMBOL>/fundamentals_report.json`
+- `report/YYYY-MM-DD/agents/<SYMBOL>/news_report.json`
+- `report/YYYY-MM-DD/agents/<SYMBOL>/sentiment_report.json`
+- `report/YYYY-MM-DD/agents/<SYMBOL>/bull_report.json`
+- `report/YYYY-MM-DD/agents/<SYMBOL>/bear_report.json`
+- `report/YYYY-MM-DD/agents/<SYMBOL>/risk_report.json`
+- `report/YYYY-MM-DD/agents/<SYMBOL>/decision.json`
+- `report/YYYY-MM-DD/agents/<SYMBOL>/decision.md`
+
+边界：
+
+- Agent research artifacts 是证据增强，不是订单输入。
+- `decision.json` 必须复用现有 `plan_type` / `execution_status` 语义。
+- `experimental=true` 或 `not_for_execution=true` 的占位决策会被 `validate-agent-decision` 拒绝。
+- 任何 broker 写操作仍只能走专用 paper workflow。
+
+### 记忆层
+
+```bash
+python3 script/trading_copilot.py agent-memory-append \
+  --decision report/YYYY-MM-DD/agents/MU/decision.json \
+  --outcome-status not_triggered \
+  --reflection "观察未触发，后续降低优先级"
+
+python3 script/trading_copilot.py agent-memory-review --date YYYY-MM-DD --symbol MU
+python3 script/trading_copilot.py agent-memory-export
+```
+
+产物：
+
+- `runtime/memory/trading_memory.md`
+- `runtime/memory/trading_memory.sqlite`
+
+Memory 只能降低置信度、增加限制或触发人工 review，不能提高 `execution_status`，也不能修改 `knowledge/refined/`。
+
 ## 复盘闭环
 - 盘后复盘：Agent 生成 `post-market.md` 与 `post-market-signals.json` 后，先跑 `validate-report` 和 `validate-trade-plan`
 - outcome 回填：`python3 script/trading_copilot.py backfill-signal-outcomes --date YYYY-MM-DD --append`
@@ -133,6 +233,7 @@ python3 script/workflow_smoke_test.py --date <DATE> --week <YYYY-Www>
 - 模拟盘演进路线见 `docs/paper-execution-roadmap.md`：当前优先强化执行状态和 broker capability matrix，后续再接入新闻/财报情绪、盘中 dry-run 候选和 OCO/高级订单。
 - 模拟盘接入当前支持快照、订单预览、受控提交、订单同步、保护/退出计划和复盘：
   - 配置：`config/paper_execution.json` 默认关闭所有 broker 写入；部署时可用 ignored 的 `config/paper_execution.local.json` 并通过 `--paper-execution-config` 指定，执行入场需同时设置 `paper_execution.broker_writes_enabled=true` 与 `paper_execution.allow_entry_submit=true`
+  - `paper_execution.allow_intraday_entry_submit` 当前只是预留门禁；monitor session 的 `--execute` 仍然硬禁用
   - `python3 script/trading_copilot.py paper-account-snapshot --date YYYY-MM-DD`
   - `python3 script/trading_copilot.py paper-trade-preview --date YYYY-MM-DD --session pre-market --require-validation`
   - `python3 script/trading_copilot.py paper-trade-submit --date YYYY-MM-DD --session pre-market --require-validation`
@@ -159,8 +260,36 @@ python3 script/workflow_smoke_test.py --date <DATE> --week <YYYY-Www>
 - 持仓：输出 R 值与风险动作（减仓/止损上移/退出）
 - 执行脚本：`python3 script/monitor_scan.py --state config/monitor_state.json --interval 5min`
 - 输出文件：`report/latest-monitor.json`
+- 可选生成 monitor sidecar：`python3 script/trading_copilot.py extract-monitor-signals --date YYYY-MM-DD`
 - 可选写入 journal：`python3 script/trading_copilot.py extract-monitor-signals --append`
 - monitor scan 原生输出 setup/risk_quality/journal_appendable；journal 记录仍只是观察，不是执行指令
+- monitor dry-run 闭环：
+  ```bash
+  python3 script/trading_copilot.py validate-trade-plan --session monitor --date YYYY-MM-DD
+  python3 script/trading_copilot.py paper-trade-preview --date YYYY-MM-DD --session monitor --require-validation
+  python3 script/trading_copilot.py paper-trade-submit --date YYYY-MM-DD --session monitor --require-validation
+  python3 script/trading_copilot.py feishu-summary --session monitor --date YYYY-MM-DD
+  ```
+- `paper-trade-submit --session monitor --execute` 会被硬拒绝；盘中候选目前只支持 dry-run 和人工观察。
+
+## cc connect 定时任务
+
+生产调度以 cc connect 为边界：cc connect 负责定时触发、接收摘要和发送 Feishu；本仓库负责数据准备、报告产物、校验、journal、模拟盘 dry-run/受控执行。详细配置见 `docs/cc-connect-scheduler.md`。
+
+推荐生产任务：
+
+- **盘前报告**：`pre-market-plan` → Agent 生成 `exec-brief.md` / `pre-market.md` / `pre-market-signals.json` → `validate-report` → `validate-trade-plan` → `extract-report-signals --require-validation --append` → 可选只读账户/持仓复核 → `data-quality` → `feishu-summary`
+- **盘后复盘**：`post-market-review` → Agent 生成 `post-market.md` / `post-market-signals.json` → `validate-report` → `validate-trade-plan` → outcome backfill → journal append → position review → `plan-review` / `learning-review` / `daily-self-review` → `data-quality` → `feishu-summary`
+- **可选 Agent Research 增强**：把盘前/盘后的准备命令替换为带 `--include-agent-research` 的 wrapper 命令，cc connect 需要把 `validate-agent-reports` / `validate-agent-decision` 失败作为阻断状态展示。
+- **Monitor dry-run**：`monitor-brief` → `extract-monitor-signals --date <DATE>` → `validate-trade-plan --session monitor` → `paper-trade-preview --session monitor` → `paper-trade-submit --session monitor` → `feishu-summary --session monitor`
+- **模拟盘入场执行**：必须是单独任务，只能在 dry-run 已验收、`config/paper_execution.local.json` 明确开启 `broker_writes_enabled=true` 和 `allow_entry_submit=true` 后，对 `pre-market` 使用 `paper-trade-submit --execute`。
+
+cc connect 禁止事项：
+
+- 不要同时启用 Codex App automation 和 cc connect 跑同一条生产盘前/盘后任务。
+- 不要把 broker write 混进报告生成任务。
+- 不要自动运行 `promote-lesson --apply`。
+- 不要调度 `paper-trade-submit --session monitor --execute`。
 
 ## 运行示例
 
@@ -176,6 +305,9 @@ python script/fetch_daily.py --symbols AAPL,MSFT,NVDA,TSLA --interval 1day --out
 # 1) 准备上下文（交易日判断 + 读取上一交易日 snapshot）
 python script/trading_copilot.py pre-market-plan --watchlist config/watchlist.json --skip-non-trading-day
 
+# 可选：同时生成 TradingAgents 风格 research artifacts，作为报告证据增强
+python script/trading_copilot.py pre-market-plan --watchlist config/watchlist.json --skip-non-trading-day --include-agent-research
+
 # 2) 让 Agent 基于 context + knowledge 生成 report/YYYY-MM-DD/pre-market.md
 # （在 Codex App automation 中触发即可）
 ```
@@ -188,6 +320,9 @@ python script/trading_copilot.py post-market-review --watchlist config/watchlist
 
 # 可选：同时做 S&P 500 top 100 动态扩池，输出 15 个观察候选
 python script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day --sp500-screen --sp500-top 100 --sp500-candidates 15 --include-journal-signals --include-position-symbols
+
+# 可选：同时生成 TradingAgents 风格 research artifacts，作为报告证据增强
+python script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day --include-journal-signals --include-position-symbols --include-agent-research
 
 # 2) 让 Agent 基于 snapshot + knowledge 生成 report/YYYY-MM-DD/post-market.md
 # （在 Codex App automation 中触发即可）
