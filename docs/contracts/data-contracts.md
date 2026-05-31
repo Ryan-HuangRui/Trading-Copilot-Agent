@@ -98,6 +98,35 @@ Consumer rules:
 - If `snapshot.stale_data` is true, surface it in the report.
 - If the source snapshot is missing, the workflow should fail before report writing.
 
+## `report/<DATE>/agents/`
+
+Producer:
+
+```bash
+python3 script/trading_copilot.py agent-research-context --date <DATE> --symbol MU
+python3 script/trading_copilot.py agent-research-reports --date <DATE> --symbol MU
+python3 script/trading_copilot.py agent-decision --date <DATE> --symbol MU
+```
+
+Expected artifacts:
+
+- `research-context.json`: workflow context for the selected date and symbols.
+- `<SYMBOL>/market_report.json`: market-data evidence.
+- `<SYMBOL>/technicals_report.json`: technical indicator evidence.
+- `<SYMBOL>/fundamentals_report.json`: fundamentals evidence.
+- `<SYMBOL>/news_report.json`: news evidence.
+- `<SYMBOL>/sentiment_report.json`: sentiment evidence.
+- `<SYMBOL>/decision.json`: final role-reasoning decision.
+- `<SYMBOL>/decision.md`: human-readable decision summary.
+
+Consumer rules:
+
+- These artifacts are evidence inputs, not order instructions.
+- Phase 0 placeholder artifacts include `experimental=true` and `not_for_execution=true` and must not be used for execution, journal append, or report delivery decisions.
+- Report evidence items must include `source`, `source_type`, freshness via `as_of` or `published_at`, `symbol`, `summary`, `confidence`, and `limitations`.
+- `decision.json` must reuse the existing signal semantics: `plan_type=trade_plan/watch_only/no_trade` and `execution_status=conditional_executable/waiting_trigger/watch_only/no_trade`.
+- `decision.json` must not contain broker order commands.
+
 ## `report/<DATE>/data-quality.json`
 
 Producer:

@@ -135,6 +135,86 @@ Output rules:
 - Include data freshness and rule limitations.
 - Use `NO TRADE` when setup quality, data quality, or risk framing is insufficient.
 
+## agent-research-context
+
+Purpose: create the TradingAgents-style research context envelope used by later deterministic data tools and role prompts.
+
+Canonical command:
+
+```bash
+python3 script/trading_copilot.py agent-research-context --date <DATE> --symbol MU
+```
+
+Output:
+
+- `report/<DATE>/agents/research-context.json` by default, or the explicit `--output` path.
+
+Required behavior:
+
+- Return the shared status envelope.
+- Normalize symbols to uppercase and deduplicate them.
+- Phase 0 output must include `experimental=true` and `not_for_execution=true`.
+- The artifact must not be injected into production `pre-market-plan` or `post-market-review` inputs until later phases add explicit `--include-agent-research`.
+
+## agent-research-reports
+
+Purpose: write placeholder or generated analyst report artifacts under the agent research path.
+
+Canonical command:
+
+```bash
+python3 script/trading_copilot.py agent-research-reports --date <DATE> --symbol MU
+```
+
+Output:
+
+- `report/<DATE>/agents/<SYMBOL>/market_report.json`
+- `report/<DATE>/agents/<SYMBOL>/technicals_report.json`
+- `report/<DATE>/agents/<SYMBOL>/fundamentals_report.json`
+- `report/<DATE>/agents/<SYMBOL>/news_report.json`
+- `report/<DATE>/agents/<SYMBOL>/sentiment_report.json`
+
+Required behavior:
+
+- Phase 0 artifacts are placeholders and must include `experimental=true` and `not_for_execution=true`.
+- Reports are evidence artifacts only and must not contain broker order commands.
+
+## agent-decision
+
+Purpose: write the final role-reasoning decision artifact.
+
+Canonical command:
+
+```bash
+python3 script/trading_copilot.py agent-decision --date <DATE> --symbol MU
+```
+
+Output:
+
+- `report/<DATE>/agents/<SYMBOL>/decision.json`
+- `report/<DATE>/agents/<SYMBOL>/decision.md`
+
+Required behavior:
+
+- Phase 0 `decision.json` is a placeholder with `plan_type=no_trade`, `execution_status=no_trade`, `experimental=true`, and `not_for_execution=true`.
+- The decision artifact must not include `order`, `broker_command`, `submit_order`, `cancel_order`, or `replace_order` fields.
+- Later validation must reject placeholder decisions before any downstream use.
+
+## agent-memory-review
+
+Purpose: read memory context for role reasoning without modifying approved trading rules or execution status.
+
+Canonical command:
+
+```bash
+python3 script/trading_copilot.py agent-memory-review --date <DATE> --symbol MU
+```
+
+Required behavior:
+
+- Phase 0 behavior is read-only and returns an empty `memory_matches` list.
+- Memory may lower confidence or trigger review only; it must not raise execution readiness.
+
 ## data-quality
 
 Purpose: generate market-data quality artifacts for the completed daily snapshot.

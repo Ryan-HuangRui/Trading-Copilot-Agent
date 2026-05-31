@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+from datetime import datetime, timezone
 import json
 import subprocess
 import sys
@@ -50,6 +51,38 @@ def guard_date(payload: Dict[str, Any]) -> Optional[str]:
 def emit(payload: Dict[str, Any], exit_code: int = 0) -> None:
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     raise SystemExit(exit_code)
+
+
+def normalize_symbols(symbols: List[str] | None) -> List[str]:
+    seen = set()
+    normalized: List[str] = []
+    for symbol in symbols or []:
+        value = str(symbol or "").strip().upper()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        normalized.append(value)
+    return normalized
+
+
+def resolve_repo_path(path: str) -> Path:
+    candidate = Path(path)
+    return candidate if candidate.is_absolute() else ROOT / candidate
+
+
+def write_json(path: Path, payload: Dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def agent_output_dir(date: str, explicit_dir: str | None) -> Path:
+    if explicit_dir:
+        return resolve_repo_path(explicit_dir)
+    return ROOT / "report" / date / "agents"
+
+
+def now_utc() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 def base_response(workflow: str, command: List[str], stdout: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -222,6 +255,146 @@ def run_monitor(args: argparse.Namespace) -> None:
         args.output,
         "knowledge/refined/",
     ]
+    emit(response)
+
+
+def run_agent_research_context(args: argparse.Namespace) -> None:
+    symbols = normalize_symbols(args.symbol)
+    output = resolve_repo_path(args.output) if args.output else ROOT / "report" / args.date / "agents" / "research-context.json"
+    payload: Dict[str, Any] = {
+        "schema_version": 1,
+        "workflow": "agent-research-context",
+        "date": args.date,
+        "session": args.session,
+        "symbols": symbols,
+        "generated_at": now_utc(),
+        "experimental": True,
+        "not_for_execution": True,
+        "inputs": {
+            "snapshot": args.snapshot,
+            "context": args.context,
+            "config": args.config,
+        },
+        "limitations": [
+            "Phase 0 skeleton artifact; downstream report or execution workflows must not treat it as a trading signal."
+        ],
+    }
+    write_json(output, payload)
+    response = base_response("agent-research-context", ["agent-research-context"], payload)
+    response["date"] = args.date
+    response["artifacts"] = [str(output)]
+    response["next_agent_inputs"] = [str(output), "knowledge/refined/"]
+    emit(response)
+
+
+def run_agent_research_reports(args: argparse.Namespace) -> None:
+    symbols = normalize_symbols(args.symbol)
+    out_dir = agent_output_dir(args.date, args.output_dir)
+    report_types = ["market", "technicals", "fundamentals", "news", "sentiment"]
+    artifacts: List[str] = []
+    for symbol in symbols:
+        symbol_dir = out_dir / symbol
+        for report_type in report_types:
+            path = symbol_dir / f"{report_type}_report.json"
+            payload = {
+                "schema_version": 1,
+                "report_type": report_type,
+                "date": args.date,
+                "symbol": symbol,
+                "generated_at": now_utc(),
+                "experimental": True,
+                "not_for_execution": True,
+                "evidence": [],
+                "facts": [],
+                "derived_metrics": {},
+                "scores": {},
+                "limitations": [
+                    "Phase 0 placeholder report. Replace with Phase 1/2 provider output before analysis."
+                ],
+            }
+            write_json(path, payload)
+            artifacts.append(str(path))
+    response = base_response("agent-research-reports", ["agent-research-reports"], None)
+    response["date"] = args.date
+    response["artifacts"] = artifacts
+    response["symbols"] = symbols
+    emit(response)
+
+
+def run_agent_decision(args: argparse.Namespace) -> None:
+    symbols = normalize_symbols(args.symbol)
+    out_dir = agent_output_dir(args.date, args.output_dir)
+    artifacts: List[str] = []
+    for symbol in symbols:
+        symbol_dir = out_dir / symbol
+        decision_id = f"{args.date}:agent-decision:{symbol}:placeholder"
+        decision = {
+            "schema_version": 1,
+            "decision_id": decision_id,
+            "date": args.date,
+            "symbol": symbol,
+            "generated_at": now_utc(),
+            "experimental": True,
+            "not_for_execution": True,
+            "plan_type": "no_trade",
+            "execution_status": "no_trade",
+            "decision_label": "placeholder",
+            "evidence_ids": [],
+            "risk_summary": {
+                "status": "not_evaluated",
+                "limitations": ["Phase 0 skeleton decision has no current evidence."]
+            },
+            "limitations": [
+                "Placeholder decision for contract testing only.",
+                "Not valid for report delivery, journal append, paper preview, or broker submission.",
+            ],
+        }
+        json_path = symbol_dir / "decision.json"
+        md_path = symbol_dir / "decision.md"
+        write_json(json_path, decision)
+        md_path.parent.mkdir(parents=True, exist_ok=True)
+        md_path.write_text(
+            "\n".join(
+                [
+                    f"# Agent Decision Placeholder: {symbol}",
+                    "",
+                    f"- date: {args.date}",
+                    "- status: not_for_execution",
+                    "- note: Phase 0 skeleton only; do not use for trading workflows.",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        artifacts.extend([str(json_path), str(md_path)])
+    response = base_response("agent-decision", ["agent-decision"], None)
+    response["date"] = args.date
+    response["artifacts"] = artifacts
+    response["symbols"] = symbols
+    emit(response)
+
+
+def run_agent_memory_review(args: argparse.Namespace) -> None:
+    symbols = normalize_symbols(args.symbol)
+    output = resolve_repo_path(args.output) if args.output else ROOT / "runtime" / "memory" / "agent-memory-review.json"
+    payload = {
+        "schema_version": 1,
+        "workflow": "agent-memory-review",
+        "date": args.date,
+        "symbols": symbols,
+        "generated_at": now_utc(),
+        "read_only": True,
+        "experimental": True,
+        "memory_path": args.memory_path,
+        "memory_matches": [],
+        "limitations": [
+            "Phase 0 skeleton is read-only and must not change execution status."
+        ],
+    }
+    write_json(output, payload)
+    response = base_response("agent-memory-review", ["agent-memory-review"], payload)
+    response["date"] = args.date
+    response["artifacts"] = [str(output)]
     emit(response)
 
 
@@ -1300,6 +1473,35 @@ def build_parser() -> argparse.ArgumentParser:
     monitor.add_argument("--longbridge-cli")
     monitor.add_argument("--longbridge-default-market", default="US")
     monitor.set_defaults(func=run_monitor)
+
+    agent_context = sub.add_parser("agent-research-context", help="Write a Phase 0 agent research context skeleton")
+    agent_context.add_argument("--date", required=True)
+    agent_context.add_argument("--session", choices=["pre-market", "post-market", "monitor", "research"], default="research")
+    agent_context.add_argument("--symbol", action="append", required=True)
+    agent_context.add_argument("--snapshot")
+    agent_context.add_argument("--context")
+    agent_context.add_argument("--config", default="config/agent_research.json")
+    agent_context.add_argument("--output")
+    agent_context.set_defaults(func=run_agent_research_context)
+
+    agent_reports = sub.add_parser("agent-research-reports", help="Write Phase 0 placeholder agent research reports")
+    agent_reports.add_argument("--date", required=True)
+    agent_reports.add_argument("--symbol", action="append", required=True)
+    agent_reports.add_argument("--output-dir")
+    agent_reports.set_defaults(func=run_agent_research_reports)
+
+    agent_decision = sub.add_parser("agent-decision", help="Write a Phase 0 placeholder agent decision")
+    agent_decision.add_argument("--date", required=True)
+    agent_decision.add_argument("--symbol", action="append", required=True)
+    agent_decision.add_argument("--output-dir")
+    agent_decision.set_defaults(func=run_agent_decision)
+
+    agent_memory = sub.add_parser("agent-memory-review", help="Read-only Phase 0 memory review skeleton")
+    agent_memory.add_argument("--date")
+    agent_memory.add_argument("--symbol", action="append", default=[])
+    agent_memory.add_argument("--memory-path", default="runtime/memory/trading_memory.md")
+    agent_memory.add_argument("--output")
+    agent_memory.set_defaults(func=run_agent_memory_review)
 
     day = sub.add_parser("trading-day-check", help="Check regular US market trading-day status")
     day.add_argument("--date")

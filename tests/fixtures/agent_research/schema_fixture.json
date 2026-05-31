@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "date": "2026-05-26",
+  "symbols": ["MU"],
+  "reports": {
+    "market_report": {
+      "report_type": "market",
+      "required_evidence_fields": [
+        "evidence_id",
+        "source",
+        "source_type",
+        "as_of",
+        "symbol",
+        "summary",
+        "confidence",
+        "limitations"
+      ]
+    },
+    "decision": {
+      "required_fields": [
+        "decision_id",
+        "symbol",
+        "plan_type",
+        "execution_status",
+        "risk_summary",
+        "evidence_ids",
+        "limitations"
+      ]
+    }
+  }
+}

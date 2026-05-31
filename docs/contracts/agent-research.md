@@ -1,0 +1,117 @@
+# Agent Research Contracts
+
+This contract defines the TradingAgents-style research artifacts used by this repository. These artifacts are evidence inputs for reports and validators; they are not broker commands and must not bypass existing report, trade-plan, or paper-execution gates.
+
+## Shared Rules
+
+- All artifacts use `schema_version=1`.
+- Dates use `YYYY-MM-DD`.
+- Symbol values are uppercase display symbols such as `MU` or `NVDA`.
+- Every workflow wrapper returns the shared status envelope: `status`, `workflow`, `date`, `artifacts`, `skipped`, and `reason`.
+- Runtime outputs live under ignored paths: `report/<DATE>/agents/` or `runtime/memory/`.
+- Phase 0 placeholder artifacts must include `experimental=true` and `not_for_execution=true`.
+- Placeholder `decision.json` artifacts are invalid for report delivery, journal append, paper preview, and broker submission.
+- Agent research can downgrade confidence or execution readiness, but must not upgrade an existing `watch_only` or `no_trade` candidate into `conditional_executable`.
+
+## Paths
+
+Default paths:
+
+```text
+report/<DATE>/agents/research-context.json
+report/<DATE>/agents/<SYMBOL>/market_report.json
+report/<DATE>/agents/<SYMBOL>/technicals_report.json
+report/<DATE>/agents/<SYMBOL>/fundamentals_report.json
+report/<DATE>/agents/<SYMBOL>/news_report.json
+report/<DATE>/agents/<SYMBOL>/sentiment_report.json
+report/<DATE>/agents/<SYMBOL>/bull_report.json
+report/<DATE>/agents/<SYMBOL>/bear_report.json
+report/<DATE>/agents/<SYMBOL>/risk_report.json
+report/<DATE>/agents/<SYMBOL>/decision.json
+report/<DATE>/agents/<SYMBOL>/decision.md
+runtime/memory/trading_memory.md
+runtime/memory/trading_memory.sqlite
+```
+
+## Evidence Object
+
+Every report evidence item must include:
+
+- `evidence_id`: stable id unique within the report set.
+- `source`: file path, provider name, or fixture id.
+- `source_type`: `market_data`, `technical_indicator`, `fundamentals`, `news`, `sentiment`, `memory`, or `manual_fixture`.
+- `as_of` or `published_at`: timestamp or market date for freshness checks.
+- `symbol`: ticker symbol.
+- `summary`: concise factual summary.
+- `confidence`: numeric score from `0` to `1`.
+- `limitations`: array of data or interpretation limits.
+
+## Research Reports
+
+The five first-class report types are:
+
+- `market`
+- `technicals`
+- `fundamentals`
+- `news`
+- `sentiment`
+
+Required top-level fields:
+
+- `schema_version`
+- `report_type`
+- `date`
+- `symbol`
+- `generated_at`
+- `evidence`
+- `facts`
+- `derived_metrics`
+- `scores`
+- `limitations`
+
+Reports may contain heuristic scores, but must distinguish them from factual evidence and derived market metrics. Reports must not contain direct buy/sell/order instructions.
+
+## Decision Artifact
+
+`decision.json` is the structured output of role reasoning. It may help draft a Trade Plan Card, but it is not itself an order.
+
+Required fields:
+
+- `schema_version`
+- `decision_id`
+- `date`
+- `symbol`
+- `generated_at`
+- `plan_type`: one of `trade_plan`, `watch_only`, or `no_trade`.
+- `execution_status`: one of `conditional_executable`, `waiting_trigger`, `watch_only`, or `no_trade`.
+- `decision_label`
+- `evidence_ids`
+- `risk_summary`
+- `limitations`
+
+Forbidden fields:
+
+- `order`
+- `orders`
+- `broker_command`
+- `submit_order`
+- `cancel_order`
+- `replace_order`
+
+Validation rules:
+
+- `experimental=true` or `not_for_execution=true` must fail `validate-agent-decision`.
+- `conditional_executable` requires a complete draft Trade Plan Card before conversion into session signal sidecars.
+- Missing trigger, invalidation, risk, TP1, or skip conditions must downgrade to `watch_only` or `no_trade`.
+- Memory references can lower confidence or trigger review only; they cannot raise execution grade.
+
+## Phase 0 Wrapper Commands
+
+```bash
+python3 script/trading_copilot.py agent-research-context --date <DATE> --symbol MU
+python3 script/trading_copilot.py agent-research-reports --date <DATE> --symbol MU
+python3 script/trading_copilot.py agent-decision --date <DATE> --symbol MU
+python3 script/trading_copilot.py agent-memory-review --date <DATE> --symbol MU
+```
+
+Phase 0 commands write deterministic skeleton artifacts only. They are useful for contract tests and downstream integration wiring, but they must not be injected into production pre-market or post-market `next_agent_inputs`.
