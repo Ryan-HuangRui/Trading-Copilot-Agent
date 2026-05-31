@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from longbridge_paper_order_adapter import LongbridgePaperOrderAdapter
-from paper_execution_config import load_paper_execution_config
+from paper_execution_config import broker_capability_matrix, load_paper_execution_config, paper_execution_policy
 from signal_artifacts import read_json
 
 
@@ -162,6 +162,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "execute_requested": bool(args.execute),
         "source_execution_state": str(state_path),
         "paper_execution_config": str(paper_execution_config_path),
+        "execution_policy": paper_execution_policy(paper_execution_config),
+        "broker_capabilities": broker_capability_matrix(paper_execution_config),
         "expire_after_minutes": args.expire_after_minutes,
         "now": current_time.isoformat(timespec="seconds"),
         "cancel_candidates": cancel_candidates,

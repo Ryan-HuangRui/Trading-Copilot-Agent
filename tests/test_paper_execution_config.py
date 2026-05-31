@@ -8,7 +8,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "script"))
 
-from paper_execution_config import ensure_paper_write_allowed, load_paper_execution_config
+from paper_execution_config import (
+    broker_capability_matrix,
+    ensure_paper_write_allowed,
+    load_paper_execution_config,
+    paper_execution_policy,
+)
 
 
 class PaperExecutionConfigTest(unittest.TestCase):
@@ -51,6 +56,41 @@ class PaperExecutionConfigTest(unittest.TestCase):
 
         with self.assertRaises(PermissionError):
             ensure_paper_write_allowed(config, execute=False, action="entry_submit")
+
+    def test_capability_matrix_marks_config_gated_and_unsupported_actions(self):
+        config = {
+            "broker_writes_enabled": True,
+            "allow_entry_submit": True,
+            "allow_cancel": False,
+            "allow_protective_stop": False,
+            "allow_take_profit": False,
+        }
+
+        matrix = broker_capability_matrix(config)
+        actions = {item["action"]: item for item in matrix["actions"]}
+        unsupported = {item["action"]: item for item in matrix["unsupported_actions"]}
+
+        self.assertEqual(matrix["broker"], "longbridge")
+        self.assertEqual(matrix["account_channel"], "lb_papertrading")
+        self.assertEqual(actions["entry_submit"]["execution_status"], "enabled")
+        self.assertEqual(actions["entry_submit"]["config_key"], "allow_entry_submit")
+        self.assertEqual(actions["cancel"]["execution_status"], "config_disabled")
+        self.assertEqual(actions["protective_stop"]["order_type"], "MIT")
+        self.assertIn("native_oco", unsupported)
+        self.assertIn("market_entry", unsupported)
+
+    def test_policy_summarizes_allowed_and_dry_run_only_actions(self):
+        config = {
+            "broker_writes_enabled": True,
+            "allow_entry_submit": True,
+            "allow_cancel": False,
+        }
+
+        policy = paper_execution_policy(config)
+
+        self.assertEqual(policy["allowed_broker_writes"], ["entry_submit"])
+        self.assertIn("cancel", policy["dry_run_only_actions"])
+        self.assertIn("protective_stop", policy["dry_run_only_actions"])
 
 
 if __name__ == "__main__":

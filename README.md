@@ -130,6 +130,7 @@ python3 script/workflow_smoke_test.py --date <DATE> --week <YYYY-Www>
   - 配置：`config/position_review.json`
   - 若 `runtime/journal/trades.jsonl` 里有 `source_signal_id`，持仓复核会关联原始 signal、交易记录和估算 R
 - 模拟盘是盘前/盘后工作流的执行扩展层，依赖 `pre-market-signals.json` / `post-market-signals.json`，但 broker 写操作必须单独显式启动，不能混入报告生成任务。详细操作见 `docs/paper-execution-runbook.md`。
+- 模拟盘演进路线见 `docs/paper-execution-roadmap.md`：当前优先强化执行状态和 broker capability matrix，后续再接入新闻/财报情绪、盘中 dry-run 候选和 OCO/高级订单。
 - 模拟盘接入当前支持快照、订单预览、受控提交、订单同步、保护/退出计划和复盘：
   - 配置：`config/paper_execution.json` 默认关闭所有 broker 写入；部署时可用 ignored 的 `config/paper_execution.local.json` 并通过 `--paper-execution-config` 指定，执行入场需同时设置 `paper_execution.broker_writes_enabled=true` 与 `paper_execution.allow_entry_submit=true`
   - `python3 script/trading_copilot.py paper-account-snapshot --date YYYY-MM-DD`

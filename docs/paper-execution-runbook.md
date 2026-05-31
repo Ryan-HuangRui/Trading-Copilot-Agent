@@ -58,6 +58,8 @@ Review the paper execution config before enabling broker writes:
 
 The tracked default is intentionally all false. To enable a paper entry rollout on a deployment host, create an ignored host-local config such as `config/paper_execution.local.json`, set `broker_writes_enabled=true` and `allow_entry_submit=true`, and pass it with `--paper-execution-config`. Keep cancel, protective-stop, and take-profit gates false during the initial rollout.
 
+Execution artifacts include `execution_policy` and `broker_capabilities` so operators can see which paper writes are enabled, disabled, or unsupported in the generated JSON without reading the local config file.
+
 ## Pre-Market Dry Run
 
 Run this after the pre-market report has generated `pre-market-signals.json` and both validation gates pass:
@@ -184,6 +186,8 @@ Reason: current protective-stop planning submits a stop for the full filled quan
 
 `paper-break-even-stop-plan` is plan-only. It does not cancel, replace, or submit broker orders.
 
+For cc-connect deployments, `ops/cc-connect/tca-paper-sync-review.sh` runs cancel planning in dry-run mode by default. It adds `--execute` to `paper-order-cancel` only when `TCA_PAPER_CANCEL_EXECUTE=1` is set for that task, and the selected config must still enable `broker_writes_enabled=true` plus `allow_cancel=true`.
+
 ## Execution Config
 
 Use a config file as the paper broker-write policy. The tracked `config/paper_execution.json` is the default all-off policy; deployment automation may pass an ignored host-local file such as `config/paper_execution.local.json`:
@@ -205,6 +209,7 @@ Interpretation:
 - If `broker_writes_enabled=true` and `allow_entry_submit=true`, the scheduler may run `paper-trade-submit --execute` after the dry-run artifact has no blocking errors.
 - If `allow_protective_stop=false` and `allow_take_profit=false`, the scheduler must run protective-stop and TP1 workflows without `--execute`.
 - If `allow_cancel=false`, the scheduler must run cancel planning without `--execute`.
+- If `TCA_PAPER_CANCEL_EXECUTE` is unset or not `1`, the provided cc-connect sync script keeps `paper-order-cancel` dry-run even when the local config enables cancellation.
 - Every broker write still needs its own `--execute`; config alone never submits orders.
 
 All paper execution commands accept an alternate config path:

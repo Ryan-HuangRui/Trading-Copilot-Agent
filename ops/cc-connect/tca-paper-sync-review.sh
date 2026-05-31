@@ -8,6 +8,7 @@ SESSION="${CC_CONNECT_SESSION:-feishu:oc_0df4740c94656aaa83249668668c3994:ou_f60
 DATE_ARG="${1:-}"
 DATE="${DATE_ARG:-$(TZ=Asia/Shanghai date -d yesterday +%F)}"
 CONFIG="${TCA_PAPER_EXECUTION_CONFIG:-config/paper_execution.local.json}"
+CANCEL_EXECUTE="${TCA_PAPER_CANCEL_EXECUTE:-0}"
 LOG="$(mktemp)"
 MSG="$(mktemp)"
 STATUS="success"
@@ -34,9 +35,17 @@ run_step() {
   return "$rc"
 }
 
+run_cancel_step() {
+  if [ "$CANCEL_EXECUTE" = "1" ]; then
+    run_step python3 script/trading_copilot.py paper-order-cancel --date "$DATE" --paper-execution-config "$CONFIG" --execute
+  else
+    run_step python3 script/trading_copilot.py paper-order-cancel --date "$DATE" --paper-execution-config "$CONFIG"
+  fi
+}
+
 run_step python3 script/trading_copilot.py paper-account-snapshot --date "$DATE" && \
 run_step python3 script/trading_copilot.py paper-order-sync --date "$DATE" && \
-run_step python3 script/trading_copilot.py paper-order-cancel --date "$DATE" --paper-execution-config "$CONFIG" --execute && \
+run_cancel_step && \
 run_step python3 script/trading_copilot.py paper-account-snapshot --date "$DATE" && \
 run_step python3 script/trading_copilot.py paper-order-sync --date "$DATE" && \
 run_step python3 script/trading_copilot.py paper-protective-stop-plan --date "$DATE" && \
@@ -47,12 +56,12 @@ run_step python3 script/trading_copilot.py paper-execution-review --date "$DATE"
 run_step python3 script/trading_copilot.py paper-learning-lessons --date "$DATE" --append && \
 run_step python3 script/trading_copilot.py paper-strategy-review
 
-python3 - "$DATE" "$STATUS" "$LOG" "$REPO" >"$MSG" <<'PYMSG'
+python3 - "$DATE" "$STATUS" "$LOG" "$REPO" "$CANCEL_EXECUTE" >"$MSG" <<'PYMSG'
 import json
 import sys
 from pathlib import Path
 
-date, status, log_path, repo_root = sys.argv[1:5]
+date, status, log_path, repo_root, cancel_execute = sys.argv[1:6]
 root = Path(repo_root)
 
 def load(path):
@@ -85,6 +94,7 @@ strategy = load(strategy_path) or {}
 
 print(f"模拟盘订单同步与复盘: {status}")
 print(f"date: {date}")
+print(f"cancel_execute_policy: {'enabled' if cancel_execute == '1' else 'dry_run'}")
 for path in [state_path, cancel_path, stop_path, tp_path, be_path, ledger_path, review_path, lessons_path, strategy_path]:
     print(f"artifact: {path if path.exists() else 'missing'}")
 if state:

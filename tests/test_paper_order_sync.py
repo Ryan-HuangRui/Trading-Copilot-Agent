@@ -202,6 +202,24 @@ class PaperOrderSyncTest(unittest.TestCase):
             self.assertEqual(entry["tp1_filled_quantity"], 100)
             self.assertEqual(entry["remaining_quantity"], 100)
 
+    def test_state_v2_includes_capabilities_and_lifecycle(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.seed(root)
+            self.seed_exit_orders(root)
+
+            result = paper_order_sync.run(paper_order_sync.build_args(repo_root=str(root), date="2026-05-26"))
+
+            state = json.loads(Path(result["output"]).read_text(encoding="utf-8"))
+            entry = state["orders"][0]
+            self.assertEqual(state["schema_version"], "paper-execution-state/v2")
+            self.assertEqual(state["broker_capabilities"]["broker"], "longbridge")
+            self.assertEqual(entry["lifecycle"]["entry_status"], "filled")
+            self.assertEqual(entry["lifecycle"]["protection_status"], "protected")
+            self.assertEqual(entry["lifecycle"]["take_profit_status"], "tp1_filled")
+            self.assertEqual(entry["lifecycle"]["remaining_quantity"], 100)
+            self.assertEqual(entry["lifecycle"]["overall_status"], "partially_exited")
+
     def test_sync_matches_by_remark_when_broker_order_id_is_missing(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

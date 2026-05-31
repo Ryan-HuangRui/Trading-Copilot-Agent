@@ -499,10 +499,13 @@ Output:
 Required behavior:
 
 - Must be read-only; it must not submit, cancel, replace, or adjust orders.
+- Must write `schema_version=paper-execution-state/v2`.
+- Must include `broker_capabilities` so downstream schedulers and summaries can inspect supported, disabled, and unsupported Longbridge paper actions without reading local config.
 - Must match submitted entry, protective stop, and TP1 orders by `broker_order_id`, then `remark`, then `intent_id`, then `symbol + side + quantity` fallback.
 - Must summarize order states including `submitted`, `accepted`, `partially_filled`, `filled`, `cancelled`, `rejected`, and `expired`.
 - Must include `protective_stops`, `take_profit_orders`, and `exit_summary` in the execution state when those journals exist.
 - Must enrich entry orders with matched stop/TP1 fields such as `protective_stop_order_id`, `stop_status`, `take_profit_order_id`, `tp1_status`, `tp1_filled_quantity`, and `remaining_quantity`.
+- Must enrich entry orders with a `lifecycle` summary including entry, protection, TP1, remaining quantity, and overall lifecycle status.
 - Must preserve matched broker order and execution payloads for audit and later review.
 
 ## paper-order-recover
@@ -574,6 +577,7 @@ Required behavior:
 - Only unfilled `submitted` or `accepted` entry orders with `broker_order_id` and `submitted_at` may become cancel candidates.
 - Filled and partially filled orders must be blocked from cancellation planning.
 - The artifact must separate `cancel_candidates`, `blocked`, `executed`, and `errors`.
+- The artifact must include `execution_policy` and `broker_capabilities`.
 - Executed cancel records must preserve `intent_id`, `broker_order_id`, `raw_request`, and `raw_response`.
 
 ## paper-event-ledger
@@ -723,6 +727,7 @@ Required behavior:
 - Account snapshot `account_channel` must be `lb_papertrading`.
 - Duplicate `intent_id` values already present in `paper-orders.jsonl` must be skipped.
 - The submission artifact must separate `ready`, `submitted`, `blocked`, `skipped_duplicates`, and `errors`.
+- The submission artifact must include `execution_policy` and `broker_capabilities`.
 - Successful submit records must preserve `intent_id`, `broker_order_id`, `remark`, `raw_request`, `raw_response`, and `submitted_at`.
 
 ## paper-protective-stop-plan
@@ -761,6 +766,7 @@ Required behavior:
 - The first stop plan uses Longbridge `sell` `MIT` with `--trigger-price <stop_price>` and `tif=gtc` by default.
 - Duplicate `intent_id` values already present in `paper-stop-orders.jsonl` must be blocked.
 - The artifact must separate `stop_candidates`, `blocked`, `submitted`, and `errors`.
+- The artifact must include `execution_policy` and `broker_capabilities`.
 - Successful stop records must preserve `intent_id`, `entry_broker_order_id`, `broker_order_id`, `remark`, `raw_request`, `raw_response`, and `submitted_at`.
 
 ## paper-take-profit-plan
@@ -799,6 +805,7 @@ Required behavior:
 - The first TP1 plan uses Longbridge `sell` `LO` with `--price <take_profit>`, `tif=gtc` by default, and a default `--exit-fraction 0.5`.
 - Duplicate `intent_id` values already present in `paper-take-profit-orders.jsonl` must be blocked.
 - The artifact must separate `take_profit_candidates`, `blocked`, `submitted`, and `errors`.
+- The artifact must include `execution_policy` and `broker_capabilities`.
 - Successful TP1 records must preserve `intent_id`, `entry_broker_order_id`, `broker_order_id`, `remark`, `raw_request`, `raw_response`, `exit_fraction`, and `submitted_at`.
 
 ## paper-break-even-stop-plan

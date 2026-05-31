@@ -376,6 +376,8 @@ Keep these execution switches disabled in the initial rollout:
 
 Do not add `--execute` to `paper-order-cancel`, `paper-protective-stop-plan`, or `paper-take-profit-plan` while those config gates are false. Current exit-management execution is intentionally dry-run because protective stops use the full filled quantity while TP1 uses a partial exit quantity; automatic execution needs OCO or stop resize/cancel-replace safety before rollout.
 
+The provided `ops/cc-connect/tca-paper-sync-review.sh` keeps `paper-order-cancel` dry-run unless `TCA_PAPER_CANCEL_EXECUTE=1` is set for that task. Even with that environment switch, cancellation still requires the selected `config/paper_execution.local.json` to enable both `paper_execution.broker_writes_enabled=true` and `paper_execution.allow_cancel=true`.
+
 ## Optional Monitor Journal Task
 
 If intraday monitoring is enabled, keep scan generation separate from journal append:

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from longbridge_paper_order_adapter import LongbridgePaperOrderAdapter
-from paper_execution_config import load_paper_execution_config
+from paper_execution_config import broker_capability_matrix, load_paper_execution_config, paper_execution_policy
 from paper_order_models import build_order_intent, paper_order_record
 from paper_risk_guard import RiskGuardConfig, evaluate_order_intent, load_submitted_intent_ids
 from signal_artifacts import read_json
@@ -139,6 +139,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "source_account_snapshot": str(account_path),
         "orders_journal": str(orders_path),
         "paper_execution_config": str(paper_execution_config_path),
+        "execution_policy": paper_execution_policy(paper_execution_config),
+        "broker_capabilities": broker_capability_matrix(paper_execution_config),
         "validation": validation,
         "ready": ready,
         "submitted": submitted,

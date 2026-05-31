@@ -23,6 +23,68 @@ ACTION_CONFIG_KEYS = {
     "take_profit": "allow_take_profit",
 }
 
+SUPPORTED_BROKER_ACTIONS: tuple[dict[str, Any], ...] = (
+    {
+        "action": "entry_submit",
+        "label": "Entry limit buy",
+        "config_key": "allow_entry_submit",
+        "order_type": "LO",
+        "side": "buy",
+        "workflow": "paper-trade-submit",
+        "maturity": "initial_rollout",
+    },
+    {
+        "action": "cancel",
+        "label": "Expired entry cancel",
+        "config_key": "allow_cancel",
+        "order_type": "cancel",
+        "side": None,
+        "workflow": "paper-order-cancel",
+        "maturity": "guarded",
+    },
+    {
+        "action": "protective_stop",
+        "label": "Protective stop",
+        "config_key": "allow_protective_stop",
+        "order_type": "MIT",
+        "side": "sell",
+        "workflow": "paper-protective-stop-plan",
+        "maturity": "dry_run_first",
+    },
+    {
+        "action": "take_profit",
+        "label": "TP1 partial exit",
+        "config_key": "allow_take_profit",
+        "order_type": "LO",
+        "side": "sell",
+        "workflow": "paper-take-profit-plan",
+        "maturity": "dry_run_first",
+    },
+)
+
+UNSUPPORTED_BROKER_ACTIONS: tuple[dict[str, Any], ...] = (
+    {
+        "action": "market_entry",
+        "label": "Market entry",
+        "reason": "slippage and fill-price controls are not designed",
+    },
+    {
+        "action": "native_oco",
+        "label": "Native OCO/bracket order",
+        "reason": "broker capability and local cancel-replace safety are not contracted",
+    },
+    {
+        "action": "cancel_replace",
+        "label": "Cancel/replace stop movement",
+        "reason": "break-even stop workflow is currently dry-run only",
+    },
+    {
+        "action": "short_entry",
+        "label": "Short entry",
+        "reason": "risk model and order lifecycle only support long paper entries",
+    },
+)
+
 
 def resolve_config_path(repo_root: Path, explicit_path: str | None = None) -> Path:
     if explicit_path:
@@ -41,6 +103,47 @@ def normalize_paper_execution_config(payload: dict[str, Any] | None) -> dict[str
         if isinstance(value, bool):
             config[key] = value
     return config
+
+
+def broker_capability_matrix(config: dict[str, Any] | None = None) -> dict[str, Any]:
+    normalized = normalize_paper_execution_config(config)
+    broker_writes_enabled = bool(normalized.get("broker_writes_enabled"))
+    actions: list[dict[str, Any]] = []
+    for capability in SUPPORTED_BROKER_ACTIONS:
+        config_key = str(capability["config_key"])
+        action_enabled = broker_writes_enabled and bool(normalized.get(config_key))
+        actions.append(
+            {
+                **capability,
+                "broker": "longbridge",
+                "account_channel": "lb_papertrading",
+                "broker_write": True,
+                "requires_execute": True,
+                "supported": True,
+                "execution_status": "enabled" if action_enabled else "config_disabled",
+            }
+        )
+    return {
+        "broker": "longbridge",
+        "account_channel": "lb_papertrading",
+        "broker_writes_enabled": broker_writes_enabled,
+        "actions": actions,
+        "unsupported_actions": [dict(item) for item in UNSUPPORTED_BROKER_ACTIONS],
+    }
+
+
+def paper_execution_policy(config: dict[str, Any] | None = None) -> dict[str, Any]:
+    matrix = broker_capability_matrix(config)
+    allowed = [item["action"] for item in matrix["actions"] if item["execution_status"] == "enabled"]
+    dry_run_only = [item["action"] for item in matrix["actions"] if item["execution_status"] != "enabled"]
+    return {
+        "broker": matrix["broker"],
+        "account_channel": matrix["account_channel"],
+        "broker_writes_enabled": matrix["broker_writes_enabled"],
+        "allowed_broker_writes": allowed,
+        "dry_run_only_actions": dry_run_only,
+        "unsupported_actions": [item["action"] for item in matrix["unsupported_actions"]],
+    }
 
 
 def load_paper_execution_config(repo_root: Path, explicit_path: str | None = None) -> tuple[dict[str, Any], Path]:

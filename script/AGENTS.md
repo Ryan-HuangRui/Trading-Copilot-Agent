@@ -22,6 +22,7 @@
 - `paper_order_sync.py`: read-only paper order state sync from entry/stop/TP1 journals and paper account snapshots.
 - `paper_event_ledger.py`: read-only projection from paper journals/execution state into `runtime/journal/events.jsonl`.
 - `paper_execution_review.py`: deterministic paper execution quality review that writes JSON/Markdown and candidate lessons without editing refined rules.
+- `paper_execution_config.py`: paper broker-write policy loader plus Longbridge paper capability matrix. Keep this as the source of truth for enabled, dry-run-only, and unsupported paper actions.
 - `paper_learning_lessons.py`: extracts paper execution candidate lessons into `runtime/learning/daily_lessons.jsonl` without promoting rules.
 - `paper_strategy_review.py`: aggregate paper execution reviews by setup and symbol without editing refined rules.
 - `paper_order_cancel.py`: cancel-plan builder for expired unfilled paper entry orders; defaults to dry-run and only cancels through the gated paper order adapter when execution gates are explicitly enabled.

@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from paper_execution_config import broker_capability_matrix
 from signal_artifacts import read_json
 
 
@@ -299,7 +300,65 @@ def enrich_entry_with_exits(
         enriched["take_profit_filled_quantity"] = filled_quantity
         enriched["tp1_filled_quantity"] = filled_quantity
         enriched["remaining_quantity"] = int(remaining_quantity) if remaining_quantity == int(remaining_quantity) else remaining_quantity
+    enriched["lifecycle"] = lifecycle_summary(enriched)
     return enriched
+
+
+def lifecycle_summary(entry: dict[str, Any]) -> dict[str, Any]:
+    entry_status = str(entry.get("status") or "unknown")
+    entry_filled_quantity = as_float(entry.get("filled_quantity")) or 0.0
+    remaining_quantity = as_float(entry.get("remaining_quantity"))
+    if remaining_quantity is None:
+        remaining_quantity = entry_filled_quantity
+    stop_status = str(entry.get("stop_status") or "")
+    tp_status = str(entry.get("tp1_status") or entry.get("take_profit_status") or "")
+    tp_filled_quantity = as_float(entry.get("tp1_filled_quantity") or entry.get("take_profit_filled_quantity")) or 0.0
+
+    if entry_status in {"cancelled", "rejected", "expired"}:
+        protection_status = "not_applicable"
+        take_profit_status = "not_applicable"
+        overall_status = entry_status
+    elif entry_status != "filled":
+        protection_status = "pending_entry_fill"
+        take_profit_status = "pending_entry_fill"
+        overall_status = entry_status
+    else:
+        if stop_status == "filled":
+            protection_status = "stopped_out"
+        elif stop_status in {"submitted", "accepted", "partially_filled"}:
+            protection_status = "protected"
+        elif stop_status:
+            protection_status = stop_status
+        else:
+            protection_status = "unprotected"
+
+        if tp_filled_quantity > 0:
+            take_profit_status = "tp1_filled"
+        elif tp_status in {"submitted", "accepted", "partially_filled"}:
+            take_profit_status = "tp1_open"
+        elif tp_status:
+            take_profit_status = tp_status
+        else:
+            take_profit_status = "no_tp1"
+
+        if protection_status == "stopped_out":
+            overall_status = "stopped_out"
+        elif remaining_quantity <= 0 and (tp_filled_quantity > 0 or tp_status == "filled"):
+            overall_status = "closed"
+        elif tp_filled_quantity > 0:
+            overall_status = "partially_exited"
+        elif protection_status == "protected":
+            overall_status = "open_protected"
+        else:
+            overall_status = "open_unprotected"
+
+    return {
+        "entry_status": entry_status,
+        "protection_status": protection_status,
+        "take_profit_status": take_profit_status,
+        "remaining_quantity": int(remaining_quantity) if remaining_quantity == int(remaining_quantity) else remaining_quantity,
+        "overall_status": overall_status,
+    }
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
@@ -346,12 +405,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "take_profit_orders": status_summary(synced_take_profits),
     }
     payload = {
+        "schema_version": "paper-execution-state/v2",
         "date": args.date,
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "source_orders_journal": str(orders_path),
         "source_stops_journal": str(stops_path),
         "source_take_profit_journal": str(take_profit_path),
         "source_paper_snapshot": str(snapshot_path),
+        "broker_capabilities": broker_capability_matrix(),
         "summary": summary,
         "exit_summary": exit_summary,
         "orders": enriched_orders,
