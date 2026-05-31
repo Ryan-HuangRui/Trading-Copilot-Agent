@@ -50,6 +50,9 @@ Update the configured cc connect prompts so they require the new artifacts and g
 - Post-market generation must write `post-market.md` and `post-market-signals.json`.
 - Market-data preparation should use the repo default provider stack: Longbridge CLI primary, Twelve Data fallback.
 - Both workflows must run `validate-report` and `validate-trade-plan` before journal append or Longbridge sync.
+- Optional agent research enhancement may be enabled with `--include-agent-research` on `pre-market-plan` and `post-market-review`; generated agent artifacts are evidence inputs only.
+- If agent research is enabled, cc connect must also surface `validate-agent-reports` / `validate-agent-decision` failures as blocking status before report generation consumes those artifacts.
+- Agent memory tasks are optional and must remain review-only: `agent-memory-append`, `agent-memory-review`, and `agent-memory-export` cannot modify `knowledge/refined/` or raise execution status.
 - Post-market should run `data-quality --date <DATE>` before `feishu-summary` so focused-symbol fallback and stale-data warnings are disclosed.
 - Any `extract-report-signals --require-validation` failure must stop journal append.
 - Any `sync-longbridge-watchlist --require-validation` failure must stop watchlist sync.
@@ -59,6 +62,7 @@ Update the configured cc connect prompts so they require the new artifacts and g
 - `promote-lesson --apply` must not be scheduled automatically; run it only after human approval of a specific `pattern_id`.
 - Paper execution must be scheduled as separate execution tasks. Do not add broker write operations to the pre-market or post-market report-generation tasks.
 - Initial paper rollout should execute entries only. Keep paper cancel, protective-stop, and TP1 workflows in dry-run mode until exit-management safety is explicitly upgraded.
+- Monitor paper flow is dry-run only. `paper-trade-submit --session monitor --execute` is hard-disabled even if local config contains `allow_intraday_entry_submit=true`.
 
 ### 3. Update Failure Policy
 
@@ -103,6 +107,7 @@ Confirm paper execution config stays explicit and defaults to no broker writes. 
   "paper_execution": {
     "broker_writes_enabled": false,
     "allow_entry_submit": false,
+    "allow_intraday_entry_submit": false,
     "allow_cancel": false,
     "allow_protective_stop": false,
     "allow_take_profit": false
@@ -111,6 +116,8 @@ Confirm paper execution config stays explicit and defaults to no broker writes. 
 ```
 
 Only enable the specific action gate on the deployment host after the dry-run workflow is accepted. Do not use environment variables as the paper execution gate.
+
+`allow_intraday_entry_submit` is reserved for a future intraday execution contract. The current monitor session supports sidecar generation, validation, preview, submit dry-run, and Feishu summary only.
 
 ### 5. Server Acceptance Check
 
@@ -137,6 +144,31 @@ python3 script/trading_copilot.py paper-trade-submit --date <DATE> --session pre
 ```
 
 Do not add `--execute` during acceptance unless you intentionally want to submit paper orders.
+
+For agent research acceptance, run fixture or existing-date checks:
+
+```bash
+python3 script/trading_copilot.py agent-research-context --date <DATE> --symbol <SYMBOL>
+python3 script/agent_market_data.py --date <DATE> --symbol <SYMBOL>
+python3 script/agent_technicals.py --date <DATE> --symbol <SYMBOL>
+python3 script/trading_copilot.py agent-research-reports --date <DATE> --symbol <SYMBOL>
+python3 script/trading_copilot.py validate-agent-reports --date <DATE> --symbol <SYMBOL>
+python3 script/trading_copilot.py agent-decision --date <DATE> --symbol <SYMBOL>
+python3 script/trading_copilot.py validate-agent-decision --date <DATE> --symbol <SYMBOL>
+python3 script/trading_copilot.py agent-memory-review --date <DATE> --symbol <SYMBOL>
+```
+
+For monitor dry-run acceptance:
+
+```bash
+python3 script/trading_copilot.py extract-monitor-signals --date <DATE>
+python3 script/trading_copilot.py validate-trade-plan --session monitor --date <DATE>
+python3 script/trading_copilot.py paper-trade-preview --date <DATE> --session monitor --require-validation
+python3 script/trading_copilot.py paper-trade-submit --date <DATE> --session monitor --require-validation
+python3 script/trading_copilot.py feishu-summary --session monitor --date <DATE>
+```
+
+Do not add `--execute` to monitor submit; the command must reject it.
 
 ## Required cc connect Prompt Updates
 
@@ -203,6 +235,8 @@ Repository workflow stages:
 
 ```bash
 python3 script/trading_copilot.py pre-market-plan --watchlist config/watchlist.json --skip-non-trading-day
+# Or replace the previous line with this optional evidence-enhanced wrapper call:
+python3 script/trading_copilot.py pre-market-plan --watchlist config/watchlist.json --skip-non-trading-day --include-agent-research
 # Codex generates report/<DATE>/exec-brief.md, report/<DATE>/pre-market.md, report/<DATE>/pre-market-signals.json
 python3 script/trading_copilot.py validate-report --session pre-market --date <DATE>
 python3 script/trading_copilot.py validate-trade-plan --session pre-market --date <DATE>
@@ -232,6 +266,8 @@ Repository workflow stages:
 
 ```bash
 python3 script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day --include-journal-signals --include-position-symbols
+# Or replace the previous line with this optional evidence-enhanced wrapper call:
+python3 script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day --include-journal-signals --include-position-symbols --include-agent-research
 # Codex generates report/<DATE>/post-market.md and report/<DATE>/post-market-signals.json
 python3 script/trading_copilot.py validate-report --session post-market --date <DATE>
 python3 script/trading_copilot.py validate-trade-plan --session post-market --date <DATE>
@@ -380,14 +416,19 @@ The provided `ops/cc-connect/tca-paper-sync-review.sh` keeps `paper-order-cancel
 
 ## Optional Monitor Journal Task
 
-If intraday monitoring is enabled, keep scan generation separate from journal append:
+If intraday monitoring is enabled, keep scan generation, sidecar generation, dry-run paper checks, and journal append separate:
 
 ```bash
 python3 script/trading_copilot.py monitor-brief --state config/monitor_state.json --interval 5min
+python3 script/trading_copilot.py extract-monitor-signals --date <DATE>
+python3 script/trading_copilot.py validate-trade-plan --session monitor --date <DATE>
+python3 script/trading_copilot.py paper-trade-preview --date <DATE> --session monitor --require-validation
+python3 script/trading_copilot.py paper-trade-submit --date <DATE> --session monitor --require-validation
+python3 script/trading_copilot.py feishu-summary --session monitor --date <DATE>
 python3 script/trading_copilot.py extract-monitor-signals --append
 ```
 
-Use monitor journal entries as observation records only. They are not execution instructions.
+Use monitor sidecar and journal entries as observation records only. They are not execution instructions. cc connect must never schedule `paper-trade-submit --session monitor --execute`.
 
 ## Feishu Message Shape
 
@@ -402,6 +443,8 @@ The final Feishu message should be a concise summary with artifact paths:
 - self-review or weekly-review summary
 - plan-review position discipline summary and learning-review candidate count, when available
 - data-quality status and focused-symbol fallback, when available
+- monitor candidate/blocked/skipped counts, when a monitor task runs
+- agent research validation status and decision artifact paths, when `--include-agent-research` is used
 - paper dry-run ready/blocked/error counts, when a paper task runs
 - paper execution submitted/skipped/error counts, when paper entry execution runs
 - paper execution review and learning artifact paths, when paper review runs
