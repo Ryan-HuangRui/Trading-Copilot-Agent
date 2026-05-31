@@ -141,6 +141,22 @@ Output rules:
 - Include data freshness and rule limitations.
 - Use `NO TRADE` when setup quality, data quality, or risk framing is insufficient.
 
+Monitor dry-run sidecar:
+
+```bash
+python3 script/trading_copilot.py extract-monitor-signals --date <DATE>
+python3 script/trading_copilot.py validate-trade-plan --session monitor --date <DATE>
+python3 script/trading_copilot.py paper-trade-preview --session monitor --date <DATE>
+python3 script/trading_copilot.py paper-trade-submit --session monitor --date <DATE>
+```
+
+Required behavior:
+
+- `extract-monitor-signals` writes `report/<DATE>/monitor-signals.json`.
+- Monitor signals default to `plan_type=watch_only` and `execution_status=watch_only`.
+- Monitor paper submission is dry-run only.
+- `paper-trade-submit --session monitor --execute` must be hard-rejected before broker credentials or adapters are used.
+
 ## agent-research-context
 
 Purpose: create the TradingAgents-style research context envelope used by later deterministic data tools and role prompts.
@@ -1054,12 +1070,13 @@ Required behavior:
 
 ## extract-monitor-signals
 
-Purpose: append actionable monitor observations to the journal.
+Purpose: convert actionable monitor observations into a watch-only sidecar and optionally append them to the journal.
 
 Canonical command:
 
 ```bash
 python3 script/trading_copilot.py extract-monitor-signals --append
+python3 script/trading_copilot.py extract-monitor-signals --date <DATE>
 ```
 
 Inputs:
@@ -1068,12 +1085,14 @@ Inputs:
 
 Output:
 
+- Writes `report/<DATE>/monitor-signals.json`.
 - With `--append`, writes observed monitor signals to `runtime/journal/signals.jsonl`.
 
 Required behavior:
 
 - Append only actionable observation statuses such as `可执行` and `临近触发`.
 - Treat monitor entries as observations, not trade instructions.
+- Sidecar signals must use `plan_type=watch_only` and `execution_status=watch_only`.
 - Prefer setup-backed fields emitted by `monitor_scan.py`, including `setup`, `setup_files`, `trigger_detail`, `invalidation_detail`, `risk_quality`, and `journal_appendable`.
 
 ## account-snapshot

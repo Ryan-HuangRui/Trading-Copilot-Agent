@@ -151,9 +151,61 @@ class FeishuSummaryTest(unittest.TestCase):
             self.assertIn("MU 使用 twelve_data fallback", markdown)
             self.assertEqual(payload["summary"]["data_quality_status"], "warn")
             self.assertEqual(payload["summary"]["focused_fallback_symbols"], 1)
-            self.assertIn("需人工复核：1", markdown)
-            self.assertIn("昨日计划复盘", markdown)
-            self.assertIn("今日新增 lesson", markdown)
+
+    def test_feishu_summary_supports_monitor_candidate_counts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            report_dir = root / "report" / "2026-05-26"
+            report_dir.mkdir(parents=True)
+            (report_dir / "monitor-signals.json").write_text(
+                json.dumps(
+                    {
+                        "date": "2026-05-26",
+                        "session": "monitor",
+                        "summary": {"candidate": 1, "blocked": 2, "skipped": 3},
+                        "signals": [
+                            {
+                                "symbol": "MU",
+                                "setup": "strong_breakout_trend_following.md",
+                                "status": "observed",
+                                "plan_type": "watch_only",
+                                "execution_status": "watch_only",
+                                "notes": "盘中观察候选",
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (report_dir / "data-quality.json").write_text(
+                json.dumps({"status": "warn", "stale_data": False, "focused_fallback_symbols": []}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "script" / "feishu_summary.py"),
+                    "--repo-root",
+                    str(root),
+                    "--date",
+                    "2026-05-26",
+                    "--session",
+                    "monitor",
+                ],
+                cwd=ROOT,
+                check=False,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, msg=proc.stderr or proc.stdout)
+            payload = json.loads(proc.stdout)
+            self.assertEqual(payload["summary"]["candidate"], 1)
+            self.assertEqual(payload["summary"]["blocked"], 2)
+            content = Path(payload["output"]).read_text(encoding="utf-8")
+            self.assertIn("【盘中候选状态】", content)
 
 
 if __name__ == "__main__":

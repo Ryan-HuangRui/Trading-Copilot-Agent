@@ -92,6 +92,22 @@ class PaperExecutionConfigTest(unittest.TestCase):
         self.assertIn("cancel", policy["dry_run_only_actions"])
         self.assertIn("protective_stop", policy["dry_run_only_actions"])
 
+    def test_intraday_entry_gate_is_disabled_and_separate_from_entry_submit(self):
+        config = {
+            "broker_writes_enabled": True,
+            "allow_entry_submit": True,
+            "allow_intraday_entry_submit": True,
+        }
+
+        matrix = broker_capability_matrix(config)
+        intraday = {item["action"]: item for item in matrix["unsupported_actions"]}["intraday_entry_submit"]
+        policy = paper_execution_policy(config)
+
+        self.assertEqual(intraday["execution_status"], "hard_disabled")
+        self.assertIn("intraday_entry_submit", policy["unsupported_actions"])
+        with self.assertRaises(PermissionError):
+            ensure_paper_write_allowed(config, execute=True, action="intraday_entry_submit")
+
 
 if __name__ == "__main__":
     unittest.main()

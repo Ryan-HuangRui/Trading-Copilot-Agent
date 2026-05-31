@@ -774,6 +774,8 @@ def run_extract_report_signals(args: argparse.Namespace) -> None:
         command.extend(["--signals", args.signals])
     if args.append:
         command.append("--append")
+    if getattr(args, "signals_output", None):
+        command.extend(["--signals-output", args.signals_output])
     if args.require_validation:
         command.append("--require-validation")
 
@@ -784,7 +786,12 @@ def run_extract_report_signals(args: argparse.Namespace) -> None:
 
     response = base_response("extract-report-signals", command, stdout)
     response["date"] = args.date
-    response["artifacts"] = [stdout["journal_path"]] if stdout and stdout.get("journal_path") else []
+    artifacts = []
+    if stdout and stdout.get("signals_path"):
+        artifacts.append(stdout["signals_path"])
+    if stdout and stdout.get("journal_path"):
+        artifacts.append(stdout["journal_path"])
+    response["artifacts"] = artifacts
     response["signals"] = (stdout or {}).get("signals", [])
     response["appended"] = (stdout or {}).get("appended", [])
     response["skipped_duplicates"] = (stdout or {}).get("skipped_duplicates", [])
@@ -1830,7 +1837,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     validate_plan = sub.add_parser("validate-trade-plan", help="Validate structured trade-plan sidecar quality gates")
     validate_plan.add_argument("--date", required=True)
-    validate_plan.add_argument("--session", choices=["pre-market", "post-market"], required=True)
+    validate_plan.add_argument("--session", choices=["pre-market", "post-market", "monitor"], required=True)
     validate_plan.add_argument("--signals")
     validate_plan.set_defaults(func=run_validate_trade_plan)
 
@@ -1879,7 +1886,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     feishu_summary = sub.add_parser("feishu-summary", help="Build a concise Feishu-ready execution summary")
     feishu_summary.add_argument("--date", required=True)
-    feishu_summary.add_argument("--session", choices=["pre-market", "post-market"], required=True)
+    feishu_summary.add_argument("--session", choices=["pre-market", "post-market", "monitor"], required=True)
     feishu_summary.add_argument("--signals")
     feishu_summary.add_argument("--position-review")
     feishu_summary.add_argument("--plan-review")
@@ -1921,6 +1928,7 @@ def build_parser() -> argparse.ArgumentParser:
     monitor_signals.add_argument("--max-signals", type=int, default=5)
     monitor_signals.add_argument("--append", action="store_true")
     monitor_signals.add_argument("--journal-dir", default="runtime/journal")
+    monitor_signals.add_argument("--signals-output")
     monitor_signals.set_defaults(func=run_extract_monitor_signals)
 
     account = sub.add_parser("account-snapshot", help="Write a read-only Longbridge account snapshot")
@@ -1942,7 +1950,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     paper_preview = sub.add_parser("paper-trade-preview", help="Build paper-trading order previews from trade plans")
     paper_preview.add_argument("--date", required=True)
-    paper_preview.add_argument("--session", choices=["pre-market", "post-market"], required=True)
+    paper_preview.add_argument("--session", choices=["pre-market", "post-market", "monitor"], required=True)
     paper_preview.add_argument("--signals")
     paper_preview.add_argument("--account-snapshot")
     paper_preview.add_argument("--output")
@@ -1966,7 +1974,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     paper_submit = sub.add_parser("paper-trade-submit", help="Prepare controlled paper order submissions")
     paper_submit.add_argument("--date", required=True)
-    paper_submit.add_argument("--session", choices=["pre-market", "post-market"], required=True)
+    paper_submit.add_argument("--session", choices=["pre-market", "post-market", "monitor"], required=True)
     paper_submit.add_argument("--preview")
     paper_submit.add_argument("--account-snapshot")
     paper_submit.add_argument("--orders-journal")

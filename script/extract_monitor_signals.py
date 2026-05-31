@@ -91,6 +91,8 @@ def scan_to_signal(scan: dict[str, Any], date: str, source: str, risk_pct: Any) 
         "setup": setup,
         "setup_files": setup_files,
         "status": "observed",
+        "plan_type": "watch_only",
+        "execution_status": "watch_only",
         "source_report": source,
         "trigger": f"{status_text}：{scan.get('reason')}; trigger={trigger_price}",
         "trigger_price": trigger_price,
@@ -102,6 +104,40 @@ def scan_to_signal(scan: dict[str, Any], date: str, source: str, risk_pct: Any) 
         "risk_quality": scan.get("risk_quality"),
         "bar_timestamp": scan.get("bar_timestamp"),
         "notes": scan.get("reason"),
+    }
+
+
+def default_signals_output(repo_root: Path, date: str, explicit_path: str | None) -> Path:
+    if explicit_path:
+        path = Path(explicit_path)
+        return path if path.is_absolute() else repo_root / path
+    return repo_root / "report" / date / "monitor-signals.json"
+
+
+def sidecar_signal(signal: dict[str, Any]) -> dict[str, Any]:
+    trigger = signal.get("trigger_detail")
+    invalidation = signal.get("invalidation_detail")
+    if not isinstance(trigger, dict):
+        trigger = {"type": "monitor_observation", "price": signal.get("trigger_price"), "text": str(signal.get("trigger") or "")}
+    if not isinstance(invalidation, dict):
+        invalidation = {
+            "type": "monitor_invalidation",
+            "price": signal.get("invalidation_price"),
+            "text": str(signal.get("invalidation") or ""),
+        }
+    return {
+        "signal_id": signal.get("signal_id"),
+        "symbol": signal.get("symbol"),
+        "setup": signal.get("setup"),
+        "setup_files": signal.get("setup_files", []),
+        "direction": "long",
+        "trigger": trigger,
+        "invalidation": invalidation,
+        "risk": {"max_risk_pct": None, "text": signal.get("risk")},
+        "status": "observed",
+        "plan_type": "watch_only",
+        "execution_status": "watch_only",
+        "notes": signal.get("notes"),
     }
 
 
@@ -140,11 +176,29 @@ def extract(args: argparse.Namespace) -> dict[str, Any]:
             existing.add(signal_id)
             appended.append(signal_id)
 
+    signals_output = default_signals_output(repo_root, date, getattr(args, "signals_output", None))
+    sidecar = {
+        "date": date,
+        "session": "monitor",
+        "source_report": source,
+        "signals": [sidecar_signal(signal) for signal in signals],
+        "summary": {
+            "total": len(signals),
+            "candidate": len(signals),
+            "blocked": 0,
+            "skipped": 0,
+        },
+        "safety_note": "Monitor signals are watch_only dry-run candidates, not broker instructions.",
+    }
+    signals_output.parent.mkdir(parents=True, exist_ok=True)
+    signals_output.write_text(json.dumps(sidecar, ensure_ascii=False, indent=2), encoding="utf-8")
+
     return {
         "status": "success",
         "date": date,
         "source_report": source,
         "signals": signals,
+        "signals_path": str(signals_output),
         "journal_path": str(journal_file) if journal_file else None,
         "append": args.append,
         "appended": appended,
@@ -160,6 +214,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-signals", type=int, default=5)
     parser.add_argument("--append", action="store_true")
     parser.add_argument("--journal-dir", default="runtime/journal")
+    parser.add_argument("--signals-output")
     parser.add_argument("--repo-root", default=str(Path(__file__).resolve().parents[1]))
     return parser
 

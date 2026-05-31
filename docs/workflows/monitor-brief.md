@@ -19,7 +19,23 @@ python3 script/trading_copilot.py monitor-brief --state config/monitor_state.jso
 2. Read `report/latest-monitor.json`.
 3. Group symbols by observation state.
 4. Convert script statuses into scenarios with invalidation and risk.
-5. State data limitations and use `NO TRADE` for weak or incomplete setups.
+5. Generate monitor signal sidecar when the observations should enter the dry-run loop:
+
+```bash
+python3 script/trading_copilot.py extract-monitor-signals --date <DATE>
+```
+
+This writes `report/<DATE>/monitor-signals.json`.
+
+6. Optional dry-run only paper flow:
+
+```bash
+python3 script/trading_copilot.py validate-trade-plan --session monitor --date <DATE>
+python3 script/trading_copilot.py paper-trade-preview --session monitor --date <DATE>
+python3 script/trading_copilot.py paper-trade-submit --session monitor --date <DATE>
+```
+
+7. State data limitations and use `NO TRADE` for weak or incomplete setups.
 
 ## Output Shape
 
@@ -34,3 +50,5 @@ Required sections:
 ## Boundary
 
 The monitor scan is an observation artifact. The agent may summarize risk but must not present order execution instructions.
+
+`paper-trade-submit --session monitor --execute` is hard-disabled. Monitor candidates are `watch_only` dry-run observations unless a future explicitly gated workflow changes the contract.

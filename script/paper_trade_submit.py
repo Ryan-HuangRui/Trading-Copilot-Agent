@@ -58,6 +58,8 @@ def validation_result(repo_root: Path, date: str, session: str, signals: str | N
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
+    if args.session == "monitor" and args.execute:
+        raise PermissionError("paper-trade-submit --session monitor is dry-run only; --execute is hard disabled")
     repo_root = Path(args.repo_root).resolve()
     preview_path = default_preview_path(repo_root, args.date, args.preview)
     account_path = default_account_snapshot_path(repo_root, args.date, args.account_snapshot)
@@ -169,7 +171,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Prepare controlled paper order submissions from dry-run previews")
     parser.add_argument("--date", required=True)
-    parser.add_argument("--session", choices=["pre-market", "post-market"], required=True)
+    parser.add_argument("--session", choices=["pre-market", "post-market", "monitor"], required=True)
     parser.add_argument("--preview")
     parser.add_argument("--account-snapshot")
     parser.add_argument("--orders-journal")

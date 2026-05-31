@@ -258,6 +258,11 @@ Expected top-level fields:
 
 Consumer rules:
 
+- Treat monitor statuses as observation states, not trade instructions.
+- Use `extract-monitor-signals` to write `report/<DATE>/monitor-signals.json` for dry-run review.
+- Monitor sidecar signals must default to `watch_only`.
+- Monitor paper submission is dry-run only; `--execute` is hard-disabled for monitor session.
+
 - Treat scan statuses as observations only.
 - Position actions require human review.
 - Include `NO TRADE` if data is insufficient or a setup lacks rule confirmation.

@@ -49,6 +49,7 @@ Review the paper execution config before enabling broker writes:
   "paper_execution": {
     "broker_writes_enabled": false,
     "allow_entry_submit": false,
+    "allow_intraday_entry_submit": false,
     "allow_cancel": false,
     "allow_protective_stop": false,
     "allow_take_profit": false
@@ -56,7 +57,7 @@ Review the paper execution config before enabling broker writes:
 }
 ```
 
-The tracked default is intentionally all false. To enable a paper entry rollout on a deployment host, create an ignored host-local config such as `config/paper_execution.local.json`, set `broker_writes_enabled=true` and `allow_entry_submit=true`, and pass it with `--paper-execution-config`. Keep cancel, protective-stop, and take-profit gates false during the initial rollout.
+The tracked default is intentionally all false. To enable a paper entry rollout on a deployment host, create an ignored host-local config such as `config/paper_execution.local.json`, set `broker_writes_enabled=true` and `allow_entry_submit=true`, and pass it with `--paper-execution-config`. Keep `allow_intraday_entry_submit`, cancel, protective-stop, and take-profit gates false during the initial rollout.
 
 Execution artifacts include `execution_policy` and `broker_capabilities` so operators can see which paper writes are enabled, disabled, or unsupported in the generated JSON without reading the local config file.
 
@@ -197,6 +198,7 @@ Use a config file as the paper broker-write policy. The tracked `config/paper_ex
   "paper_execution": {
     "broker_writes_enabled": true,
     "allow_entry_submit": true,
+    "allow_intraday_entry_submit": false,
     "allow_cancel": false,
     "allow_protective_stop": false,
     "allow_take_profit": false
@@ -207,6 +209,7 @@ Use a config file as the paper broker-write policy. The tracked `config/paper_ex
 Interpretation:
 
 - If `broker_writes_enabled=true` and `allow_entry_submit=true`, the scheduler may run `paper-trade-submit --execute` after the dry-run artifact has no blocking errors.
+- `allow_intraday_entry_submit` is reserved for a future contract. `paper-trade-submit --session monitor --execute` is hard-disabled even if a local config sets this key to true.
 - If `allow_protective_stop=false` and `allow_take_profit=false`, the scheduler must run protective-stop and TP1 workflows without `--execute`.
 - If `allow_cancel=false`, the scheduler must run cancel planning without `--execute`.
 - If `TCA_PAPER_CANCEL_EXECUTE` is unset or not `1`, the provided cc-connect sync script keeps `paper-order-cancel` dry-run even when the local config enables cancellation.

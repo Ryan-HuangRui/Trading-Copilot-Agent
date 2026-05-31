@@ -200,7 +200,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Build paper-trading order previews from validated trade plans")
     parser.add_argument("--date", required=True)
-    parser.add_argument("--session", choices=["pre-market", "post-market"], required=True)
+    parser.add_argument("--session", choices=["pre-market", "post-market", "monitor"], required=True)
     parser.add_argument("--signals")
     parser.add_argument("--account-snapshot")
     parser.add_argument("--output")

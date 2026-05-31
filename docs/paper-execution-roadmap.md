@@ -230,6 +230,7 @@ Initial constraints:
 - Only symbols already in the pre-market/post-market focus pool or configured monitor state.
 - Per-day and per-symbol cooldown gates.
 - Separate action gate such as `allow_intraday_entry_submit`, disabled by default.
+- `paper-trade-submit --session monitor --execute` is hard-disabled regardless of config until a future intraday execution contract is explicitly implemented.
 - Feishu delivery of candidate, skipped, and blocked reasons before any execution rollout.
 
 ## Milestone 9: Bracket/OCO And Advanced Order Types

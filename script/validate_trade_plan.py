@@ -62,7 +62,7 @@ def validate(args: argparse.Namespace) -> dict[str, Any]:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Validate structured Trading Copilot trade-plan sidecars")
     parser.add_argument("--date", required=True)
-    parser.add_argument("--session", choices=["pre-market", "post-market"], required=True)
+    parser.add_argument("--session", choices=["pre-market", "post-market", "monitor"], required=True)
     parser.add_argument("--signals", help="Structured signal sidecar path")
     parser.add_argument("--repo-root", default=str(Path(__file__).resolve().parents[1]))
     return parser

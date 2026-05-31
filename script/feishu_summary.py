@@ -32,6 +32,8 @@ def artifact_json(repo_root: Path, path: str | None, default: Path) -> dict[str,
 
 
 def session_title(session: str) -> str:
+    if session == "monitor":
+        return "盘中"
     return "今日" if session == "pre-market" else "明日"
 
 
@@ -87,6 +89,7 @@ def build_markdown(
     plan_review: dict[str, Any],
     data_quality: dict[str, Any],
     lessons: list[dict[str, Any]],
+    signal_source_summary: dict[str, Any] | None = None,
 ) -> str:
     title_prefix = session_title(session)
     executable, watch, no_trade = split_signals(signals)
@@ -138,6 +141,19 @@ def build_markdown(
     else:
         lines.append("- 重点标的无 fallback 记录。")
 
+    if session == "monitor":
+        summary = signal_source_summary or {}
+        lines.extend(
+            [
+                "",
+                "【盘中候选状态】",
+                f"- candidate：{summary.get('candidate', len(watch))}",
+                f"- blocked：{summary.get('blocked', 0)}",
+                f"- skipped：{summary.get('skipped', 0)}",
+                "- monitor 候选仅用于 dry-run 和人工观察，不能自动执行。",
+            ]
+        )
+
     lines.extend(
         [
             "",
@@ -183,6 +199,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     signals_file = resolve_signals_path(repo_root, args.date, args.signals, args.session)
     payload = read_json(signals_file)
     signals = payload.get("signals") if isinstance(payload.get("signals"), list) else []
+    signal_source_summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
     position_review = artifact_json(repo_root, args.position_review, repo_root / "report" / args.date / "position-review.json")
     plan_review = artifact_json(repo_root, args.plan_review, repo_root / "report" / args.date / "plan-review.json")
     data_quality = artifact_json(repo_root, None, repo_root / "report" / args.date / "data-quality.json")
@@ -198,6 +215,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             plan_review=plan_review,
             data_quality=data_quality,
             lessons=lessons,
+            signal_source_summary=signal_source_summary,
         ),
         encoding="utf-8",
     )
@@ -217,6 +235,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "focused_fallback_symbols": len(data_quality.get("focused_fallback_symbols", []))
             if isinstance(data_quality.get("focused_fallback_symbols"), list)
             else 0,
+            "candidate": signal_source_summary.get("candidate"),
+            "blocked": signal_source_summary.get("blocked"),
+            "skipped": signal_source_summary.get("skipped"),
         },
     }
 
@@ -224,7 +245,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Build a concise Feishu-ready execution summary")
     parser.add_argument("--date", required=True)
-    parser.add_argument("--session", choices=["pre-market", "post-market"], required=True)
+    parser.add_argument("--session", choices=["pre-market", "post-market", "monitor"], required=True)
     parser.add_argument("--signals")
     parser.add_argument("--position-review")
     parser.add_argument("--plan-review")

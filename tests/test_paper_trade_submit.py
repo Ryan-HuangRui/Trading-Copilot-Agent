@@ -47,6 +47,14 @@ def valid_preview() -> dict:
     }
 
 
+def monitor_preview() -> dict:
+    payload = valid_preview()
+    payload["session"] = "monitor"
+    payload["orders"][0]["status"] = "blocked"
+    payload["orders"][0]["reasons"] = ["execution_status is not conditional_executable"]
+    return payload
+
+
 def second_valid_order() -> dict:
     order = dict(valid_preview()["orders"][0])
     order.update(
@@ -147,6 +155,34 @@ class PaperTradeSubmitTest(unittest.TestCase):
             },
         )
 
+    def seed_monitor_inputs(self, root: Path) -> None:
+        write_json(root / "report" / "2026-05-26" / "paper-trade-preview.json", monitor_preview())
+        write_json(root / "runtime" / "paper" / "2026-05-26" / "paper-account-snapshot.json", paper_snapshot())
+        setup = root / "knowledge" / "refined" / "setups" / "strong_breakout_trend_following.md"
+        setup.parent.mkdir(parents=True, exist_ok=True)
+        setup.write_text("# setup\n", encoding="utf-8")
+        write_json(
+            root / "report" / "2026-05-26" / "monitor-signals.json",
+            {
+                "date": "2026-05-26",
+                "session": "monitor",
+                "source_report": "report/latest-monitor.json",
+                "signals": [
+                    {
+                        "symbol": "MU",
+                        "setup": "strong_breakout_trend_following.md",
+                        "direction": "long",
+                        "trigger": {"type": "break_above", "price": 100, "text": "break"},
+                        "invalidation": {"type": "break_below", "price": 95, "text": "stop"},
+                        "risk": {"max_risk_pct": 1, "text": "monitor dry-run only"},
+                        "status": "observed",
+                        "plan_type": "watch_only",
+                        "execution_status": "watch_only",
+                    }
+                ],
+            },
+        )
+
     def test_submit_dry_run_writes_submission_without_orders_jsonl(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -181,6 +217,27 @@ class PaperTradeSubmitTest(unittest.TestCase):
             submission = json.loads(Path(json.loads(proc.stdout)["output"]).read_text(encoding="utf-8"))
             self.assertEqual(len(submission["skipped_duplicates"]), 1)
             self.assertEqual(submission["summary"]["skipped_duplicates"], 1)
+
+    def test_monitor_submit_dry_run_is_allowed_but_has_no_ready_orders(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.seed_monitor_inputs(root)
+
+            result = paper_trade_submit.run(self.args(root, session="monitor", require_validation=True))
+
+            self.assertTrue(result["dry_run"])
+            self.assertEqual(result["summary"]["ready"], 0)
+
+    def test_monitor_submit_execute_is_hard_rejected_before_adapter(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.seed_monitor_inputs(root)
+
+            with patch.object(paper_trade_submit, "LongbridgePaperOrderAdapter") as adapter:
+                with self.assertRaises(PermissionError):
+                    paper_trade_submit.run(self.args(root, session="monitor", execute=True))
+
+            adapter.assert_not_called()
 
     def test_wrapper_exposes_paper_trade_submit(self):
         with tempfile.TemporaryDirectory() as tmp:
