@@ -24,6 +24,8 @@ runtime/learning/
 - `position_reviews.jsonl`: read-only position risk and plan-consistency review records.
 - `runtime/learning/daily_lessons.jsonl`: candidate process lessons emitted by `plan-review --append-lessons`.
 - `runtime/learning/pattern_candidates.jsonl`: repeated lesson patterns emitted by `learning-review`; these require human review before promotion.
+- `runtime/memory/trading_memory.md`: append-only agent decision memory used as review context.
+- `runtime/memory/trading_memory.sqlite`: optional SQLite export rebuilt from Markdown memory.
 
 Each line is one JSON object. Fields are intentionally append-only so reports can be audited later.
 
@@ -155,6 +157,25 @@ The extractor prefers `report/<DATE>/pre-market-signals.json` or `report/<DATE>/
 When position reviews exist, `plan-review` adds a position-discipline section covering planned symbols without trade records, positions outside the plan, missing trade links, missing `source_signal_id`, and positions near invalidation without complete trade linkage.
 
 Learning lessons are candidate process improvements only. They must not be treated as approved trading rules or promoted into `knowledge/refined/` without human review.
+
+## Agent Memory
+
+`agent-memory-append` records decision outcomes and reflections:
+
+```bash
+python3 script/trading_copilot.py agent-memory-append --decision report/<DATE>/agents/<SYMBOL>/decision.json --outcome-status <STATUS> --reflection "<TEXT>"
+```
+
+Each entry includes `date`, `symbol`, `decision_id`, `evidence_ids`, `decision_label`, `plan_type`, `execution_status`, `outcome_status`, and `reflection`.
+
+Review and export commands:
+
+```bash
+python3 script/trading_copilot.py agent-memory-review --date <DATE> --symbol <SYMBOL>
+python3 script/trading_copilot.py agent-memory-export
+```
+
+Memory is append-only and idempotent by `decision_id`. Review is read-only. Memory can lower confidence or trigger manual review only; it must not raise execution status, upgrade `watch_only/no_trade`, or modify `knowledge/refined/`.
 
 Use the outcome backfill after the completed daily snapshot is available:
 

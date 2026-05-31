@@ -612,26 +612,66 @@ def run_validate_agent_decision(args: argparse.Namespace) -> None:
 
 
 def run_agent_memory_review(args: argparse.Namespace) -> None:
-    symbols = normalize_symbols(args.symbol)
-    output = resolve_repo_path(args.output) if args.output else ROOT / "runtime" / "memory" / "agent-memory-review.json"
-    payload = {
-        "schema_version": 1,
-        "workflow": "agent-memory-review",
-        "date": args.date,
-        "symbols": symbols,
-        "generated_at": now_utc(),
-        "read_only": True,
-        "experimental": True,
-        "memory_path": args.memory_path,
-        "memory_matches": [],
-        "limitations": [
-            "Phase 0 skeleton is read-only and must not change execution status."
-        ],
-    }
-    write_json(output, payload)
-    response = base_response("agent-memory-review", ["agent-memory-review"], payload)
+    command = ["script/agent_memory.py", "review", "--memory-path", args.memory_path]
+    if args.date:
+        command.extend(["--date", args.date])
+    for symbol in args.symbol or []:
+        command.extend(["--symbol", symbol])
+    if args.output:
+        command.extend(["--output", args.output])
+    proc = run_child(command)
+    stdout = parse_json_output(proc.stdout)
+    if proc.returncode != 0:
+        emit(failed_response("agent-memory-review", command, proc), 1)
+    response = base_response("agent-memory-review", command, stdout)
     response["date"] = args.date
-    response["artifacts"] = [str(output)]
+    response["artifacts"] = [stdout["output"]] if stdout and stdout.get("output") else []
+    response["summary"] = (stdout or {}).get("summary")
+    response["memory_matches"] = (stdout or {}).get("memory_matches", [])
+    emit(response)
+
+
+def run_agent_memory_append(args: argparse.Namespace) -> None:
+    command = [
+        "script/agent_memory.py",
+        "append",
+        "--decision",
+        args.decision,
+        "--memory-path",
+        args.memory_path,
+        "--outcome-status",
+        args.outcome_status,
+        "--reflection",
+        args.reflection,
+    ]
+    proc = run_child(command)
+    stdout = parse_json_output(proc.stdout)
+    if proc.returncode != 0:
+        emit(failed_response("agent-memory-append", command, proc), 1)
+    response = base_response("agent-memory-append", command, stdout)
+    response["date"] = (stdout or {}).get("date")
+    response["artifacts"] = [stdout["memory_path"]] if stdout and stdout.get("memory_path") else []
+    response["appended"] = (stdout or {}).get("appended")
+    response["decision_id"] = (stdout or {}).get("decision_id")
+    emit(response)
+
+
+def run_agent_memory_export(args: argparse.Namespace) -> None:
+    command = [
+        "script/agent_memory.py",
+        "export",
+        "--memory-path",
+        args.memory_path,
+        "--sqlite-output",
+        args.sqlite_output,
+    ]
+    proc = run_child(command)
+    stdout = parse_json_output(proc.stdout)
+    if proc.returncode != 0:
+        emit(failed_response("agent-memory-export", command, proc), 1)
+    response = base_response("agent-memory-export", command, stdout)
+    response["artifacts"] = [stdout["sqlite_output"]] if stdout and stdout.get("sqlite_output") else []
+    response["rows"] = (stdout or {}).get("rows")
     emit(response)
 
 
@@ -1763,6 +1803,18 @@ def build_parser() -> argparse.ArgumentParser:
     agent_memory.add_argument("--memory-path", default="runtime/memory/trading_memory.md")
     agent_memory.add_argument("--output")
     agent_memory.set_defaults(func=run_agent_memory_review)
+
+    agent_memory_append = sub.add_parser("agent-memory-append", help="Append an agent decision outcome to trading memory")
+    agent_memory_append.add_argument("--decision", required=True)
+    agent_memory_append.add_argument("--memory-path", default="runtime/memory/trading_memory.md")
+    agent_memory_append.add_argument("--outcome-status", default="unknown")
+    agent_memory_append.add_argument("--reflection", default="")
+    agent_memory_append.set_defaults(func=run_agent_memory_append)
+
+    agent_memory_export = sub.add_parser("agent-memory-export", help="Export append-only trading memory to SQLite")
+    agent_memory_export.add_argument("--memory-path", default="runtime/memory/trading_memory.md")
+    agent_memory_export.add_argument("--sqlite-output", default="runtime/memory/trading_memory.sqlite")
+    agent_memory_export.set_defaults(func=run_agent_memory_export)
 
     day = sub.add_parser("trading-day-check", help="Check regular US market trading-day status")
     day.add_argument("--date")

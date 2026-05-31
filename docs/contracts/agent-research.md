@@ -182,6 +182,44 @@ Validation rules:
 - `conditional_executable` decisions require complete Trade Plan Card fields before they can be converted downstream.
 - Broker/order command fields and command text are forbidden.
 
+## Phase 5 Memory
+
+Phase 5 adds append-only memory for decision outcomes and reflections:
+
+```bash
+python3 script/trading_copilot.py agent-memory-append --decision report/<DATE>/agents/MU/decision.json --outcome-status not_triggered --reflection "Kept as watch only."
+python3 script/trading_copilot.py agent-memory-review --date <DATE> --symbol MU
+python3 script/trading_copilot.py agent-memory-export
+```
+
+Direct script entrypoint:
+
+```bash
+python3 script/agent_memory.py append --decision report/<DATE>/agents/MU/decision.json
+python3 script/agent_memory.py review --date <DATE> --symbol MU
+python3 script/agent_memory.py export --sqlite-output runtime/memory/trading_memory.sqlite
+```
+
+Required memory fields:
+
+- `date`
+- `symbol`
+- `decision_id`
+- `evidence_ids`
+- `decision_label`
+- `plan_type`
+- `execution_status`
+- `outcome_status`
+- `reflection`
+
+Rules:
+
+- Markdown memory is append-only and idempotent by `decision_id`.
+- SQLite memory is rebuilt/exported from Markdown memory.
+- Memory review is read-only.
+- Memory must not edit `knowledge/refined/`.
+- Memory can lower confidence, add restrictions, or trigger human review only; it cannot raise `execution_status` or upgrade `watch_only/no_trade` to `conditional_executable`.
+
 ## Phase 0 Wrapper Commands
 
 ```bash
