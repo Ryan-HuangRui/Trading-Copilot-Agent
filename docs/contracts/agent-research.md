@@ -91,6 +91,30 @@ python3 script/agent_technicals.py --date <DATE> --symbol MU --market-data repor
 - no API credentials required
 - sentiment evidence cannot raise execution status
 
+## Phase 2 Report Generation
+
+Phase 2 converts local data-tool artifacts into per-symbol analyst reports:
+
+```bash
+python3 script/trading_copilot.py agent-research-reports --date <DATE> --symbol MU
+python3 script/trading_copilot.py validate-agent-reports --date <DATE> --symbol MU
+```
+
+Direct script entrypoints are also available:
+
+```bash
+python3 script/agent_research_reports.py --date <DATE> --symbol MU --markdown
+python3 script/validate_agent_reports.py --date <DATE> --symbol MU
+```
+
+Required behavior:
+
+- Writes five JSON reports per symbol under `report/<DATE>/agents/<SYMBOL>/`.
+- Optional `--markdown` writes `research_report.md` for human review.
+- Same fixture inputs must produce schema-stable reports.
+- `validate-agent-reports` fails when required report fields or evidence fields are missing.
+- Broker/order command text such as `submit_order` or `broker_command` is forbidden in report artifacts.
+
 ## Decision Artifact
 
 `decision.json` is the structured output of role reasoning. It may help draft a Trade Plan Card, but it is not itself an order.

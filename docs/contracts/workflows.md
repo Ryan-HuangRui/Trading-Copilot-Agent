@@ -176,8 +176,26 @@ Output:
 
 Required behavior:
 
-- Phase 0 artifacts are placeholders and must include `experimental=true` and `not_for_execution=true`.
+- Use `--placeholder` only for Phase 0 contract checks; placeholder artifacts must include `experimental=true` and `not_for_execution=true`.
+- Without `--placeholder`, generate structured analyst reports from `agent_market_data.py`, `agent_technicals.py`, and fixture-only fundamentals/news/sentiment provider contracts.
 - Reports are evidence artifacts only and must not contain broker order commands.
+
+## validate-agent-reports
+
+Purpose: validate structured agent research reports before role reasoning consumes them.
+
+Canonical command:
+
+```bash
+python3 script/trading_copilot.py validate-agent-reports --date <DATE> --symbol MU
+```
+
+Required behavior:
+
+- Check all five expected report files for each requested symbol.
+- Fail when top-level report fields are missing.
+- Fail when evidence items miss `source`, `source_type`, freshness, `symbol`, `summary`, `confidence`, or `limitations`.
+- Fail when report artifacts contain broker/order command text.
 
 ## agent-decision
 

@@ -288,6 +288,34 @@ def run_agent_research_context(args: argparse.Namespace) -> None:
 
 
 def run_agent_research_reports(args: argparse.Namespace) -> None:
+    if not getattr(args, "placeholder", False):
+        command = [
+            "script/agent_research_reports.py",
+            "--date",
+            args.date,
+        ]
+        for symbol in args.symbol or []:
+            command.extend(["--symbol", symbol])
+        if args.market_data:
+            command.extend(["--market-data", args.market_data])
+        if args.technicals:
+            command.extend(["--technicals", args.technicals])
+        if args.provider_fixture:
+            command.extend(["--provider-fixture", args.provider_fixture])
+        if args.output_dir:
+            command.extend(["--output-dir", args.output_dir])
+        if args.markdown:
+            command.append("--markdown")
+        proc = run_child(command)
+        stdout = parse_json_output(proc.stdout)
+        if proc.returncode != 0:
+            emit(failed_response("agent-research-reports", command, proc), 1)
+        response = base_response("agent-research-reports", command, stdout)
+        response["date"] = args.date
+        response["artifacts"] = (stdout or {}).get("artifacts", [])
+        response["summary"] = (stdout or {}).get("summary")
+        emit(response)
+
     symbols = normalize_symbols(args.symbol)
     out_dir = agent_output_dir(args.date, args.output_dir)
     report_types = ["market", "technicals", "fundamentals", "news", "sentiment"]
@@ -318,6 +346,30 @@ def run_agent_research_reports(args: argparse.Namespace) -> None:
     response["date"] = args.date
     response["artifacts"] = artifacts
     response["symbols"] = symbols
+    emit(response)
+
+
+def run_validate_agent_reports(args: argparse.Namespace) -> None:
+    command = [
+        "script/validate_agent_reports.py",
+        "--date",
+        args.date,
+    ]
+    for symbol in args.symbol or []:
+        command.extend(["--symbol", symbol])
+    if args.reports_dir:
+        command.extend(["--reports-dir", args.reports_dir])
+    proc = run_child(command)
+    stdout = parse_json_output(proc.stdout)
+    if proc.returncode != 0:
+        response = failed_response("validate-agent-reports", command, proc)
+        response["date"] = args.date
+        response["validation"] = stdout
+        emit(response, 1)
+    response = base_response("validate-agent-reports", command, stdout)
+    response["date"] = args.date
+    response["validation"] = stdout
+    response["artifacts"] = []
     emit(response)
 
 
@@ -1487,8 +1539,19 @@ def build_parser() -> argparse.ArgumentParser:
     agent_reports = sub.add_parser("agent-research-reports", help="Write Phase 0 placeholder agent research reports")
     agent_reports.add_argument("--date", required=True)
     agent_reports.add_argument("--symbol", action="append", required=True)
+    agent_reports.add_argument("--market-data")
+    agent_reports.add_argument("--technicals")
+    agent_reports.add_argument("--provider-fixture")
     agent_reports.add_argument("--output-dir")
+    agent_reports.add_argument("--markdown", action="store_true")
+    agent_reports.add_argument("--placeholder", action="store_true", help="Write Phase 0 placeholder reports instead of generated reports")
     agent_reports.set_defaults(func=run_agent_research_reports)
+
+    validate_agent_reports = sub.add_parser("validate-agent-reports", help="Validate structured agent research reports")
+    validate_agent_reports.add_argument("--date", required=True)
+    validate_agent_reports.add_argument("--symbol", action="append", required=True)
+    validate_agent_reports.add_argument("--reports-dir")
+    validate_agent_reports.set_defaults(func=run_validate_agent_reports)
 
     agent_decision = sub.add_parser("agent-decision", help="Write a Phase 0 placeholder agent decision")
     agent_decision.add_argument("--date", required=True)
