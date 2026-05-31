@@ -85,6 +85,115 @@ def now_utc() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def symbols_from_agent_source(path_text: str | None) -> List[str]:
+    if not path_text:
+        return []
+    path = resolve_repo_path(path_text)
+    if not path.exists():
+        return []
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    snapshot = payload.get("snapshot") if isinstance(payload.get("snapshot"), dict) else payload
+    symbols = []
+    for item in snapshot.get("symbols", []):
+        if isinstance(item, dict) and item.get("symbol"):
+            symbols.append(str(item["symbol"]))
+    return normalize_symbols(symbols)
+
+
+def run_agent_research_pipeline(
+    *,
+    date: str,
+    symbols: List[str],
+    context_path: str | None = None,
+    snapshot_path: str | None = None,
+) -> Dict[str, Any]:
+    normalized = normalize_symbols(symbols)
+    if not normalized:
+        return {
+            "status": "skipped",
+            "artifacts": [],
+            "reason": "no symbols available for agent research",
+        }
+    agents_dir = str(ROOT / "report" / date / "agents")
+    market_data_path = str(ROOT / "report" / date / "agents" / "market-data.json")
+    technicals_path = str(ROOT / "report" / date / "agents" / "technicals.json")
+    commands: List[List[str]] = []
+    market_command = [
+        "script/agent_market_data.py",
+        "--date",
+        date,
+        "--output",
+        market_data_path,
+    ]
+    if context_path:
+        market_command.extend(["--context", context_path])
+    if snapshot_path:
+        market_command.extend(["--snapshot", snapshot_path])
+    for symbol in normalized:
+        market_command.extend(["--symbol", symbol])
+    commands.append(market_command)
+
+    technicals_command = [
+        "script/agent_technicals.py",
+        "--date",
+        date,
+        "--market-data",
+        market_data_path,
+        "--output",
+        technicals_path,
+    ]
+    for symbol in normalized:
+        technicals_command.extend(["--symbol", symbol])
+    commands.append(technicals_command)
+
+    reports_command = [
+        "script/agent_research_reports.py",
+        "--date",
+        date,
+        "--market-data",
+        market_data_path,
+        "--technicals",
+        technicals_path,
+        "--output-dir",
+        agents_dir,
+    ]
+    validate_reports_command = ["script/validate_agent_reports.py", "--date", date, "--reports-dir", agents_dir]
+    decision_command = ["script/agent_decision.py", "--date", date, "--reports-dir", agents_dir, "--output-dir", agents_dir]
+    validate_decision_command = ["script/validate_agent_decision.py", "--date", date, "--decision-dir", agents_dir]
+    for symbol in normalized:
+        reports_command.extend(["--symbol", symbol])
+        validate_reports_command.extend(["--symbol", symbol])
+        decision_command.extend(["--symbol", symbol])
+        validate_decision_command.extend(["--symbol", symbol])
+    commands.extend([reports_command, validate_reports_command, decision_command, validate_decision_command])
+
+    artifacts = [market_data_path, technicals_path]
+    for command in commands:
+        proc = run_child(command)
+        stdout = parse_json_output(proc.stdout)
+        if proc.returncode != 0:
+            return {
+                "status": "failed",
+                "artifacts": artifacts,
+                "reason": proc.stderr.strip() or proc.stdout.strip() or f"{command[0]} failed",
+                "command": command,
+                "stdout": stdout,
+            }
+        artifacts.extend((stdout or {}).get("artifacts", []))
+        output = (stdout or {}).get("output")
+        if output:
+            artifacts.append(output)
+    return {
+        "status": "success",
+        "artifacts": sorted(dict.fromkeys(artifacts)),
+        "reason": None,
+        "symbols": normalized,
+    }
+
+
 def base_response(workflow: str, command: List[str], stdout: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     return {
         "status": "success",
@@ -161,6 +270,20 @@ def run_pre_market(args: argparse.Namespace) -> None:
             f"report/{stdout.get('report_date')}/pre-market.md",
             f"report/{stdout.get('report_date')}/pre-market-signals.json",
         ]
+        if getattr(args, "include_agent_research", False):
+            symbols = normalize_symbols(getattr(args, "agent_symbol", []) or symbols_from_agent_source(context_path))
+            research = run_agent_research_pipeline(
+                date=str(stdout.get("report_date")),
+                symbols=symbols,
+                context_path=context_path,
+            )
+            response["agent_research"] = research
+            if research["status"] == "failed":
+                response["status"] = "failed"
+                response["reason"] = research["reason"]
+                emit(response, 1)
+            response["artifacts"].extend(research.get("artifacts", []))
+            response["next_agent_inputs"].extend(research.get("artifacts", []))
     emit(response)
 
 
@@ -223,6 +346,21 @@ def run_post_market(args: argparse.Namespace) -> None:
             f"report/{stdout.get('snapshot_date')}/post-market.md",
             f"report/{stdout.get('snapshot_date')}/post-market-signals.json",
         ]
+        if getattr(args, "include_agent_research", False):
+            snapshot_path_text = stdout.get("snapshot_path")
+            symbols = normalize_symbols(getattr(args, "agent_symbol", []) or symbols_from_agent_source(snapshot_path_text))
+            research = run_agent_research_pipeline(
+                date=str(stdout.get("snapshot_date")),
+                symbols=symbols,
+                snapshot_path=snapshot_path_text,
+            )
+            response["agent_research"] = research
+            if research["status"] == "failed":
+                response["status"] = "failed"
+                response["reason"] = research["reason"]
+                emit(response, 1)
+            response["artifacts"].extend(research.get("artifacts", []))
+            response["next_agent_inputs"].extend(research.get("artifacts", []))
     emit(response)
 
 
@@ -1541,6 +1679,8 @@ def build_parser() -> argparse.ArgumentParser:
     pre.add_argument("--snapshot-date")
     pre.add_argument("--timezone", default="America/New_York")
     pre.add_argument("--skip-non-trading-day", action="store_true")
+    pre.add_argument("--include-agent-research", action="store_true")
+    pre.add_argument("--agent-symbol", action="append", default=[])
     pre.set_defaults(func=run_pre_market)
 
     post = sub.add_parser("post-market-review", help="Prepare post-market snapshot for agent review")
@@ -1561,6 +1701,8 @@ def build_parser() -> argparse.ArgumentParser:
     post.add_argument("--fallback-market-data-source", choices=["twelve", "longbridge", "none"], default="twelve")
     post.add_argument("--longbridge-cli")
     post.add_argument("--longbridge-default-market", default="US")
+    post.add_argument("--include-agent-research", action="store_true")
+    post.add_argument("--agent-symbol", action="append", default=[])
     post.set_defaults(func=run_post_market)
 
     monitor = sub.add_parser("monitor-brief", help="Run intraday monitor scan")

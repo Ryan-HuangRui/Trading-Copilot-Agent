@@ -527,6 +527,44 @@ class TradingCopilotWrapperTest(unittest.TestCase):
         payload = emit.call_args.args[0]
         self.assertIn("report/2026-05-26/pre-market-signals.json", payload["expected_agent_outputs"])
 
+    def test_pre_market_include_agent_research_injects_artifacts_at_wrapper_layer(self):
+        proc = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=json.dumps({"report_date": "2026-05-26", "context_path": "report/2026-05-26/pre-market-context.json"}),
+            stderr="",
+        )
+        research = {
+            "status": "success",
+            "artifacts": ["report/2026-05-26/agents/MU/decision.json"],
+            "symbols": ["MU"],
+        }
+        args = Namespace(
+            watchlist="config/watchlist.json",
+            interval="1day",
+            timezone="America/New_York",
+            date=None,
+            snapshot_date=None,
+            skip_non_trading_day=False,
+            include_agent_research=True,
+            agent_symbol=["MU"],
+        )
+
+        with patch.object(trading_copilot, "run_child", return_value=proc), patch.object(
+            trading_copilot, "run_agent_research_pipeline", return_value=research
+        ) as agent_research, patch.object(trading_copilot, "emit", side_effect=SystemExit) as emit:
+            with self.assertRaises(SystemExit):
+                trading_copilot.run_pre_market(args)
+
+        agent_research.assert_called_once_with(
+            date="2026-05-26",
+            symbols=["MU"],
+            context_path="report/2026-05-26/pre-market-context.json",
+        )
+        payload = emit.call_args.args[0]
+        self.assertIn("report/2026-05-26/agents/MU/decision.json", payload["next_agent_inputs"])
+        self.assertIn("agent_research", payload)
+
     def test_post_market_expected_outputs_include_signals_sidecar(self):
         proc = subprocess.CompletedProcess(
             args=[],
@@ -562,6 +600,55 @@ class TradingCopilotWrapperTest(unittest.TestCase):
 
         payload = emit.call_args.args[0]
         self.assertIn("report/2026-05-26/post-market-signals.json", payload["expected_agent_outputs"])
+
+    def test_post_market_include_agent_research_injects_artifacts_at_wrapper_layer(self):
+        proc = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=json.dumps({"snapshot_date": "2026-05-26", "snapshot_path": "report/2026-05-26/daily-snapshot.json"}),
+            stderr="",
+        )
+        research = {
+            "status": "success",
+            "artifacts": ["report/2026-05-26/agents/MU/decision.json"],
+            "symbols": ["MU"],
+        }
+        args = Namespace(
+            watchlist="config/watchlist.json",
+            interval="1day",
+            outputsize=200,
+            timezone="America/New_York",
+            date=None,
+            skip_non_trading_day=False,
+            sp500_screen=False,
+            sp500_top=100,
+            sp500_candidates=15,
+            sp500_source="ishares_ivv",
+            extra_symbol=[],
+            include_journal_signals=False,
+            include_position_symbols=False,
+            market_data_source="longbridge",
+            fallback_market_data_source="twelve",
+            longbridge_cli=None,
+            longbridge_default_market="US",
+            include_agent_research=True,
+            agent_symbol=["MU"],
+        )
+
+        with patch.object(trading_copilot, "run_child", return_value=proc), patch.object(
+            trading_copilot, "run_agent_research_pipeline", return_value=research
+        ) as agent_research, patch.object(trading_copilot, "emit", side_effect=SystemExit) as emit:
+            with self.assertRaises(SystemExit):
+                trading_copilot.run_post_market(args)
+
+        agent_research.assert_called_once_with(
+            date="2026-05-26",
+            symbols=["MU"],
+            snapshot_path="report/2026-05-26/daily-snapshot.json",
+        )
+        payload = emit.call_args.args[0]
+        self.assertIn("report/2026-05-26/agents/MU/decision.json", payload["next_agent_inputs"])
+        self.assertIn("agent_research", payload)
 
     def test_data_quality_wrapper_contract(self):
         proc = subprocess.CompletedProcess(

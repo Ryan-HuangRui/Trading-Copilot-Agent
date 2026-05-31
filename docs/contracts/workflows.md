@@ -45,6 +45,7 @@ Canonical command:
 
 ```bash
 python3 script/trading_copilot.py pre-market-plan --watchlist config/watchlist.json --skip-non-trading-day
+python3 script/trading_copilot.py pre-market-plan --watchlist config/watchlist.json --skip-non-trading-day --include-agent-research
 ```
 
 Inputs:
@@ -68,6 +69,8 @@ Skip behavior:
 
 - If `--skip-non-trading-day` is set and the report date is not a regular US trading day, return `status=skipped`.
 - If the required source snapshot is missing, return `status=failed` with the missing path in `reason`.
+- With `--include-agent-research`, only the wrapper layer runs the independent agent research scripts and appends their artifact paths to `next_agent_inputs`.
+- `prepare_daily_context.py` remains deterministic and must not import or call agent research modules.
 
 ## post-market-review
 
@@ -77,6 +80,7 @@ Canonical command:
 
 ```bash
 python3 script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day --include-journal-signals --include-position-symbols
+python3 script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day --include-agent-research
 ```
 
 Inputs:
@@ -103,6 +107,8 @@ Skip behavior:
 
 - If `--skip-non-trading-day` is set and the snapshot date is not a regular US trading day, return `status=skipped`.
 - Per-symbol fetch failures should be recorded in the snapshot `errors` array instead of aborting the whole snapshot when possible.
+- With `--include-agent-research`, only the wrapper layer runs the independent agent research scripts and appends their artifact paths to `next_agent_inputs`.
+- `prepare_market_snapshot.py` remains deterministic and must not import or call agent research modules.
 
 ## monitor-brief
 

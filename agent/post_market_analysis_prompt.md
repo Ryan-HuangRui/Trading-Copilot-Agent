@@ -41,6 +41,10 @@
 - 若 `knowledge/evolution/validated_lessons.md` 存在非空经验，可作为近期流程约束参考；它不能覆盖 `knowledge/refined/`
 - 若 snapshot 中存在 `candidate_universe`，它是盘后从 S&P 500 top 100 动态筛出的观察池；复盘时优先说明固定 watchlist 与动态候选中哪些值得明日继续观察
 - 动态候选只代表流动性/权重/量价结构筛选结果，不代表交易建议
+- 若 wrapper 的 `next_agent_inputs` 包含 `report/<SNAPSHOT_DATE>/agents/` 下的 agent research artifacts，只能把它们作为证据增强输入：
+  - 引用 `decision.json`、`bull_report.json`、`bear_report.json`、`risk_report.json` 的 evidence id、风险限制和 limitations
+  - 不得把 agent decision 当成订单输入
+  - agent decision 可以降低明日计划等级或触发人工 review，不能把不完整计划升级为 `conditional_executable`
 
 【输出文件（必须生成）】
 - report/<SNAPSHOT_DATE>/post-market.md
