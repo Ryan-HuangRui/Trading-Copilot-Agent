@@ -85,6 +85,7 @@ class AgentResearchContractTest(unittest.TestCase):
                 "2026-05-26",
                 "--symbol",
                 "MU",
+                "--placeholder",
                 "--output-dir",
                 str(output_dir),
             )

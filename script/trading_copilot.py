@@ -374,6 +374,29 @@ def run_validate_agent_reports(args: argparse.Namespace) -> None:
 
 
 def run_agent_decision(args: argparse.Namespace) -> None:
+    if not getattr(args, "placeholder", False):
+        command = [
+            "script/agent_decision.py",
+            "--date",
+            args.date,
+        ]
+        for symbol in args.symbol or []:
+            command.extend(["--symbol", symbol])
+        if args.reports_dir:
+            command.extend(["--reports-dir", args.reports_dir])
+        if args.output_dir:
+            command.extend(["--output-dir", args.output_dir])
+        if args.memory:
+            command.extend(["--memory", args.memory])
+        proc = run_child(command)
+        stdout = parse_json_output(proc.stdout)
+        if proc.returncode != 0:
+            emit(failed_response("agent-decision", command, proc), 1)
+        response = base_response("agent-decision", command, stdout)
+        response["date"] = args.date
+        response["artifacts"] = (stdout or {}).get("artifacts", [])
+        emit(response)
+
     symbols = normalize_symbols(args.symbol)
     out_dir = agent_output_dir(args.date, args.output_dir)
     artifacts: List[str] = []
@@ -423,6 +446,30 @@ def run_agent_decision(args: argparse.Namespace) -> None:
     response["date"] = args.date
     response["artifacts"] = artifacts
     response["symbols"] = symbols
+    emit(response)
+
+
+def run_validate_agent_decision(args: argparse.Namespace) -> None:
+    command = [
+        "script/validate_agent_decision.py",
+        "--date",
+        args.date,
+    ]
+    for symbol in args.symbol or []:
+        command.extend(["--symbol", symbol])
+    if args.decision_dir:
+        command.extend(["--decision-dir", args.decision_dir])
+    proc = run_child(command)
+    stdout = parse_json_output(proc.stdout)
+    if proc.returncode != 0:
+        response = failed_response("validate-agent-decision", command, proc)
+        response["date"] = args.date
+        response["validation"] = stdout
+        emit(response, 1)
+    response = base_response("validate-agent-decision", command, stdout)
+    response["date"] = args.date
+    response["validation"] = stdout
+    response["artifacts"] = (stdout or {}).get("checked_artifacts", [])
     emit(response)
 
 
@@ -1556,8 +1603,17 @@ def build_parser() -> argparse.ArgumentParser:
     agent_decision = sub.add_parser("agent-decision", help="Write a Phase 0 placeholder agent decision")
     agent_decision.add_argument("--date", required=True)
     agent_decision.add_argument("--symbol", action="append", required=True)
+    agent_decision.add_argument("--reports-dir")
     agent_decision.add_argument("--output-dir")
+    agent_decision.add_argument("--memory")
+    agent_decision.add_argument("--placeholder", action="store_true", help="Write a Phase 0 placeholder decision instead of role synthesis")
     agent_decision.set_defaults(func=run_agent_decision)
+
+    validate_agent_decision = sub.add_parser("validate-agent-decision", help="Validate agent role reports and decisions")
+    validate_agent_decision.add_argument("--date", required=True)
+    validate_agent_decision.add_argument("--symbol", action="append", required=True)
+    validate_agent_decision.add_argument("--decision-dir")
+    validate_agent_decision.set_defaults(func=run_validate_agent_decision)
 
     agent_memory = sub.add_parser("agent-memory-review", help="Read-only Phase 0 memory review skeleton")
     agent_memory.add_argument("--date")

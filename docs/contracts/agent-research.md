@@ -149,6 +149,39 @@ Validation rules:
 - Missing trigger, invalidation, risk, TP1, or skip conditions must downgrade to `watch_only` or `no_trade`.
 - Memory references can lower confidence or trigger review only; they cannot raise execution grade.
 
+## Phase 3 Role Reasoning
+
+Phase 3 adds deterministic role artifacts without making LangGraph a hard dependency:
+
+```bash
+python3 script/trading_copilot.py agent-decision --date <DATE> --symbol MU
+python3 script/trading_copilot.py validate-agent-decision --date <DATE> --symbol MU
+```
+
+Direct script entrypoints are also available:
+
+```bash
+python3 script/agent_decision.py --date <DATE> --symbol MU
+python3 script/validate_agent_decision.py --date <DATE> --symbol MU
+```
+
+Expected role outputs:
+
+- `bull_report.json`: supporting and opposing evidence ids for the upside scenario.
+- `bear_report.json`: supporting and opposing evidence ids for the downside or no-trade scenario.
+- `risk_report.json`: invalidation, liquidity/data limits, portfolio constraints, and risk summary.
+- `decision.json`: final structured decision using existing signal semantics.
+- `decision.md`: human-readable decision summary.
+
+Validation rules:
+
+- Bull and Bear reports must include both supporting and opposing evidence ids.
+- Risk Manager output must include invalidation, data/liquidity limits, portfolio constraints, and risk summary.
+- `decision.json` must use `plan_type=trade_plan/watch_only/no_trade` and `execution_status=conditional_executable/waiting_trigger/watch_only/no_trade`.
+- `experimental=true` or `not_for_execution=true` decisions fail validation.
+- `conditional_executable` decisions require complete Trade Plan Card fields before they can be converted downstream.
+- Broker/order command fields and command text are forbidden.
+
 ## Phase 0 Wrapper Commands
 
 ```bash

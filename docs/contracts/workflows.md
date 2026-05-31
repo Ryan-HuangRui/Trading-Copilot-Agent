@@ -214,9 +214,28 @@ Output:
 
 Required behavior:
 
-- Phase 0 `decision.json` is a placeholder with `plan_type=no_trade`, `execution_status=no_trade`, `experimental=true`, and `not_for_execution=true`.
+- Use `--placeholder` only for Phase 0 contract checks. Placeholder `decision.json` uses `plan_type=no_trade`, `execution_status=no_trade`, `experimental=true`, and `not_for_execution=true`.
+- Without `--placeholder`, generate Bull Researcher, Bear Researcher, Risk Manager, and Portfolio Manager artifacts from validated agent reports.
 - The decision artifact must not include `order`, `broker_command`, `submit_order`, `cancel_order`, or `replace_order` fields.
 - Later validation must reject placeholder decisions before any downstream use.
+
+## validate-agent-decision
+
+Purpose: validate role reports and final agent decisions before they are injected into daily workflows.
+
+Canonical command:
+
+```bash
+python3 script/trading_copilot.py validate-agent-decision --date <DATE> --symbol MU
+```
+
+Required behavior:
+
+- Reject placeholder decisions with `experimental=true` or `not_for_execution=true`.
+- Require Bull and Bear reports to cite both supporting and opposing evidence.
+- Require Risk Manager invalidation, data/liquidity limits, portfolio constraints, and risk summary.
+- Enforce existing `plan_type` and `execution_status` enums.
+- Reject incomplete `conditional_executable` trade plans and broker/order command fields.
 
 ## agent-memory-review
 
