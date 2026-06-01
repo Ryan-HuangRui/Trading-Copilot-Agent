@@ -8,6 +8,7 @@ from typing import Any
 
 
 REPORT_TYPES = ("market", "technicals", "fundamentals", "news", "sentiment")
+REQUIRED_EVIDENCE_REPORT_TYPES = {"market", "technicals"}
 REQUIRED_REPORT_FIELDS = {
     "schema_version",
     "report_type",
@@ -133,7 +134,10 @@ def validate(args: argparse.Namespace) -> dict[str, Any]:
             checked += 1
             errors.extend(validate_report(path, payload, args.date, symbol, report_type))
             if not payload.get("evidence"):
-                warnings.append(f"{path}: evidence is empty")
+                if report_type in REQUIRED_EVIDENCE_REPORT_TYPES:
+                    errors.append(f"{path}: evidence is required for {report_type} reports")
+                else:
+                    warnings.append(f"{path}: evidence is empty")
     return {
         "status": "fail" if errors else "pass",
         "date": args.date,

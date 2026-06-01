@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 from datetime import datetime, timezone
+import hashlib
 import json
 import subprocess
 import sys
@@ -73,6 +74,59 @@ def resolve_repo_path(path: str) -> Path:
 def write_json(path: Path, payload: Dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def load_json(path: Path) -> Dict[str, Any]:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return data if isinstance(data, dict) else {}
+
+
+def hash_file(path: Path) -> str | None:
+    if not path.exists() or not path.is_file():
+        return None
+    digest = hashlib.sha256()
+    digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
+def hash_tree(path: Path) -> str | None:
+    if not path.exists():
+        return None
+    digest = hashlib.sha256()
+    for child in sorted(item for item in path.rglob("*") if item.is_file()):
+        digest.update(str(child.relative_to(path)).encode("utf-8"))
+        digest.update(child.read_bytes())
+    return digest.hexdigest()
+
+
+def git_output(*args: str) -> str | None:
+    proc = subprocess.run(["git", *args], cwd=ROOT, text=True, capture_output=True, check=False)
+    if proc.returncode != 0:
+        return None
+    return proc.stdout.strip()
+
+
+def git_dirty_files() -> List[str]:
+    output = git_output("status", "--short")
+    if not output:
+        return []
+    return [line for line in output.splitlines() if line.strip()]
+
+
+def manifest_path(date: str, session: str, explicit: str | None = None) -> Path:
+    if explicit:
+        return resolve_repo_path(explicit)
+    return ROOT / "report" / date / f"{session}-run-manifest.json"
+
+
+def relative_artifact(path_text: str) -> str:
+    path = Path(path_text)
+    if not path.is_absolute():
+        return path_text
+    try:
+        return str(path.relative_to(ROOT))
+    except ValueError:
+        return str(path)
 
 
 def agent_output_dir(date: str, explicit_dir: str | None) -> Path:
@@ -930,6 +984,8 @@ def run_feishu_summary(args: argparse.Namespace) -> None:
         command.extend(["--position-review", args.position_review])
     if args.plan_review:
         command.extend(["--plan-review", args.plan_review])
+    if getattr(args, "run_manifest", None):
+        command.extend(["--run-manifest", args.run_manifest])
     if args.output:
         command.extend(["--output", args.output])
 
@@ -942,6 +998,90 @@ def run_feishu_summary(args: argparse.Namespace) -> None:
     response["date"] = args.date
     response["artifacts"] = [stdout["output"]] if stdout and stdout.get("output") else []
     response["summary"] = (stdout or {}).get("summary")
+    emit(response)
+
+
+def run_focus_selection(args: argparse.Namespace) -> None:
+    command = [
+        "script/focus_selection.py",
+        "--date",
+        args.date,
+        "--session",
+        args.session,
+    ]
+    if args.signals:
+        command.extend(["--signals", args.signals])
+    if args.context:
+        command.extend(["--context", args.context])
+    if args.snapshot:
+        command.extend(["--snapshot", args.snapshot])
+    if args.agents_dir:
+        command.extend(["--agents-dir", args.agents_dir])
+    if args.output:
+        command.extend(["--output", args.output])
+
+    proc = run_child(command)
+    stdout = parse_json_output(proc.stdout)
+    if proc.returncode != 0:
+        emit(failed_response("focus-selection", command, proc), 1)
+
+    response = base_response("focus-selection", command, stdout)
+    response["date"] = args.date
+    response["artifacts"] = [stdout["output"]] if stdout and stdout.get("output") else []
+    response["selected"] = (stdout or {}).get("selected")
+    emit(response)
+
+
+def run_inspect_pre_market_context(args: argparse.Namespace) -> None:
+    command = ["script/inspect_pre_market_context.py", "--date", args.date]
+    if args.context:
+        command.extend(["--context", args.context])
+    if args.output:
+        command.extend(["--output", args.output])
+
+    proc = run_child(command)
+    stdout = parse_json_output(proc.stdout)
+    if proc.returncode != 0:
+        emit(failed_response("inspect-pre-market-context", command, proc), 1)
+
+    response = base_response("inspect-pre-market-context", command, stdout)
+    response["date"] = args.date
+    response["artifacts"] = [stdout["output"]] if stdout and stdout.get("output") else []
+    response["summary"] = stdout
+    emit(response)
+
+
+def run_llm_generation_manifest(args: argparse.Namespace) -> None:
+    command = [
+        "script/llm_generation_manifest.py",
+        "--date",
+        args.date,
+        "--session",
+        args.session,
+        "--model",
+        args.model,
+        "--runner",
+        args.runner,
+    ]
+    if args.prompt:
+        command.extend(["--prompt", args.prompt])
+    for item in args.input or []:
+        command.extend(["--input", item])
+    for item in args.generated_output or []:
+        command.extend(["--generated-output", item])
+    if args.notes:
+        command.extend(["--notes", args.notes])
+    if args.output:
+        command.extend(["--output", args.output])
+
+    proc = run_child(command)
+    stdout = parse_json_output(proc.stdout)
+    if proc.returncode != 0:
+        emit(failed_response("llm-generation-manifest", command, proc), 1)
+
+    response = base_response("llm-generation-manifest", command, stdout)
+    response["date"] = args.date
+    response["artifacts"] = [stdout["output"]] if stdout and stdout.get("output") else []
     emit(response)
 
 
@@ -977,6 +1117,531 @@ def run_data_quality(args: argparse.Namespace) -> None:
     response["quality_status"] = (stdout or {}).get("quality_status")
     response["focused_fallback_symbols"] = (stdout or {}).get("focused_fallback_symbols", [])
     response["missing_focused_symbols"] = (stdout or {}).get("missing_focused_symbols", [])
+    emit(response)
+
+
+def symbols_from_signals(signals_path: Path) -> List[str]:
+    if not signals_path.exists():
+        return []
+    payload = load_json(signals_path)
+    symbols = []
+    for item in payload.get("signals", []):
+        if isinstance(item, dict) and item.get("symbol") and item.get("status") != "no_trade":
+            symbols.append(str(item["symbol"]))
+    return normalize_symbols(symbols)
+
+
+def run_manifest_step(
+    *,
+    manifest: Dict[str, Any],
+    name: str,
+    command: List[str],
+    allow_failure: bool = False,
+) -> tuple[bool, Dict[str, Any]]:
+    started_at = now_utc()
+    proc = run_child(command)
+    stdout = parse_json_output(proc.stdout)
+    finished_at = now_utc()
+    status = "success" if proc.returncode == 0 else "failed"
+    if isinstance(stdout, dict):
+        if stdout.get("status") in {"failed", "fail"}:
+            status = "failed"
+        elif stdout.get("status") in {"success", "pass"} and proc.returncode == 0:
+            status = "success"
+    step = {
+        "name": name,
+        "command": [sys.executable, *command],
+        "started_at": started_at,
+        "finished_at": finished_at,
+        "returncode": proc.returncode,
+        "status": status,
+        "artifacts": [
+            relative_artifact(item)
+            for item in sorted(
+                dict.fromkeys(
+                    [
+                        *((stdout or {}).get("artifacts", []) or []),
+                        *([stdout.get("output")] if isinstance(stdout, dict) and stdout.get("output") else []),
+                    ]
+                )
+            )
+        ],
+        "stdout": stdout,
+        "stderr": proc.stderr.strip(),
+        "allow_failure": allow_failure,
+    }
+    manifest.setdefault("steps", []).append(step)
+    return (status == "success" or allow_failure), step
+
+
+def manifest_base(date: str, session: str, workflow: str, args: argparse.Namespace) -> Dict[str, Any]:
+    context_path = ROOT / "report" / date / "pre-market-context.json"
+    signals_path = resolve_repo_path(args.signals) if getattr(args, "signals", None) else ROOT / "report" / date / f"{session}-signals.json"
+    snapshot_path = ROOT / "report" / date / "daily-snapshot.json"
+    context = load_json(context_path) if context_path.exists() else {}
+    llm_manifest = ROOT / "report" / date / f"{session}-llm-generation.json"
+    return {
+        "schema_version": 1,
+        "workflow": workflow,
+        "session": session,
+        "date": date,
+        "generated_at": now_utc(),
+        "repo_root": str(ROOT),
+        "git_sha": git_output("rev-parse", "HEAD"),
+        "branch": git_output("branch", "--show-current"),
+        "dirty_files": git_dirty_files(),
+        "hashes": {
+            "watchlist": hash_file(resolve_repo_path(getattr(args, "watchlist", "config/watchlist.json"))),
+            "daily_prompt": hash_file(ROOT / "agent" / "daily_analysis_prompt.md"),
+            "post_market_prompt": hash_file(ROOT / "agent" / "post_market_analysis_prompt.md"),
+            "knowledge_refined": hash_tree(ROOT / "knowledge" / "refined"),
+            "signals": hash_file(signals_path),
+            "llm_generation": hash_file(llm_manifest),
+        },
+        "context": {
+            "path": relative_artifact(str(context_path)),
+            "source_snapshot_date": context.get("source_snapshot_date"),
+            "source_snapshot_path": context.get("source_snapshot_path"),
+            "snapshot_path": relative_artifact(str(snapshot_path)),
+        },
+        "artifacts": [],
+        "steps": [],
+    }
+
+
+def write_manifest(manifest: Dict[str, Any], path: Path) -> None:
+    artifacts = []
+    for step in manifest.get("steps", []):
+        if isinstance(step, dict):
+            artifacts.extend(step.get("artifacts", []) or [])
+    manifest["artifacts"] = sorted(dict.fromkeys(artifacts))
+    write_json(path, manifest)
+
+
+def run_pre_market_deliver(args: argparse.Namespace) -> None:
+    date = args.date
+    session = "pre-market"
+    signals_path = resolve_repo_path(args.signals) if args.signals else ROOT / "report" / date / "pre-market-signals.json"
+    manifest_file = manifest_path(date, session, args.manifest_output)
+    manifest = manifest_base(date, session, "pre-market-deliver", args)
+    focus = symbols_from_signals(signals_path)
+    manifest["focused_symbols"] = focus
+
+    if not signals_path.exists():
+        manifest["status"] = "failed"
+        manifest["reason"] = f"missing signals sidecar: {signals_path}"
+        write_manifest(manifest, manifest_file)
+        emit(
+            {
+                "status": "failed",
+                "workflow": "pre-market-deliver",
+                "date": date,
+                "artifacts": [str(manifest_file)],
+                "skipped": False,
+                "reason": manifest["reason"],
+            },
+            1,
+        )
+
+    if focus and not args.skip_agent_validation:
+        agents_dir = ROOT / "report" / date / "agents"
+        if any((agents_dir / symbol / "decision.json").exists() for symbol in focus):
+            validate_reports = ["script/validate_agent_reports.py", "--date", date]
+            validate_decision = ["script/validate_agent_decision.py", "--date", date]
+            for symbol in focus:
+                validate_reports.extend(["--symbol", symbol])
+                validate_decision.extend(["--symbol", symbol])
+            ok, _ = run_manifest_step(manifest=manifest, name="validate-agent-reports", command=validate_reports)
+            if not ok:
+                manifest["status"] = "failed"
+                manifest["reason"] = "validate-agent-reports failed"
+                write_manifest(manifest, manifest_file)
+                emit(manifest | {"artifacts": [str(manifest_file)]}, 1)
+            ok, _ = run_manifest_step(manifest=manifest, name="validate-agent-decision", command=validate_decision)
+            if not ok:
+                manifest["status"] = "failed"
+                manifest["reason"] = "validate-agent-decision failed"
+                write_manifest(manifest, manifest_file)
+                emit(manifest | {"artifacts": [str(manifest_file)]}, 1)
+
+    validate_report = ["script/validate_report.py", "--date", date, "--session", session]
+    validate_plan = ["script/validate_trade_plan.py", "--date", date, "--session", session]
+    if args.report:
+        validate_report.extend(["--report", args.report])
+    if args.signals:
+        validate_report.extend(["--signals", args.signals])
+        validate_plan.extend(["--signals", args.signals])
+    for name, command in (("validate-report", validate_report), ("validate-trade-plan", validate_plan)):
+        ok, _ = run_manifest_step(manifest=manifest, name=name, command=command)
+        if not ok:
+            manifest["status"] = "failed"
+            manifest["reason"] = f"{name} failed"
+            write_manifest(manifest, manifest_file)
+            emit(manifest | {"artifacts": [str(manifest_file)]}, 1)
+
+    data_quality = ["script/data_quality.py", "--date", date, "--session", session]
+    ok, dq_step = run_manifest_step(manifest=manifest, name="data-quality", command=data_quality)
+    quality_status = ((dq_step.get("stdout") or {}).get("quality_status") if isinstance(dq_step.get("stdout"), dict) else None)
+    if not ok or quality_status == "fail":
+        manifest["status"] = "failed"
+        manifest["reason"] = "data-quality failed"
+        write_manifest(manifest, manifest_file)
+        emit(manifest | {"artifacts": [str(manifest_file)]}, 1)
+
+    focus_selection = ["script/focus_selection.py", "--date", date, "--session", session]
+    if args.signals:
+        focus_selection.extend(["--signals", args.signals])
+    ok, focus_step = run_manifest_step(manifest=manifest, name="focus-selection", command=focus_selection)
+    if not ok:
+        manifest["status"] = "failed"
+        manifest["reason"] = "focus-selection failed"
+        write_manifest(manifest, manifest_file)
+        emit(manifest | {"artifacts": [str(manifest_file)]}, 1)
+
+    extract = [
+        "script/extract_report_signals.py",
+        "--date",
+        date,
+        "--session",
+        session,
+        "--journal-dir",
+        args.journal_dir,
+        "--require-validation",
+    ]
+    if args.signals:
+        extract.extend(["--signals", args.signals])
+    if args.report:
+        extract.extend(["--report", args.report])
+    if not args.no_append_journal:
+        extract.append("--append")
+    ok, _ = run_manifest_step(manifest=manifest, name="extract-report-signals", command=extract)
+    if not ok:
+        manifest["status"] = "failed"
+        manifest["reason"] = "extract-report-signals failed"
+        write_manifest(manifest, manifest_file)
+        emit(manifest | {"artifacts": [str(manifest_file)]}, 1)
+
+    account_snapshot_path = args.account_snapshot
+    if not args.skip_account:
+        account = ["script/longbridge_account_snapshot.py"]
+        if args.date:
+            account.extend(["--date", date])
+        if args.longbridge_cli:
+            account.extend(["--longbridge-cli", args.longbridge_cli])
+        ok, account_step = run_manifest_step(manifest=manifest, name="account-snapshot", command=account, allow_failure=True)
+        stdout = account_step.get("stdout") if isinstance(account_step.get("stdout"), dict) else {}
+        if isinstance(stdout, dict):
+            account_snapshot_path = stdout.get("output") or account_snapshot_path
+        position = ["script/position_review.py", "--date", date, "--append", "--journal-dir", args.journal_dir]
+        if account_snapshot_path:
+            position.extend(["--account-snapshot", account_snapshot_path])
+        if args.signals:
+            position.extend(["--signals", args.signals])
+        position.extend(["--session", session])
+        if args.position_config:
+            position.extend(["--config", args.position_config])
+        run_manifest_step(manifest=manifest, name="position-review", command=position, allow_failure=True)
+
+    if args.sync_longbridge:
+        sync = [
+            "script/sync_longbridge_watchlist.py",
+            "--session",
+            session,
+            "--date",
+            date,
+            "--group-name",
+            args.group_name,
+            "--sync-mode",
+            args.sync_mode,
+            "--max-symbols",
+            str(args.max_symbols),
+            "--method",
+            args.sync_method,
+            "--no-create",
+        ]
+        if args.signals:
+            sync.extend(["--signals", args.signals])
+        if args.report:
+            sync.extend(["--report", args.report])
+        if args.execute_sync:
+            sync.append("--execute")
+        if args.longbridge_cli:
+            sync.extend(["--longbridge-cli", args.longbridge_cli])
+        ok, _ = run_manifest_step(manifest=manifest, name="sync-longbridge-watchlist", command=sync)
+        if not ok:
+            manifest["status"] = "failed"
+            manifest["reason"] = "sync-longbridge-watchlist failed"
+            write_manifest(manifest, manifest_file)
+            emit(manifest | {"artifacts": [str(manifest_file)]}, 1)
+
+    manifest["status"] = "success"
+    manifest["reason"] = None
+    write_manifest(manifest, manifest_file)
+
+    feishu = ["script/feishu_summary.py", "--date", date, "--session", session, "--run-manifest", str(manifest_file), "--learning-dir", args.learning_dir]
+    if args.signals:
+        feishu.extend(["--signals", args.signals])
+    if args.summary_output:
+        feishu.extend(["--output", args.summary_output])
+    ok, summary_step = run_manifest_step(manifest=manifest, name="feishu-summary", command=feishu)
+    if not ok:
+        manifest["status"] = "failed"
+        manifest["reason"] = "feishu-summary failed"
+        write_manifest(manifest, manifest_file)
+        emit(manifest | {"artifacts": [str(manifest_file)]}, 1)
+
+    if args.delivery_guard:
+        guard = ["script/report_delivery_guard.py", "--kind", args.delivery_kind, "--date", date]
+        if args.mark_sent:
+            guard.append("--mark-sent")
+        run_manifest_step(manifest=manifest, name="delivery-guard", command=guard, allow_failure=True)
+
+    manifest["status"] = "success"
+    manifest["reason"] = None
+    write_manifest(manifest, manifest_file)
+    response = base_response("pre-market-deliver", ["pre-market-deliver"], manifest)
+    response["date"] = date
+    response["artifacts"] = [str(manifest_file)]
+    stdout = summary_step.get("stdout") if isinstance(summary_step.get("stdout"), dict) else {}
+    if isinstance(stdout, dict) and stdout.get("output"):
+        response["artifacts"].append(stdout["output"])
+    response["manifest"] = str(manifest_file)
+    response["focused_symbols"] = focus
+    response["quality_status"] = quality_status
+    stdout = focus_step.get("stdout") if isinstance(focus_step.get("stdout"), dict) else {}
+    response["focus_selection"] = stdout.get("output") if isinstance(stdout, dict) else None
+    emit(response)
+
+
+def run_post_market_deliver(args: argparse.Namespace) -> None:
+    date = args.date
+    session = "post-market"
+    signals_path = resolve_repo_path(args.signals) if args.signals else ROOT / "report" / date / "post-market-signals.json"
+    manifest_file = manifest_path(date, session, args.manifest_output)
+    manifest = manifest_base(date, session, "post-market-deliver", args)
+    focus = symbols_from_signals(signals_path)
+    manifest["focused_symbols"] = focus
+
+    if not signals_path.exists():
+        manifest["status"] = "failed"
+        manifest["reason"] = f"missing signals sidecar: {signals_path}"
+        write_manifest(manifest, manifest_file)
+        emit(
+            {
+                "status": "failed",
+                "workflow": "post-market-deliver",
+                "date": date,
+                "artifacts": [str(manifest_file)],
+                "skipped": False,
+                "reason": manifest["reason"],
+            },
+            1,
+        )
+
+    if focus and not args.skip_agent_validation:
+        agents_dir = ROOT / "report" / date / "agents"
+        if any((agents_dir / symbol / "decision.json").exists() for symbol in focus):
+            validate_reports = ["script/validate_agent_reports.py", "--date", date]
+            validate_decision = ["script/validate_agent_decision.py", "--date", date]
+            for symbol in focus:
+                validate_reports.extend(["--symbol", symbol])
+                validate_decision.extend(["--symbol", symbol])
+            ok, _ = run_manifest_step(manifest=manifest, name="validate-agent-reports", command=validate_reports)
+            if not ok:
+                manifest["status"] = "failed"
+                manifest["reason"] = "validate-agent-reports failed"
+                write_manifest(manifest, manifest_file)
+                emit(manifest | {"artifacts": [str(manifest_file)]}, 1)
+            ok, _ = run_manifest_step(manifest=manifest, name="validate-agent-decision", command=validate_decision)
+            if not ok:
+                manifest["status"] = "failed"
+                manifest["reason"] = "validate-agent-decision failed"
+                write_manifest(manifest, manifest_file)
+                emit(manifest | {"artifacts": [str(manifest_file)]}, 1)
+
+    validate_report = ["script/validate_report.py", "--date", date, "--session", session]
+    validate_plan = ["script/validate_trade_plan.py", "--date", date, "--session", session]
+    if args.report:
+        validate_report.extend(["--report", args.report])
+    if args.signals:
+        validate_report.extend(["--signals", args.signals])
+        validate_plan.extend(["--signals", args.signals])
+    for name, command in (("validate-report", validate_report), ("validate-trade-plan", validate_plan)):
+        ok, _ = run_manifest_step(manifest=manifest, name=name, command=command)
+        if not ok:
+            manifest["status"] = "failed"
+            manifest["reason"] = f"{name} failed"
+            write_manifest(manifest, manifest_file)
+            emit(manifest | {"artifacts": [str(manifest_file)]}, 1)
+
+    data_quality = ["script/data_quality.py", "--date", date, "--session", session]
+    ok, dq_step = run_manifest_step(manifest=manifest, name="data-quality", command=data_quality)
+    quality_status = ((dq_step.get("stdout") or {}).get("quality_status") if isinstance(dq_step.get("stdout"), dict) else None)
+    if not ok or quality_status == "fail":
+        manifest["status"] = "failed"
+        manifest["reason"] = "data-quality failed"
+        write_manifest(manifest, manifest_file)
+        emit(manifest | {"artifacts": [str(manifest_file)]}, 1)
+
+    if not args.skip_outcomes:
+        outcomes = ["script/journal_review.py", "--date", date, "--journal-dir", args.journal_dir]
+        if args.snapshot:
+            outcomes.extend(["--snapshot", args.snapshot])
+        if args.append_outcomes:
+            outcomes.append("--append")
+        ok, _ = run_manifest_step(manifest=manifest, name="backfill-signal-outcomes", command=outcomes)
+        if not ok:
+            manifest["status"] = "failed"
+            manifest["reason"] = "backfill-signal-outcomes failed"
+            write_manifest(manifest, manifest_file)
+            emit(manifest | {"artifacts": [str(manifest_file)]}, 1)
+
+    focus_selection = ["script/focus_selection.py", "--date", date, "--session", session]
+    if args.signals:
+        focus_selection.extend(["--signals", args.signals])
+    if args.snapshot:
+        focus_selection.extend(["--snapshot", args.snapshot])
+    ok, focus_step = run_manifest_step(manifest=manifest, name="focus-selection", command=focus_selection)
+    if not ok:
+        manifest["status"] = "failed"
+        manifest["reason"] = "focus-selection failed"
+        write_manifest(manifest, manifest_file)
+        emit(manifest | {"artifacts": [str(manifest_file)]}, 1)
+
+    extract = [
+        "script/extract_report_signals.py",
+        "--date",
+        date,
+        "--session",
+        session,
+        "--journal-dir",
+        args.journal_dir,
+        "--require-validation",
+    ]
+    if args.signals:
+        extract.extend(["--signals", args.signals])
+    if args.report:
+        extract.extend(["--report", args.report])
+    if not args.no_append_journal:
+        extract.append("--append")
+    ok, _ = run_manifest_step(manifest=manifest, name="extract-report-signals", command=extract)
+    if not ok:
+        manifest["status"] = "failed"
+        manifest["reason"] = "extract-report-signals failed"
+        write_manifest(manifest, manifest_file)
+        emit(manifest | {"artifacts": [str(manifest_file)]}, 1)
+
+    account_snapshot_path = args.account_snapshot
+    if not args.skip_account:
+        account = ["script/longbridge_account_snapshot.py"]
+        account.extend(["--date", date])
+        if args.longbridge_cli:
+            account.extend(["--longbridge-cli", args.longbridge_cli])
+        ok, account_step = run_manifest_step(manifest=manifest, name="account-snapshot", command=account, allow_failure=True)
+        stdout = account_step.get("stdout") if isinstance(account_step.get("stdout"), dict) else {}
+        if isinstance(stdout, dict):
+            account_snapshot_path = stdout.get("output") or account_snapshot_path
+        position = ["script/position_review.py", "--date", date, "--append", "--journal-dir", args.journal_dir, "--session", session]
+        if account_snapshot_path:
+            position.extend(["--account-snapshot", account_snapshot_path])
+        if args.signals:
+            position.extend(["--signals", args.signals])
+        if args.position_config:
+            position.extend(["--config", args.position_config])
+        run_manifest_step(manifest=manifest, name="position-review", command=position, allow_failure=True)
+
+    if not args.skip_plan_review:
+        plan_review = ["script/plan_review.py", "--date", date, "--journal-dir", args.journal_dir, "--learning-dir", args.learning_dir]
+        if args.append_lessons:
+            plan_review.append("--append-lessons")
+        run_manifest_step(manifest=manifest, name="plan-review", command=plan_review, allow_failure=True)
+
+    if not args.skip_learning_review:
+        learning_review = [
+            "script/learning_review.py",
+            "--lookback-days",
+            str(args.learning_lookback_days),
+            "--learning-dir",
+            args.learning_dir,
+            "--journal-dir",
+            args.journal_dir,
+        ]
+        run_manifest_step(manifest=manifest, name="learning-review", command=learning_review, allow_failure=True)
+
+    if not args.skip_self_review:
+        self_review = ["script/daily_self_review.py", "--date", date, "--journal-dir", args.journal_dir]
+        if args.append_self_review:
+            self_review.append("--append")
+        run_manifest_step(manifest=manifest, name="daily-self-review", command=self_review, allow_failure=True)
+
+    if args.sync_longbridge:
+        sync = [
+            "script/sync_longbridge_watchlist.py",
+            "--session",
+            session,
+            "--date",
+            date,
+            "--group-name",
+            args.group_name,
+            "--sync-mode",
+            args.sync_mode,
+            "--max-symbols",
+            str(args.max_symbols),
+            "--method",
+            args.sync_method,
+            "--no-create",
+        ]
+        if args.signals:
+            sync.extend(["--signals", args.signals])
+        if args.report:
+            sync.extend(["--report", args.report])
+        if args.execute_sync:
+            sync.append("--execute")
+        if args.longbridge_cli:
+            sync.extend(["--longbridge-cli", args.longbridge_cli])
+        ok, _ = run_manifest_step(manifest=manifest, name="sync-longbridge-watchlist", command=sync)
+        if not ok:
+            manifest["status"] = "failed"
+            manifest["reason"] = "sync-longbridge-watchlist failed"
+            write_manifest(manifest, manifest_file)
+            emit(manifest | {"artifacts": [str(manifest_file)]}, 1)
+
+    manifest["status"] = "success"
+    manifest["reason"] = None
+    write_manifest(manifest, manifest_file)
+
+    feishu = ["script/feishu_summary.py", "--date", date, "--session", session, "--run-manifest", str(manifest_file), "--learning-dir", args.learning_dir]
+    if args.signals:
+        feishu.extend(["--signals", args.signals])
+    if args.summary_output:
+        feishu.extend(["--output", args.summary_output])
+    ok, summary_step = run_manifest_step(manifest=manifest, name="feishu-summary", command=feishu)
+    if not ok:
+        manifest["status"] = "failed"
+        manifest["reason"] = "feishu-summary failed"
+        write_manifest(manifest, manifest_file)
+        emit(manifest | {"artifacts": [str(manifest_file)]}, 1)
+
+    if args.delivery_guard:
+        guard = ["script/report_delivery_guard.py", "--kind", "post-market", "--date", date]
+        if args.mark_sent:
+            guard.append("--mark-sent")
+        run_manifest_step(manifest=manifest, name="delivery-guard", command=guard, allow_failure=True)
+
+    manifest["status"] = "success"
+    manifest["reason"] = None
+    write_manifest(manifest, manifest_file)
+    response = base_response("post-market-deliver", ["post-market-deliver"], manifest)
+    response["date"] = date
+    response["artifacts"] = [str(manifest_file)]
+    stdout = summary_step.get("stdout") if isinstance(summary_step.get("stdout"), dict) else {}
+    if isinstance(stdout, dict) and stdout.get("output"):
+        response["artifacts"].append(stdout["output"])
+    response["manifest"] = str(manifest_file)
+    response["focused_symbols"] = focus
+    response["quality_status"] = quality_status
+    stdout = focus_step.get("stdout") if isinstance(focus_step.get("stdout"), dict) else {}
+    response["focus_selection"] = stdout.get("output") if isinstance(stdout, dict) else None
     emit(response)
 
 
@@ -1730,6 +2395,66 @@ def build_parser() -> argparse.ArgumentParser:
     pre.add_argument("--agent-symbol", action="append", default=[])
     pre.set_defaults(func=run_pre_market)
 
+    pre_deliver = sub.add_parser("pre-market-deliver", help="Validate and deliver an existing pre-market report bundle")
+    pre_deliver.add_argument("--date", required=True)
+    pre_deliver.add_argument("--watchlist", default="config/watchlist.json")
+    pre_deliver.add_argument("--report")
+    pre_deliver.add_argument("--signals")
+    pre_deliver.add_argument("--skip-agent-validation", action="store_true")
+    pre_deliver.add_argument("--no-append-journal", action="store_true")
+    pre_deliver.add_argument("--journal-dir", default="runtime/journal")
+    pre_deliver.add_argument("--skip-account", action="store_true")
+    pre_deliver.add_argument("--account-snapshot")
+    pre_deliver.add_argument("--position-config", default="config/position_review.json")
+    pre_deliver.add_argument("--sync-longbridge", action="store_true")
+    pre_deliver.add_argument("--execute-sync", action="store_true")
+    pre_deliver.add_argument("--group-name", default="今日关注")
+    pre_deliver.add_argument("--sync-mode", choices=["add", "replace"], default="add")
+    pre_deliver.add_argument("--sync-method", choices=["auto", "cli", "sdk"], default="auto")
+    pre_deliver.add_argument("--max-symbols", type=int, default=3)
+    pre_deliver.add_argument("--longbridge-cli")
+    pre_deliver.add_argument("--learning-dir", default="runtime/learning")
+    pre_deliver.add_argument("--manifest-output")
+    pre_deliver.add_argument("--summary-output")
+    pre_deliver.add_argument("--delivery-guard", action="store_true")
+    pre_deliver.add_argument("--delivery-kind", choices=["pre-market", "exec-brief", "post-market"], default="exec-brief")
+    pre_deliver.add_argument("--mark-sent", action="store_true")
+    pre_deliver.set_defaults(func=run_pre_market_deliver)
+
+    post_deliver = sub.add_parser("post-market-deliver", help="Validate and deliver an existing post-market report bundle")
+    post_deliver.add_argument("--date", required=True)
+    post_deliver.add_argument("--watchlist", default="config/watchlist.json")
+    post_deliver.add_argument("--report")
+    post_deliver.add_argument("--signals")
+    post_deliver.add_argument("--snapshot")
+    post_deliver.add_argument("--skip-agent-validation", action="store_true")
+    post_deliver.add_argument("--skip-outcomes", action="store_true")
+    post_deliver.add_argument("--append-outcomes", action="store_true")
+    post_deliver.add_argument("--no-append-journal", action="store_true")
+    post_deliver.add_argument("--journal-dir", default="runtime/journal")
+    post_deliver.add_argument("--skip-account", action="store_true")
+    post_deliver.add_argument("--account-snapshot")
+    post_deliver.add_argument("--position-config", default="config/position_review.json")
+    post_deliver.add_argument("--skip-plan-review", action="store_true")
+    post_deliver.add_argument("--append-lessons", action="store_true")
+    post_deliver.add_argument("--skip-learning-review", action="store_true")
+    post_deliver.add_argument("--learning-lookback-days", type=int, default=20)
+    post_deliver.add_argument("--skip-self-review", action="store_true")
+    post_deliver.add_argument("--append-self-review", action="store_true")
+    post_deliver.add_argument("--sync-longbridge", action="store_true")
+    post_deliver.add_argument("--execute-sync", action="store_true")
+    post_deliver.add_argument("--group-name", default="今日关注")
+    post_deliver.add_argument("--sync-mode", choices=["add", "replace"], default="replace")
+    post_deliver.add_argument("--sync-method", choices=["auto", "cli", "sdk"], default="auto")
+    post_deliver.add_argument("--max-symbols", type=int, default=3)
+    post_deliver.add_argument("--longbridge-cli")
+    post_deliver.add_argument("--learning-dir", default="runtime/learning")
+    post_deliver.add_argument("--manifest-output")
+    post_deliver.add_argument("--summary-output")
+    post_deliver.add_argument("--delivery-guard", action="store_true")
+    post_deliver.add_argument("--mark-sent", action="store_true")
+    post_deliver.set_defaults(func=run_post_market_deliver)
+
     post = sub.add_parser("post-market-review", help="Prepare post-market snapshot for agent review")
     post.add_argument("--watchlist", default="config/watchlist.json")
     post.add_argument("--interval", default="1day")
@@ -1890,9 +2615,38 @@ def build_parser() -> argparse.ArgumentParser:
     feishu_summary.add_argument("--signals")
     feishu_summary.add_argument("--position-review")
     feishu_summary.add_argument("--plan-review")
+    feishu_summary.add_argument("--run-manifest")
     feishu_summary.add_argument("--output")
     feishu_summary.add_argument("--learning-dir", default="runtime/learning")
     feishu_summary.set_defaults(func=run_feishu_summary)
+
+    focus = sub.add_parser("focus-selection", help="Build an auditable focus-selection artifact")
+    focus.add_argument("--date", required=True)
+    focus.add_argument("--session", choices=["pre-market", "post-market"], required=True)
+    focus.add_argument("--signals")
+    focus.add_argument("--context")
+    focus.add_argument("--snapshot")
+    focus.add_argument("--agents-dir")
+    focus.add_argument("--output")
+    focus.set_defaults(func=run_focus_selection)
+
+    inspect_context = sub.add_parser("inspect-pre-market-context", help="Summarize pre-market context shape and data quality")
+    inspect_context.add_argument("--date", required=True)
+    inspect_context.add_argument("--context")
+    inspect_context.add_argument("--output")
+    inspect_context.set_defaults(func=run_inspect_pre_market_context)
+
+    llm_manifest = sub.add_parser("llm-generation-manifest", help="Record LLM report-generation provenance")
+    llm_manifest.add_argument("--date", required=True)
+    llm_manifest.add_argument("--session", choices=["pre-market", "post-market"], required=True)
+    llm_manifest.add_argument("--model", required=True)
+    llm_manifest.add_argument("--runner", default="codex")
+    llm_manifest.add_argument("--prompt")
+    llm_manifest.add_argument("--input", action="append", default=[])
+    llm_manifest.add_argument("--generated-output", action="append", default=[])
+    llm_manifest.add_argument("--notes")
+    llm_manifest.add_argument("--output")
+    llm_manifest.set_defaults(func=run_llm_generation_manifest)
 
     data_quality = sub.add_parser("data-quality", help="Generate market-data quality artifacts")
     data_quality.add_argument("--date", required=True)

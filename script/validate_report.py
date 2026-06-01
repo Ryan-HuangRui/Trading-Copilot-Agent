@@ -16,6 +16,7 @@ REPORT_FILES = {
 }
 
 SETUP_RE = re.compile(r"\b[a-z0-9][a-z0-9_-]+\.md\b")
+SETUP_REFERENCE_LINE_RE = re.compile(r"(参考\s*setup|setup\s*file|setup_files?|参考\s*规则|setup：|setup:)", re.IGNORECASE)
 SYMBOL_RE = re.compile(r"\b[A-Z][A-Z0-9.-]{0,9}\b")
 SYMBOL_HEADING_RE = re.compile(r"^###\s+`?([A-Z][A-Z0-9.-]{0,9})`?\s*$", re.MULTILINE)
 SKIP_TOKENS = {"AI", "API", "BOS", "CLI", "ETF", "MA20", "MA50", "NO", "R", "S", "US"}
@@ -69,8 +70,16 @@ def split_symbol_sections(markdown: str) -> list[tuple[str, str]]:
     return sections
 
 
+def setup_references(text: str) -> list[str]:
+    refs: list[str] = []
+    for line in text.splitlines():
+        if SETUP_REFERENCE_LINE_RE.search(line):
+            refs.extend(SETUP_RE.findall(line))
+    return refs
+
+
 def has_setup_reference(text: str) -> bool:
-    return bool(SETUP_RE.search(text) or "NO VALID SETUP" in text)
+    return bool(setup_references(text) or "NO VALID SETUP" in text)
 
 
 def has_trigger(text: str) -> bool:
@@ -143,7 +152,7 @@ def validate_report_text(
     if not has_setup_reference(text):
         errors.append(f"{label}: missing setup file reference or explicit NO VALID SETUP")
 
-    unknown_setups = sorted({name for name in SETUP_RE.findall(text) if name not in setup_files})
+    unknown_setups = sorted({name for name in setup_references(text) if name not in setup_files})
     for setup in unknown_setups:
         errors.append(f"{label}: setup file does not exist in knowledge/refined/setups: {setup}")
 

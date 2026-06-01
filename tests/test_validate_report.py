@@ -131,6 +131,15 @@ class ValidateReportTest(unittest.TestCase):
         self.assertEqual(payload["status"], "fail")
         self.assertTrue(any("does not exist" in error for error in payload["errors"]))
 
+    def test_ignores_non_setup_markdown_references_in_body(self):
+        report = GOOD_REPORT + "\n补充：参见 docs/contracts/agent-research.md 和 market_regime_preconditions.md。\n"
+        temp, root = self.make_repo(report)
+        with temp:
+            payload = self.validate_repo(root)
+
+        self.assertEqual(payload["status"], "pass")
+        self.assertEqual(payload["errors"], [])
+
     def test_default_session_requires_and_validates_signals_sidecar(self):
         temp, root = self.make_repo(GOOD_REPORT.replace("今日盘前完整报告", "今日盘前执行简版"))
         with temp:

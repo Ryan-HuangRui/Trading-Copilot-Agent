@@ -273,6 +273,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "snapshot_errors": snapshot.get("errors", []),
     }
     payload["status"] = status_for(payload)
+    payload["quality_status"] = payload["status"]
 
     json_path = resolve_path(repo_root, args.output_json, report_dir / "data-quality.json")
     md_path = resolve_path(repo_root, args.output_md, report_dir / "data-quality.md")

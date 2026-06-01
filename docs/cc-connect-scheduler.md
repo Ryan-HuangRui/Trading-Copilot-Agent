@@ -48,10 +48,12 @@ Update the configured cc connect prompts so they require the new artifacts and g
 
 - Pre-market generation must write `exec-brief.md`, `pre-market.md`, and `pre-market-signals.json`.
 - Post-market generation must write `post-market.md` and `post-market-signals.json`.
+- After Codex/LLM writes those reports, record `llm-generation-manifest` so model, prompt, inputs, outputs, git SHA, and dirty files are auditable.
 - Market-data preparation should use the repo default provider stack: Longbridge CLI primary, Twelve Data fallback.
-- Both workflows must run `validate-report` and `validate-trade-plan` before journal append or Longbridge sync.
+- Both workflows should call `pre-market-deliver` or `post-market-deliver` after report generation. These wrappers run `validate-report`, `validate-trade-plan`, `data-quality`, `focus-selection`, journal append, Feishu summary, run manifest, and optional Longbridge sync.
 - Optional agent research enhancement may be enabled with `--include-agent-research` on `pre-market-plan` and `post-market-review`; generated agent artifacts are evidence inputs only.
 - If agent research is enabled, cc connect must also surface `validate-agent-reports` / `validate-agent-decision` failures as blocking status before report generation consumes those artifacts.
+- Agent report validation now fails when `market` or `technicals` evidence is empty. Empty `fundamentals`, `news`, or `sentiment` evidence remains a warning and must be disclosed in the Feishu summary or status note.
 - Agent memory tasks are optional and must remain review-only: `agent-memory-append`, `agent-memory-review`, and `agent-memory-export` cannot modify `knowledge/refined/` or raise execution status.
 - Post-market should run `data-quality --date <DATE>` before `feishu-summary` so focused-symbol fallback and stale-data warnings are disclosed.
 - Any `extract-report-signals --require-validation` failure must stop journal append.
@@ -238,16 +240,11 @@ python3 script/trading_copilot.py pre-market-plan --watchlist config/watchlist.j
 # Or replace the previous line with this optional evidence-enhanced wrapper call:
 python3 script/trading_copilot.py pre-market-plan --watchlist config/watchlist.json --skip-non-trading-day --include-agent-research
 # Codex generates report/<DATE>/exec-brief.md, report/<DATE>/pre-market.md, report/<DATE>/pre-market-signals.json
-python3 script/trading_copilot.py validate-report --session pre-market --date <DATE>
-python3 script/trading_copilot.py validate-trade-plan --session pre-market --date <DATE>
-python3 script/trading_copilot.py extract-report-signals --session pre-market --date <DATE> --require-validation --append
-python3 script/trading_copilot.py account-snapshot --date <DATE>
-python3 script/trading_copilot.py position-review --date <DATE> --config config/position_review.json --append
-python3 script/trading_copilot.py data-quality --date <DATE>
-python3 script/trading_copilot.py feishu-summary --session pre-market --date <DATE>
+python3 script/trading_copilot.py llm-generation-manifest --session pre-market --date <DATE> --model <MODEL> --prompt agent/daily_analysis_prompt.md --input report/<DATE>/pre-market-context.json --generated-output report/<DATE>/exec-brief.md --generated-output report/<DATE>/pre-market.md --generated-output report/<DATE>/pre-market-signals.json
+python3 script/trading_copilot.py pre-market-deliver --date <DATE> --sync-longbridge --execute-sync
 ```
 
-`extract-report-signals --require-validation` runs both `validate-report` and `validate-trade-plan`; if either gate fails, do not append journal records or continue to Longbridge sync. `sync-longbridge-watchlist --require-validation` repeats both gates before any watchlist update.
+`pre-market-deliver` runs both validation gates before journal append, Feishu summary, or Longbridge sync. It writes `report/<DATE>/pre-market-run-manifest.json` and `report/<DATE>/focus-selection.json`.
 
 ### Task B: Post-Market Review + Daily Self-Review
 
@@ -269,18 +266,11 @@ python3 script/trading_copilot.py post-market-review --watchlist config/watchlis
 # Or replace the previous line with this optional evidence-enhanced wrapper call:
 python3 script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day --include-journal-signals --include-position-symbols --include-agent-research
 # Codex generates report/<DATE>/post-market.md and report/<DATE>/post-market-signals.json
-python3 script/trading_copilot.py validate-report --session post-market --date <DATE>
-python3 script/trading_copilot.py validate-trade-plan --session post-market --date <DATE>
-python3 script/trading_copilot.py backfill-signal-outcomes --date <DATE> --append
-python3 script/trading_copilot.py extract-report-signals --session post-market --date <DATE> --require-validation --append
-python3 script/trading_copilot.py account-snapshot --date <DATE>
-python3 script/trading_copilot.py position-review --date <DATE> --config config/position_review.json --append
-python3 script/trading_copilot.py plan-review --date <DATE> --append-lessons
-python3 script/trading_copilot.py learning-review --lookback-days 20
-python3 script/trading_copilot.py daily-self-review --date <DATE> --append
-python3 script/trading_copilot.py data-quality --date <DATE>
-python3 script/trading_copilot.py feishu-summary --session post-market --date <DATE>
+python3 script/trading_copilot.py llm-generation-manifest --session post-market --date <DATE> --model <MODEL> --prompt agent/post_market_analysis_prompt.md --input report/<DATE>/daily-snapshot.json --generated-output report/<DATE>/post-market.md --generated-output report/<DATE>/post-market-signals.json
+python3 script/trading_copilot.py post-market-deliver --date <DATE> --sync-longbridge --execute-sync --append-outcomes --append-lessons --append-self-review
 ```
+
+`post-market-deliver` runs validation, data-quality, focus-selection, outcome backfill, journal append, optional read-only account/position review, plan review, learning review, self-review, Feishu summary, and optional `今日关注` replacement sync. It writes `report/<DATE>/post-market-run-manifest.json` and `report/<DATE>/focus-selection.json`.
 
 ### Task C: Weekly Review
 

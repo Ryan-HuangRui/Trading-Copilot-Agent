@@ -89,6 +89,10 @@ class AgentDecisionTest(unittest.TestCase):
             self.assertEqual(decision["plan_type"], "watch_only")
             self.assertEqual(decision["execution_status"], "watch_only")
             self.assertIn("m1", decision["evidence_ids"])
+            self.assertIn("rank_score", decision)
+            self.assertIn("setup_match", decision)
+            self.assertIn("why_not_executable", decision)
+            self.assertIn("required_intraday_confirmation", decision)
             self.assertNotIn("broker_command", decision)
 
             validation = validate(

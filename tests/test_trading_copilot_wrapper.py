@@ -688,6 +688,202 @@ class TradingCopilotWrapperTest(unittest.TestCase):
         self.assertEqual(payload["quality_status"], "warn")
         self.assertEqual(payload["focused_fallback_symbols"], [{"symbol": "MU"}])
 
+    def test_pre_market_deliver_orders_data_quality_before_journal_and_writes_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            signals = root / "pre-market-signals.json"
+            signals.write_text(
+                json.dumps(
+                    {
+                        "date": "2026-05-26",
+                        "session": "pre-market",
+                        "signals": [
+                            {
+                                "symbol": "MU",
+                                "setup": "breakout_pullback_continuation.md",
+                                "status": "planned",
+                                "plan_type": "watch_only",
+                                "execution_status": "watch_only",
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            manifest = root / "pre-market-run-manifest.json"
+            summary = root / "feishu-summary.md"
+            calls = []
+
+            def fake_run_child(command):
+                calls.append(command[0])
+                payload = {"status": "success", "artifacts": []}
+                if command[0] == "script/validate_report.py":
+                    payload = {"status": "pass", "errors": [], "warnings": [], "checked_reports": []}
+                elif command[0] == "script/validate_trade_plan.py":
+                    payload = {"status": "pass", "errors": [], "warnings": [], "checked_artifacts": [str(signals)]}
+                elif command[0] == "script/data_quality.py":
+                    payload = {
+                        "status": "success",
+                        "quality_status": "pass",
+                        "artifacts": ["report/2026-05-26/data-quality.json"],
+                        "focused_fallback_symbols": [],
+                        "missing_focused_symbols": [],
+                    }
+                elif command[0] == "script/extract_report_signals.py":
+                    payload = {"status": "success", "artifacts": [], "appended": [{"symbol": "MU"}], "skipped_duplicates": []}
+                elif command[0] == "script/feishu_summary.py":
+                    payload = {"status": "success", "output": str(summary), "summary": {"watch_only": 1}}
+                return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
+
+            args = Namespace(
+                date="2026-05-26",
+                watchlist="config/watchlist.json",
+                report=None,
+                signals=str(signals),
+                skip_agent_validation=True,
+                no_append_journal=False,
+                journal_dir=str(root / "journal"),
+                skip_account=True,
+                account_snapshot=None,
+                position_config="config/position_review.json",
+                sync_longbridge=False,
+                execute_sync=False,
+                group_name="今日关注",
+                sync_mode="add",
+                sync_method="auto",
+                max_symbols=3,
+                longbridge_cli=None,
+                learning_dir=str(root / "learning"),
+                manifest_output=str(manifest),
+                summary_output=str(summary),
+                delivery_guard=False,
+                delivery_kind="exec-brief",
+                mark_sent=False,
+            )
+
+            with patch.object(trading_copilot, "run_child", side_effect=fake_run_child), patch.object(
+                trading_copilot, "emit", side_effect=SystemExit
+            ) as emit:
+                with self.assertRaises(SystemExit):
+                    trading_copilot.run_pre_market_deliver(args)
+
+            self.assertLess(calls.index("script/data_quality.py"), calls.index("script/extract_report_signals.py"))
+            self.assertTrue(manifest.exists())
+            payload = emit.call_args.args[0]
+            self.assertEqual(payload["status"], "success")
+            self.assertEqual(payload["workflow"], "pre-market-deliver")
+            manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
+            self.assertEqual(manifest_payload["status"], "success")
+            self.assertEqual(manifest_payload["focused_symbols"], ["MU"])
+            self.assertIn("focus-selection", [step["name"] for step in manifest_payload["steps"]])
+
+    def test_post_market_deliver_orders_data_quality_before_journal_and_writes_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            signals = root / "post-market-signals.json"
+            signals.write_text(
+                json.dumps(
+                    {
+                        "date": "2026-05-26",
+                        "session": "post-market",
+                        "signals": [
+                            {
+                                "symbol": "MU",
+                                "setup": "breakout_pullback_continuation.md",
+                                "status": "planned",
+                                "plan_type": "watch_only",
+                                "execution_status": "watch_only",
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            manifest = root / "post-market-run-manifest.json"
+            summary = root / "feishu-summary.md"
+            calls = []
+
+            def fake_run_child(command):
+                calls.append(command[0])
+                payload = {"status": "success", "artifacts": []}
+                if command[0] == "script/validate_report.py":
+                    payload = {"status": "pass", "errors": [], "warnings": [], "checked_reports": []}
+                elif command[0] == "script/validate_trade_plan.py":
+                    payload = {"status": "pass", "errors": [], "warnings": [], "checked_artifacts": [str(signals)]}
+                elif command[0] == "script/data_quality.py":
+                    payload = {
+                        "status": "success",
+                        "quality_status": "pass",
+                        "artifacts": ["report/2026-05-26/data-quality.json"],
+                        "focused_fallback_symbols": [],
+                        "missing_focused_symbols": [],
+                    }
+                elif command[0] == "script/focus_selection.py":
+                    payload = {"status": "success", "output": str(root / "focus-selection.json"), "selected": 1}
+                elif command[0] == "script/extract_report_signals.py":
+                    payload = {"status": "success", "artifacts": [], "appended": [{"symbol": "MU"}], "skipped_duplicates": []}
+                elif command[0] == "script/journal_review.py":
+                    payload = {"status": "success", "outcomes_path": str(root / "outcomes.jsonl"), "summary": {}}
+                elif command[0] == "script/plan_review.py":
+                    payload = {"status": "success", "artifacts": [str(root / "plan-review.json")], "summary": {}}
+                elif command[0] == "script/daily_self_review.py":
+                    payload = {"status": "success", "output": str(root / "self-review.md"), "summary": {}}
+                elif command[0] == "script/feishu_summary.py":
+                    payload = {"status": "success", "output": str(summary), "summary": {"watch_only": 1}}
+                return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
+
+            args = Namespace(
+                date="2026-05-26",
+                watchlist="config/watchlist.json",
+                report=None,
+                signals=str(signals),
+                snapshot=None,
+                skip_agent_validation=True,
+                skip_outcomes=False,
+                append_outcomes=False,
+                no_append_journal=False,
+                journal_dir=str(root / "journal"),
+                skip_account=True,
+                account_snapshot=None,
+                position_config="config/position_review.json",
+                skip_plan_review=False,
+                append_lessons=False,
+                skip_learning_review=False,
+                learning_lookback_days=20,
+                skip_self_review=False,
+                append_self_review=False,
+                sync_longbridge=False,
+                execute_sync=False,
+                group_name="今日关注",
+                sync_mode="replace",
+                sync_method="auto",
+                max_symbols=3,
+                longbridge_cli=None,
+                learning_dir=str(root / "learning"),
+                manifest_output=str(manifest),
+                summary_output=str(summary),
+                delivery_guard=False,
+                mark_sent=False,
+            )
+
+            with patch.object(trading_copilot, "run_child", side_effect=fake_run_child), patch.object(
+                trading_copilot, "emit", side_effect=SystemExit
+            ) as emit:
+                with self.assertRaises(SystemExit):
+                    trading_copilot.run_post_market_deliver(args)
+
+            self.assertLess(calls.index("script/data_quality.py"), calls.index("script/extract_report_signals.py"))
+            self.assertLess(calls.index("script/focus_selection.py"), calls.index("script/extract_report_signals.py"))
+            self.assertTrue(manifest.exists())
+            payload = emit.call_args.args[0]
+            self.assertEqual(payload["status"], "success")
+            self.assertEqual(payload["workflow"], "post-market-deliver")
+            manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
+            self.assertEqual(manifest_payload["status"], "success")
+            self.assertEqual(manifest_payload["focused_symbols"], ["MU"])
+
     def test_account_snapshot_wrapper_contract(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

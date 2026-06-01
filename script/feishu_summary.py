@@ -31,6 +31,66 @@ def artifact_json(repo_root: Path, path: str | None, default: Path) -> dict[str,
         return {}
 
 
+def default_run_manifest(repo_root: Path, date: str, session: str) -> Path:
+    return repo_root / "report" / date / f"{session}-run-manifest.json"
+
+
+def validation_statuses(run_manifest: dict[str, Any]) -> list[str]:
+    statuses = []
+    for step in run_manifest.get("steps", []):
+        if not isinstance(step, dict):
+            continue
+        name = str(step.get("name") or "")
+        if not (
+            name.startswith("validate-")
+            or name in {"data-quality", "validate-report", "validate-trade-plan"}
+        ):
+            continue
+        status = step.get("status") or "unknown"
+        detail = ""
+        stdout = step.get("stdout")
+        if isinstance(stdout, dict):
+            validation = stdout.get("validation") if isinstance(stdout.get("validation"), dict) else stdout.get("stdout")
+            if isinstance(validation, dict):
+                warnings = validation.get("warnings")
+                if warnings:
+                    detail = f"；warnings={len(warnings)}"
+        statuses.append(f"- {name}：{status}{detail}")
+    return statuses
+
+
+def step_summary(run_manifest: dict[str, Any], name: str) -> dict[str, Any]:
+    for step in run_manifest.get("steps", []):
+        if isinstance(step, dict) and step.get("name") == name:
+            stdout = step.get("stdout")
+            return stdout if isinstance(stdout, dict) else {}
+    return {}
+
+
+def agent_decision_paths(repo_root: Path, date: str, signals: list[dict[str, Any]]) -> list[tuple[str, str]]:
+    paths = []
+    seen = set()
+    for signal in signals:
+        symbol = signal_symbol(signal)
+        if not symbol or symbol in seen:
+            continue
+        seen.add(symbol)
+        path = repo_root / "report" / date / "agents" / symbol / "decision.json"
+        if path.exists():
+            paths.append((symbol, str(path.relative_to(repo_root))))
+    return paths
+
+
+def focus_selection(repo_root: Path, date: str) -> dict[str, Any]:
+    path = repo_root / "report" / date / "focus-selection.json"
+    if not path.exists():
+        return {}
+    try:
+        return read_json(path)
+    except Exception:
+        return {}
+
+
 def session_title(session: str) -> str:
     if session == "monitor":
         return "盘中"
@@ -88,19 +148,104 @@ def build_markdown(
     position_review: dict[str, Any],
     plan_review: dict[str, Any],
     data_quality: dict[str, Any],
+    run_manifest: dict[str, Any],
+    repo_root: Path,
     lessons: list[dict[str, Any]],
     signal_source_summary: dict[str, Any] | None = None,
+    focus_selection_payload: dict[str, Any] | None = None,
 ) -> str:
     title_prefix = session_title(session)
     executable, watch, no_trade = split_signals(signals)
     position_summary = position_review.get("summary") if isinstance(position_review.get("summary"), dict) else {}
     plan_summary = plan_review.get("summary") if isinstance(plan_review.get("summary"), dict) else {}
 
+    workflow = run_manifest.get("workflow")
+    source_snapshot_date = None
+    context = run_manifest.get("context")
+    if isinstance(context, dict):
+        source_snapshot_date = context.get("source_snapshot_date")
+
     lines = [
         f"# 飞书执行摘要（{date} {session}）",
         "",
-        f"【{title_prefix}可执行交易计划】",
+        "【Workflow】",
+        f"- workflow：{workflow or session}",
+        f"- date：{date}",
     ]
+    if source_snapshot_date:
+        lines.append(f"- source_snapshot_date：{source_snapshot_date}")
+    lines.extend(
+        [
+            f"- git：{run_manifest.get('git_sha', 'unknown')}；dirty_files={len(run_manifest.get('dirty_files', []))}",
+            "",
+            "【生成 artifacts】",
+        ]
+    )
+    artifacts = run_manifest.get("artifacts") if isinstance(run_manifest.get("artifacts"), list) else []
+    if artifacts:
+        lines.extend(f"- {item}" for item in artifacts)
+    else:
+        lines.append("- 未记录 run manifest artifacts。")
+
+    lines.extend(["", "【Validation】"])
+    statuses = validation_statuses(run_manifest)
+    if statuses:
+        lines.extend(statuses)
+    else:
+        lines.append("- 未记录 validation manifest；请检查 run manifest。")
+
+    journal = step_summary(run_manifest, "extract-report-signals")
+    if journal:
+        lines.extend(
+            [
+                "",
+                "【Journal】",
+                f"- extract-report-signals：{journal.get('status', 'unknown')}",
+                f"- appended：{len(journal.get('appended', []) or [])}",
+                f"- skipped_duplicates：{len(journal.get('skipped_duplicates', []) or [])}",
+            ]
+        )
+
+    sync = step_summary(run_manifest, "sync-longbridge-watchlist")
+    if sync:
+        lines.extend(
+            [
+                "",
+                "【长桥同步】",
+                f"- group：{sync.get('group_name', 'unknown')}",
+                f"- sync_mode：{sync.get('sync_mode', 'unknown')}",
+                f"- status：{sync.get('status', 'unknown')}",
+                f"- symbols：{', '.join(sync.get('symbols', []) or [])}",
+            ]
+        )
+
+    decision_paths = agent_decision_paths(repo_root, date, signals)
+    if decision_paths:
+        lines.extend(["", "【Agent research / decision artifacts】"])
+        lines.extend(f"- {symbol}：{path}" for symbol, path in decision_paths)
+        lines.append("- agent artifacts 仅作证据增强，不作为订单输入。")
+
+    focus_payload = focus_selection_payload or {}
+    selected_focus = focus_payload.get("selected") if isinstance(focus_payload.get("selected"), list) else []
+    if selected_focus:
+        lines.extend(["", "【重点选择】"])
+        for row in selected_focus[:5]:
+            if not isinstance(row, dict):
+                continue
+            score = row.get("rank_score")
+            suffix = f"；rank_score={score}" if score is not None else ""
+            lines.append(
+                f"- {row.get('symbol')}：{row.get('why_focus', row.get('setup', 'selected'))}{suffix}"
+            )
+            if row.get("why_not_executable"):
+                lines.append(f"  - 未进入执行：{row.get('why_not_executable')}")
+
+    lines.extend(
+        [
+            "",
+            f"【{title_prefix}可执行交易计划】",
+        ]
+    )
     if not executable:
         lines.append("- 无。")
     for signal in executable:
@@ -127,7 +272,7 @@ def build_markdown(
         [
             "",
             "【数据质量】",
-            f"- 状态：{data_quality.get('status', 'unknown')}",
+            f"- 状态：{data_quality.get('quality_status') or data_quality.get('status', 'unknown')}",
             f"- stale_data：{data_quality.get('stale_data', 'unknown')}",
         ]
     )
@@ -203,7 +348,15 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     position_review = artifact_json(repo_root, args.position_review, repo_root / "report" / args.date / "position-review.json")
     plan_review = artifact_json(repo_root, args.plan_review, repo_root / "report" / args.date / "plan-review.json")
     data_quality = artifact_json(repo_root, None, repo_root / "report" / args.date / "data-quality.json")
+    run_manifest = artifact_json(
+        repo_root,
+        getattr(args, "run_manifest", None),
+        default_run_manifest(repo_root, args.date, args.session),
+    )
+    if run_manifest:
+        run_manifest.setdefault("repo_root", str(repo_root))
     lessons = lessons_for_date(repo_root, args.date, args.learning_dir)
+    focus_payload = focus_selection(repo_root, args.date)
     output = output_path(repo_root, args.date, args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(
@@ -214,8 +367,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             position_review=position_review,
             plan_review=plan_review,
             data_quality=data_quality,
+            run_manifest=run_manifest,
+            repo_root=repo_root,
             lessons=lessons,
             signal_source_summary=signal_source_summary,
+            focus_selection_payload=focus_payload,
         ),
         encoding="utf-8",
     )
@@ -231,13 +387,16 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "watch_only": len(watch),
             "no_trade": len(no_trade),
             "lessons": len(lessons),
-            "data_quality_status": data_quality.get("status"),
+            "data_quality_status": data_quality.get("quality_status") or data_quality.get("status"),
             "focused_fallback_symbols": len(data_quality.get("focused_fallback_symbols", []))
             if isinstance(data_quality.get("focused_fallback_symbols"), list)
             else 0,
             "candidate": signal_source_summary.get("candidate"),
             "blocked": signal_source_summary.get("blocked"),
             "skipped": signal_source_summary.get("skipped"),
+            "focus_selected": len(focus_payload.get("selected", []))
+            if isinstance(focus_payload.get("selected"), list)
+            else 0,
         },
     }
 
@@ -249,6 +408,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--signals")
     parser.add_argument("--position-review")
     parser.add_argument("--plan-review")
+    parser.add_argument("--run-manifest")
     parser.add_argument("--output")
     parser.add_argument("--learning-dir", default="runtime/learning")
     parser.add_argument("--repo-root", default=str(Path(__file__).resolve().parents[1]))

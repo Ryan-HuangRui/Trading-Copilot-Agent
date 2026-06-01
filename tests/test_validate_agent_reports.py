@@ -94,6 +94,23 @@ class ValidateAgentReportsTest(unittest.TestCase):
             self.assertEqual(result["status"], "fail")
             self.assertTrue(any("forbidden" in error for error in result["errors"]))
 
+    def test_validate_agent_reports_requires_market_and_technical_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+
+            def mutate(report_type, payload):
+                if report_type in {"market", "technicals", "news"}:
+                    payload["evidence"] = []
+
+            self.write_reports(root, mutate=mutate)
+
+            result = validate(Namespace(date="2026-05-26", symbol=["MU"], reports_dir=str(root), repo_root=str(ROOT)))
+
+            self.assertEqual(result["status"], "fail")
+            self.assertTrue(any("market" in error and "evidence is required" in error for error in result["errors"]))
+            self.assertTrue(any("technicals" in error and "evidence is required" in error for error in result["errors"]))
+            self.assertTrue(any("news" in warning and "evidence is empty" in warning for warning in result["warnings"]))
+
 
 if __name__ == "__main__":
     unittest.main()

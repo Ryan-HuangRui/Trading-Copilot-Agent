@@ -85,6 +85,7 @@ class FeishuSummaryTest(unittest.TestCase):
                 json.dumps(
                     {
                         "status": "warn",
+                        "quality_status": "warn",
                         "stale_data": False,
                         "focused_fallback_symbols": [
                             {
@@ -93,6 +94,30 @@ class FeishuSummaryTest(unittest.TestCase):
                                 "fallback_from": "longbridge",
                                 "primary_error": "permission denied",
                             }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (report_dir / "pre-market-run-manifest.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "workflow": "pre-market-deliver",
+                        "session": "pre-market",
+                        "date": "2026-05-26",
+                        "git_sha": "abc123",
+                        "dirty_files": ["M config/watchlist.json"],
+                        "artifacts": ["report/2026-05-26/pre-market-signals.json"],
+                        "steps": [
+                            {"name": "validate-report", "status": "success", "stdout": {"status": "pass"}},
+                            {"name": "validate-trade-plan", "status": "success", "stdout": {"status": "pass"}},
+                            {
+                                "name": "extract-report-signals",
+                                "status": "success",
+                                "stdout": {"status": "success", "appended": [{"symbol": "MU"}], "skipped_duplicates": []},
+                            },
                         ],
                     },
                     ensure_ascii=False,
@@ -138,6 +163,11 @@ class FeishuSummaryTest(unittest.TestCase):
             output = Path(payload["output"])
             self.assertTrue(output.exists())
             markdown = output.read_text(encoding="utf-8")
+            self.assertIn("【Workflow】", markdown)
+            self.assertIn("workflow：pre-market-deliver", markdown)
+            self.assertIn("【Validation】", markdown)
+            self.assertIn("validate-report：success", markdown)
+            self.assertIn("【Journal】", markdown)
             self.assertIn("【今日可执行交易计划】", markdown)
             self.assertIn("MU：入场 100", markdown)
             self.assertIn("止损 95", markdown)

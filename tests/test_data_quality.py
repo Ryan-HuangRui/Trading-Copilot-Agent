@@ -137,6 +137,7 @@ class DataQualityTest(unittest.TestCase):
             self.assertEqual(result["quality_status"], "pass")
             payload = json.loads((report_dir / "data-quality.json").read_text(encoding="utf-8"))
             self.assertEqual(payload["snapshot_path"], "report/2026-05-27/daily-snapshot.json")
+            self.assertEqual(payload["quality_status"], "pass")
 
 
 if __name__ == "__main__":

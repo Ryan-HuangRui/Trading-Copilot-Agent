@@ -100,7 +100,71 @@ def risk_report(symbol: str, date: str, ids: list[str], memory_path: str | None)
     }
 
 
-def decision_payload(symbol: str, date: str, ids: list[str], risk: dict[str, Any]) -> dict[str, Any]:
+def metric_float(report: dict[str, Any], *names: str) -> float | None:
+    sources = [report.get("derived_metrics"), report.get("scores"), report.get("facts")]
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        for name in names:
+            value = source.get(name)
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
+def structured_scores(reports: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    technicals = reports.get("technicals", {})
+    market = reports.get("market", {})
+    rsi = metric_float(technicals, "rsi_14", "rsi14")
+    close_change = metric_float(market, "close_delta_pct", "change_pct")
+    trend_score = metric_float(technicals, "trend_score", "trend")
+    momentum_score = max(0.0, min(1.0, (rsi or 50.0) / 100.0))
+    if close_change is not None:
+        momentum_score = max(0.0, min(1.0, momentum_score + min(max(close_change, -10.0), 10.0) / 40.0))
+    if trend_score is not None:
+        momentum_score = round((momentum_score + max(0.0, min(1.0, trend_score))) / 2.0, 3)
+    else:
+        momentum_score = round(momentum_score, 3)
+    if rsi is None:
+        risk_heat = "unknown"
+    elif rsi >= 75:
+        risk_heat = "hot"
+    elif rsi >= 65:
+        risk_heat = "elevated"
+    elif rsi <= 35:
+        risk_heat = "weak"
+    else:
+        risk_heat = "normal"
+    setup_match = "review_required"
+    if momentum_score >= 0.7:
+        setup_match = "trend_or_breakout_watch"
+    elif momentum_score <= 0.35:
+        setup_match = "no_clear_long_setup"
+    rank_score = round(momentum_score - (0.15 if risk_heat == "hot" else 0.0), 3)
+    return {
+        "rank_score": rank_score,
+        "momentum_score": momentum_score,
+        "risk_heat": risk_heat,
+        "setup_match": setup_match,
+        "why_focus": [
+            "Structured evidence is sufficient for observation ranking.",
+            "Market and technical evidence should be reviewed against refined setup rules.",
+        ],
+        "why_not_executable": [
+            "Deterministic role synthesis cannot create a complete Trade Plan Card.",
+            "Execution upgrade requires trigger, invalidation, risk, TP1, and intraday confirmation.",
+        ],
+        "required_intraday_confirmation": [
+            "Clean trigger-follow-through or breakout-pullback-confirmation on lower timeframe.",
+            "Risk per share must be compressible to the configured account-risk limit.",
+        ],
+    }
+
+
+def decision_payload(symbol: str, date: str, ids: list[str], risk: dict[str, Any], reports: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    scores = structured_scores(reports)
     return {
         "schema_version": 1,
         "decision_id": f"{date}:agent-decision:{symbol}",
@@ -111,6 +175,13 @@ def decision_payload(symbol: str, date: str, ids: list[str], risk: dict[str, Any
         "execution_status": "watch_only",
         "decision_label": "watch_only",
         "evidence_ids": ids,
+        "rank_score": scores["rank_score"],
+        "momentum_score": scores["momentum_score"],
+        "risk_heat": scores["risk_heat"],
+        "setup_match": scores["setup_match"],
+        "why_focus": scores["why_focus"],
+        "why_not_executable": scores["why_not_executable"],
+        "required_intraday_confirmation": scores["required_intraday_confirmation"],
         "risk_summary": risk.get("risk_summary", {}),
         "limitations": [
             "Phase 3 deterministic role synthesis does not create executable trade plans.",
@@ -147,7 +218,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         bull = role_report("Bull Researcher", symbol, args.date, supporting, opposing, "Upside scenario requires current evidence and valid refined setup rules.")
         bear = role_report("Bear Researcher", symbol, args.date, opposing, supporting, "Downside scenario focuses on failed triggers, stale data, and risk limits.")
         risk = risk_report(symbol, args.date, ids, args.memory)
-        decision = decision_payload(symbol, args.date, ids, risk)
+        decision = decision_payload(symbol, args.date, ids, risk, reports)
         symbol_dir = output_dir / symbol
         for filename, payload in [
             ("bull_report.json", bull),
