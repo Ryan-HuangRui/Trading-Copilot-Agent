@@ -91,6 +91,15 @@ python3 script/agent_technicals.py --date <DATE> --symbol MU --market-data repor
 - no API credentials required
 - sentiment evidence cannot raise execution status
 
+The `external_disclosures` provider is a live, read-only Open Cabinet/OGE convenience source for Donald J. Trump disclosure data:
+
+- `mode=open_cabinet`
+- `live_enabled=true`
+- no API credentials required
+- default output is `report/<DATE>/external-disclosures/trump-trades.json`
+- evidence is merged into `news_report.json` as `source_type=news`, `source_subtype=oge_disclosure`
+- disclosure evidence can add message-layer context or lower confidence only; it must not raise execution status or add watchlist symbols
+
 ## Phase 2 Report Generation
 
 Phase 2 converts local data-tool artifacts into per-symbol analyst reports:
@@ -104,6 +113,7 @@ Direct script entrypoints are also available:
 
 ```bash
 python3 script/agent_research_reports.py --date <DATE> --symbol MU --markdown
+python3 script/agent_research_reports.py --date <DATE> --symbol MU --external-disclosures report/<DATE>/external-disclosures/trump-trades.json
 python3 script/validate_agent_reports.py --date <DATE> --symbol MU
 ```
 

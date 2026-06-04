@@ -100,20 +100,23 @@ Automation prompt:
 Run the pre-market workflow for this repository.
 
 1. Run:
-   python3 script/prepare_daily_context.py --watchlist config/watchlist.json --skip-non-trading-day
+   python3 script/trading_copilot.py pre-market-plan --watchlist config/watchlist.json --skip-non-trading-day
    Optional wrapper-level agent research enhancement:
    python3 script/trading_copilot.py pre-market-plan --watchlist config/watchlist.json --skip-non-trading-day --include-agent-research
+   The wrapper collects report/<PRE_MARKET_DATE>/external-disclosures/trump-trades.json by default. Use --no-external-disclosures only when the disclosure source is intentionally disabled.
 2. If the command output contains skipped=true, stop without generating a report.
 3. Read the generated report/<PRE_MARKET_DATE>/pre-market-context.json.
 4. Read:
    - agent/daily_analysis_prompt.md
    - knowledge/refined/
    - report/<PRE_MARKET_DATE>/pre-market-context.json
+   - optional report/<PRE_MARKET_DATE>/external-disclosures/trump-trades.json
    - optional report/<PRE_MARKET_DATE>/agents/<SYMBOL>/decision.json and role reports when `--include-agent-research` was used
 5. Generate all files:
    - report/<PRE_MARKET_DATE>/exec-brief.md
    - report/<PRE_MARKET_DATE>/pre-market.md
    - report/<PRE_MARKET_DATE>/pre-market-signals.json
+   Both Markdown outputs must include `## 消息层汇总` with `### 特朗普持仓与交易变化`. Treat OGE/Open Cabinet/Quiver/InsiderCat disclosure data as news-layer background only; if no verified disclosure input is available, explicitly state the data gap. Do not use this section to upgrade any symbol's execution status.
 6. Validate the generated reports. If validation fails, stop and do not sync Longbridge:
    python3 script/trading_copilot.py validate-report --session pre-market --date <PRE_MARKET_DATE>
 7. Validate the Trade Plan Cards. If validation fails, stop and do not sync Longbridge:

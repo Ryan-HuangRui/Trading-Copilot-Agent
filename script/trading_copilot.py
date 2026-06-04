@@ -163,6 +163,7 @@ def run_agent_research_pipeline(
     symbols: List[str],
     context_path: str | None = None,
     snapshot_path: str | None = None,
+    external_disclosures_path: str | None = None,
 ) -> Dict[str, Any]:
     normalized = normalize_symbols(symbols)
     if not normalized:
@@ -214,6 +215,8 @@ def run_agent_research_pipeline(
         "--output-dir",
         agents_dir,
     ]
+    if external_disclosures_path:
+        reports_command.extend(["--external-disclosures", external_disclosures_path])
     validate_reports_command = ["script/validate_agent_reports.py", "--date", date, "--reports-dir", agents_dir]
     decision_command = ["script/agent_decision.py", "--date", date, "--reports-dir", agents_dir, "--output-dir", agents_dir]
     validate_decision_command = ["script/validate_agent_decision.py", "--date", date, "--decision-dir", agents_dir]
@@ -245,6 +248,49 @@ def run_agent_research_pipeline(
         "artifacts": sorted(dict.fromkeys(artifacts)),
         "reason": None,
         "symbols": normalized,
+    }
+
+
+def run_external_disclosure_pipeline(
+    *,
+    date: str,
+    symbols: List[str],
+    input_path: str | None = None,
+    lookback_days: int = 120,
+) -> Dict[str, Any]:
+    output = str(ROOT / "report" / date / "external-disclosures" / "trump-trades.json")
+    command = [
+        "script/external_disclosure_provider.py",
+        "--date",
+        date,
+        "--output",
+        output,
+        "--lookback-days",
+        str(lookback_days),
+    ]
+    if input_path:
+        command.extend(["--input", input_path])
+    for symbol in normalize_symbols(symbols):
+        command.extend(["--symbol", symbol])
+    proc = run_child(command)
+    stdout = parse_json_output(proc.stdout) or {}
+    artifacts = list(stdout.get("artifacts") or [])
+    output_path = stdout.get("output")
+    if output_path and output_path not in artifacts:
+        artifacts.append(output_path)
+    if proc.returncode != 0:
+        return {
+            "status": "failed",
+            "artifacts": artifacts,
+            "reason": proc.stderr.strip() or stdout.get("reason") or proc.stdout.strip(),
+            "command": command,
+            "stdout": stdout,
+        }
+    return {
+        "status": "success",
+        "artifacts": artifacts,
+        "summary": stdout.get("summary", {}),
+        "command": command,
     }
 
 
@@ -324,12 +370,31 @@ def run_pre_market(args: argparse.Namespace) -> None:
             f"report/{stdout.get('report_date')}/pre-market.md",
             f"report/{stdout.get('report_date')}/pre-market-signals.json",
         ]
+        external_disclosures_path = None
+        if getattr(args, "include_external_disclosures", False):
+            disclosure_symbols = normalize_symbols(
+                getattr(args, "external_disclosure_symbol", [])
+                or getattr(args, "agent_symbol", [])
+                or symbols_from_agent_source(context_path)
+            )
+            external_disclosures = run_external_disclosure_pipeline(
+                date=str(stdout.get("report_date")),
+                symbols=disclosure_symbols,
+                input_path=getattr(args, "external_disclosure_input", None),
+                lookback_days=int(getattr(args, "external_disclosure_lookback_days", 120)),
+            )
+            response["external_disclosures"] = external_disclosures
+            response["artifacts"].extend(external_disclosures.get("artifacts", []))
+            response["next_agent_inputs"].extend(external_disclosures.get("artifacts", []))
+            if external_disclosures.get("artifacts"):
+                external_disclosures_path = external_disclosures["artifacts"][0]
         if getattr(args, "include_agent_research", False):
             symbols = normalize_symbols(getattr(args, "agent_symbol", []) or symbols_from_agent_source(context_path))
             research = run_agent_research_pipeline(
                 date=str(stdout.get("report_date")),
                 symbols=symbols,
                 context_path=context_path,
+                external_disclosures_path=external_disclosures_path,
             )
             response["agent_research"] = research
             if research["status"] == "failed":
@@ -494,6 +559,8 @@ def run_agent_research_reports(args: argparse.Namespace) -> None:
             command.extend(["--technicals", args.technicals])
         if args.provider_fixture:
             command.extend(["--provider-fixture", args.provider_fixture])
+        if args.external_disclosures:
+            command.extend(["--external-disclosures", args.external_disclosures])
         if args.output_dir:
             command.extend(["--output-dir", args.output_dir])
         if args.markdown:
@@ -2393,6 +2460,11 @@ def build_parser() -> argparse.ArgumentParser:
     pre.add_argument("--skip-non-trading-day", action="store_true")
     pre.add_argument("--include-agent-research", action="store_true")
     pre.add_argument("--agent-symbol", action="append", default=[])
+    pre.add_argument("--include-external-disclosures", dest="include_external_disclosures", action="store_true", default=True)
+    pre.add_argument("--no-external-disclosures", dest="include_external_disclosures", action="store_false")
+    pre.add_argument("--external-disclosure-symbol", action="append", default=[])
+    pre.add_argument("--external-disclosure-input")
+    pre.add_argument("--external-disclosure-lookback-days", type=int, default=120)
     pre.set_defaults(func=run_pre_market)
 
     pre_deliver = sub.add_parser("pre-market-deliver", help="Validate and deliver an existing pre-market report bundle")
@@ -2503,6 +2575,7 @@ def build_parser() -> argparse.ArgumentParser:
     agent_reports.add_argument("--market-data")
     agent_reports.add_argument("--technicals")
     agent_reports.add_argument("--provider-fixture")
+    agent_reports.add_argument("--external-disclosures")
     agent_reports.add_argument("--output-dir")
     agent_reports.add_argument("--markdown", action="store_true")
     agent_reports.add_argument("--placeholder", action="store_true", help="Write Phase 0 placeholder reports instead of generated reports")

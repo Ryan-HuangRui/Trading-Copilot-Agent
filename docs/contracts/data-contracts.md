@@ -98,6 +98,39 @@ Consumer rules:
 - If `snapshot.stale_data` is true, surface it in the report.
 - If the source snapshot is missing, the workflow should fail before report writing.
 
+## `report/<DATE>/external-disclosures/trump-trades.json`
+
+Producer:
+
+```bash
+python3 script/external_disclosure_provider.py --date <DATE> --symbol MU
+```
+
+Wrapper:
+
+```bash
+python3 script/trading_copilot.py pre-market-plan --watchlist config/watchlist.json --skip-non-trading-day
+```
+
+Expected top-level fields:
+
+- `schema_version`: `1`.
+- `status`: `success` or `failed`.
+- `official`: Donald J. Trump metadata and Open Cabinet official URL.
+- `source`: Open Cabinet dataset URL plus source metadata.
+- `query`: symbol filter and lookback window.
+- `summary`: recent transaction counts, output transaction count, matched transaction count, missing ticker count, and latest disclosure dates.
+- `transactions`: recent normalized disclosures. Amounts remain disclosure ranges.
+- `matched_symbols`: matched ticker-keyed transaction lists for the current observation universe.
+- `evidence`: per-symbol `source_type=news`, `source_subtype=oge_disclosure` evidence objects for agent research.
+- `limitations`: disclosure delay, amount-range, missing ticker, and no-precision caveats.
+
+Consumer rules:
+
+- This artifact is a news-layer background input only.
+- It must not add symbols to watchlists, raise `execution_status`, or create broker actions.
+- If `status=failed` or `evidence=[]`, the pre-market report must state that no verified current disclosure input was available.
+
 ## `report/<DATE>/agents/`
 
 Producer:

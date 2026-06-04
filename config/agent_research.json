@@ -47,6 +47,25 @@
         "confidence",
         "limitations"
       ]
+    },
+    "external_disclosures": {
+      "mode": "open_cabinet",
+      "live_enabled": true,
+      "official_slug": "trump-donald-j",
+      "source_url": "https://open-cabinet.org/data/full-dataset.json",
+      "lookback_days": 120,
+      "output": "report/<DATE>/external-disclosures/trump-trades.json",
+      "required_evidence_fields": [
+        "evidence_id",
+        "source",
+        "source_type",
+        "source_subtype",
+        "published_at",
+        "symbol",
+        "summary",
+        "confidence",
+        "limitations"
+      ]
     }
   },
   "safety": {

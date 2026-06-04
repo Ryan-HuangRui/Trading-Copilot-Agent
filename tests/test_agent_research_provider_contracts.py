@@ -18,6 +18,11 @@ class AgentResearchProviderContractsTest(unittest.TestCase):
             self.assertEqual(provider["mode"], "fixture")
             self.assertFalse(provider["live_enabled"])
             self.assertIn("required_evidence_fields", provider)
+        external = config["providers"]["external_disclosures"]
+        self.assertEqual(external["mode"], "open_cabinet")
+        self.assertTrue(external["live_enabled"])
+        self.assertEqual(external["official_slug"], "trump-donald-j")
+        self.assertIn("required_evidence_fields", external)
 
     def test_fixture_evidence_contains_required_fields(self):
         fixture = json.loads((ROOT / "tests" / "fixtures" / "agent_research" / "provider_contract_fixture.json").read_text(encoding="utf-8"))

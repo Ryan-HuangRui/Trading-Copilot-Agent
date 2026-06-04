@@ -79,6 +79,30 @@ class AgentResearchReportsTest(unittest.TestCase):
             root = Path(tmp)
             output_dir = root / "agents"
             market_data, technicals = self.write_inputs(root)
+            external_disclosures = root / "trump-trades.json"
+            external_disclosures.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "date": "2026-05-26",
+                        "evidence": [
+                            {
+                                "evidence_id": "trump-disclosure-MU-2026-05-10-0",
+                                "source": "report/2026-05-26/external-disclosures/trump-trades.json",
+                                "source_type": "news",
+                                "source_subtype": "oge_disclosure",
+                                "published_at": "2026-05-14",
+                                "symbol": "MU",
+                                "summary": "Trump disclosed Purchase of Micron Technology Inc in $15,001-$50,000 range.",
+                                "confidence": 0.72,
+                                "limitations": ["public disclosure is delayed and amount is a range"],
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
 
             result = run_reports(
                 Namespace(
@@ -87,6 +111,7 @@ class AgentResearchReportsTest(unittest.TestCase):
                     market_data=str(market_data),
                     technicals=str(technicals),
                     provider_fixture=str(ROOT / "tests" / "fixtures" / "agent_research" / "provider_contract_fixture.json"),
+                    external_disclosures=str(external_disclosures),
                     output_dir=str(output_dir),
                     markdown=True,
                     repo_root=str(ROOT),
@@ -101,6 +126,9 @@ class AgentResearchReportsTest(unittest.TestCase):
             news = json.loads((output_dir / "MU" / "news_report.json").read_text(encoding="utf-8"))
             self.assertEqual(news["report_type"], "news")
             self.assertEqual(news["evidence"][0]["source_type"], "news")
+            self.assertTrue(
+                any(item.get("source_subtype") == "oge_disclosure" for item in news["evidence"])
+            )
 
     def test_wrapper_generates_and_validates_agent_reports(self):
         with tempfile.TemporaryDirectory() as tmp:

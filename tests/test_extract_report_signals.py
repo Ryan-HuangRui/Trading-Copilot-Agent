@@ -12,10 +12,20 @@ sys.path.insert(0, str(ROOT / "script"))
 from extract_report_signals import extract_post_market, extract_pre_market
 
 
+PRE_MARKET_NEWS_SECTION = """## 消息层汇总
+### 特朗普持仓与交易变化
+- 数据来源：未接入结构化 OGE/Open Cabinet 披露输入；本节不构成交易信号。
+- 持仓变化：未获取到可核验的最新披露。
+- 交易变化：未获取到可核验的最新披露。
+- 对今日计划影响：只作为消息层风险背景，不能提升任何标的执行等级。
+"""
+
 PRE_MARKET_BRIEF = """# 今日盘前执行简版（2026-05-26）
 
 ## 总览
 - 今日最多3个重点标的：DELL、QCOM、SNOW
+
+""" + PRE_MARKET_NEWS_SECTION + """
 
 ## 执行清单（逐标的）
 
@@ -162,7 +172,9 @@ class ExtractReportSignalsTest(unittest.TestCase):
                 """# 今日盘前执行简版（2026-05-26）
 ## 总览
 - 今日最多3个重点标的：MU
-## 执行清单（逐标的）
+"""
+                + PRE_MARKET_NEWS_SECTION
+                + """## 执行清单（逐标的）
 ### MU
 - 参考 setup：breakout_pullback_continuation.md
 - 主场景：突破 100 后回踩站稳。
@@ -203,7 +215,9 @@ class ExtractReportSignalsTest(unittest.TestCase):
                 """# 今日盘前执行简版（2026-05-26）
 ## 总览
 - 今日最多3个重点标的：MU
-## 执行清单（逐标的）
+"""
+                + PRE_MARKET_NEWS_SECTION
+                + """## 执行清单（逐标的）
 ### MU
 - 参考 setup：breakout_pullback_continuation.md
 - 主场景：突破 100 后回踩站稳。
@@ -260,7 +274,7 @@ class ExtractReportSignalsTest(unittest.TestCase):
             proc = subprocess.run(command, check=False, text=True, capture_output=True)
 
             self.assertNotEqual(proc.returncode, 0)
-            self.assertIn("take_profit.tp1", proc.stdout)
+            self.assertIn("take_profit.tp1 is required", proc.stdout)
 
 
 if __name__ == "__main__":

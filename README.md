@@ -125,6 +125,9 @@ python3 script/workflow_smoke_test.py --date <DATE> --week <YYYY-Www>
   - `report/YYYY-MM-DD/post-market-signals.json`
 - 次日盘前上下文：`script/prepare_daily_context.py` 读取上一交易日 snapshot，生成：
   - `report/YYYY-MM-DD/pre-market-context.json`
+- 盘前 wrapper 默认采集特朗普 OGE/Open Cabinet 披露消息层 artifact：
+  - `report/YYYY-MM-DD/external-disclosures/trump-trades.json`
+  - 可用 `--no-external-disclosures` 关闭；该数据只作为消息层背景，不进入 watchlist 或执行信号
 - 次日盘前分析：Agent 读取 `agent/daily_analysis_prompt.md` + `knowledge/refined/` + pre-market context，产出：
   - `report/YYYY-MM-DD/exec-brief.md`
   - `report/YYYY-MM-DD/pre-market.md`
@@ -135,6 +138,7 @@ python3 script/workflow_smoke_test.py --date <DATE> --week <YYYY-Www>
 - 信号入 journal：`python3 script/trading_copilot.py extract-report-signals --session pre-market --date YYYY-MM-DD --require-validation --append`
 - `--require-validation` 会同时跑报告校验和交易计划校验，任一失败都不应继续入 journal 或同步 Longbridge。
 - 分析过程由 Agent 完成，脚本只做交易日判断、数据准备、指标摘要与限频控制
+- 盘前 `exec-brief.md` / `pre-market.md` 必须包含 `## 消息层汇总`，并单独汇总 `### 特朗普持仓与交易变化`。该小节只作为 OGE/Open Cabinet/Quiver/InsiderCat 等披露来源的消息层背景；未获取到可核验输入时必须说明数据缺口，且不得提升任何标的执行等级。
 - 详细 runbook：`docs/daily-report-workflow.md`
 
 ## TradingAgents 风格证据增强
@@ -190,6 +194,7 @@ python3 script/trading_copilot.py post-market-review --watchlist config/watchlis
 边界：
 
 - Agent research artifacts 是证据增强，不是订单输入。
+- 若存在 `report/YYYY-MM-DD/external-disclosures/trump-trades.json`，`agent_research_reports.py` 会把匹配当前 symbol 的 `source_subtype=oge_disclosure` 证据合并进 `<SYMBOL>/news_report.json`。
 - `decision.json` 必须复用现有 `plan_type` / `execution_status` 语义。
 - `experimental=true` 或 `not_for_execution=true` 的占位决策会被 `validate-agent-decision` 拒绝。
 - 任何 broker 写操作仍只能走专用 paper workflow。

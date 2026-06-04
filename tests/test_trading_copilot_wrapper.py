@@ -15,6 +15,16 @@ import trading_copilot
 
 GOOD_REPORT = """# 今日盘前完整报告（2026-05-26）
 
+## 总览
+- 今日最多3个重点标的：MU
+
+## 消息层汇总
+### 特朗普持仓与交易变化
+- 数据来源：未接入结构化 OGE/Open Cabinet 披露输入；本节不构成交易信号。
+- 持仓变化：未获取到可核验的最新披露。
+- 交易变化：未获取到可核验的最新披露。
+- 对今日计划影响：只作为消息层风险背景，不能提升任何标的执行等级。
+
 ## 重点执行候选
 ### MU
 - 参考 setup：breakout_pullback_continuation.md
@@ -527,6 +537,52 @@ class TradingCopilotWrapperTest(unittest.TestCase):
         payload = emit.call_args.args[0]
         self.assertIn("report/2026-05-26/pre-market-signals.json", payload["expected_agent_outputs"])
 
+    def test_pre_market_injects_external_disclosure_artifact_at_wrapper_layer(self):
+        proc = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=json.dumps({"report_date": "2026-05-26", "context_path": "report/2026-05-26/pre-market-context.json"}),
+            stderr="",
+        )
+        disclosure = {
+            "status": "success",
+            "artifacts": ["report/2026-05-26/external-disclosures/trump-trades.json"],
+            "summary": {"matched_transactions": 1},
+        }
+        args = Namespace(
+            watchlist="config/watchlist.json",
+            interval="1day",
+            timezone="America/New_York",
+            date=None,
+            snapshot_date=None,
+            skip_non_trading_day=False,
+            include_agent_research=False,
+            agent_symbol=[],
+            include_external_disclosures=True,
+            external_disclosure_symbol=["MU"],
+            external_disclosure_input=None,
+            external_disclosure_lookback_days=120,
+        )
+
+        with patch.object(trading_copilot, "run_child", return_value=proc), patch.object(
+            trading_copilot, "run_external_disclosure_pipeline", return_value=disclosure
+        ) as external_disclosures, patch.object(trading_copilot, "emit", side_effect=SystemExit) as emit:
+            with self.assertRaises(SystemExit):
+                trading_copilot.run_pre_market(args)
+
+        external_disclosures.assert_called_once_with(
+            date="2026-05-26",
+            symbols=["MU"],
+            input_path=None,
+            lookback_days=120,
+        )
+        payload = emit.call_args.args[0]
+        self.assertIn("external_disclosures", payload)
+        self.assertIn(
+            "report/2026-05-26/external-disclosures/trump-trades.json",
+            payload["next_agent_inputs"],
+        )
+
     def test_pre_market_include_agent_research_injects_artifacts_at_wrapper_layer(self):
         proc = subprocess.CompletedProcess(
             args=[],
@@ -560,6 +616,7 @@ class TradingCopilotWrapperTest(unittest.TestCase):
             date="2026-05-26",
             symbols=["MU"],
             context_path="report/2026-05-26/pre-market-context.json",
+            external_disclosures_path=None,
         )
         payload = emit.call_args.args[0]
         self.assertIn("report/2026-05-26/agents/MU/decision.json", payload["next_agent_inputs"])

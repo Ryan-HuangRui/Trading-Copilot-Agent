@@ -49,6 +49,8 @@
   - 优先引用 `decision.json`、`bull_report.json`、`bear_report.json`、`risk_report.json` 中的 evidence id 和 limitations
   - 不得把 agent decision 当成订单输入
   - agent decision 只能帮助降级为 `watch_only/no_trade` 或补充风险限制，不能把不完整计划升级为 `conditional_executable`
+- 若 `next_agent_inputs` 或 `report/<PRE_MARKET_DATE>/external-disclosures/` 中存在特朗普/OGE/Open Cabinet/Quiver/InsiderCat 相关持仓或交易披露 artifact，可作为消息层证据输入；若没有结构化 artifact 或最新联网核验，不得编造具体持仓、交易数量、金额、日期或影响，只能说明“未获取到可核验的最新披露”。
+- 特朗普持仓与交易披露只属于消息层背景：不得自动加入 watchlist，不得提升任何标的 `execution_status`，不得把披露解读为买卖指令；最多用于提示相关标的需要额外核验政策/舆情/流动性风险。
 
 【输出文件（必须同时生成）】
 1) 精简执行版（用于 Cron 正文发送）
@@ -63,6 +65,14 @@
 ## 总览
 - 市场状态：
 - 今日最多3个重点标的：
+
+## 消息层汇总
+### 特朗普持仓与交易变化
+- 数据来源：<OGE / Open Cabinet / Quiver / InsiderCat / 未接入结构化披露输入>
+- 持仓变化：<只写可核验事实；无数据则写“未获取到可核验的最新披露”>
+- 交易变化：<只写可核验事实；金额必须保留披露区间或区间中点估算口径；无数据则写“未获取到可核验的最新披露”>
+- 关联观察：<仅列与当前 merged universe 重合的标的及消息层风险；不得作为交易信号>
+- 限制：披露有延迟、金额为区间、缺少精确股数/成交价/盘中成交时间；本节不能提升执行等级。
 
 ## 今日可执行交易计划
 ### <SYMBOL>
@@ -92,6 +102,7 @@
 【完整报告模板】
 沿用当前完整版结构输出到 report/<PRE_MARKET_DATE>/pre-market.md，并对每个标的增加一行：
 - 参考 setup：<setup-file.md>
+完整报告必须包含 `## 消息层汇总`，并在其中单独设置 `### 特朗普持仓与交易变化` 小节。该小节只汇总可核验披露事实、与今日观察池重合的标的、数据限制和“不作为交易信号”的说明；如果没有数据，必须明确写出未获取到可核验的最新披露。
 
 【pre-market-signals.json 模板】
 必须与精简执行版里的「今日最多3个重点标的」一致。`conditional_executable` 表示满足人工执行前置条件的交易计划；`watch_only` 只代表观察候选；`no_trade` 表示不允许执行。
@@ -159,3 +170,5 @@
 - execution_status=conditional_executable 必须有 entry.trigger_price、stop.initial_stop、take_profit.tp1、risk.max_account_risk_pct、risk.risk_per_share、execution_rules.skip_conditions，且 TP1 的 RR >= 2
 - 缺少完整 Trade Plan Card 的标的只能标记为 watch_only 或 no_trade
 - regime 无法识别时，默认 NO TRADE
+- 盘前 Markdown 缺少 `## 消息层汇总` 或 `### 特朗普持仓与交易变化` -> 视为无效
+- 特朗普披露小节不得包含确定性买卖建议，不得提升任何标的执行等级；无可核验数据时必须说明数据缺口

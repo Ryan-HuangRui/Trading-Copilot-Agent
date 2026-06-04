@@ -17,6 +17,13 @@ GOOD_REPORT = """# 今日盘前完整报告（2026-05-26）
 ## 总览
 - 今日最多3个重点标的：MU
 
+## 消息层汇总
+### 特朗普持仓与交易变化
+- 数据来源：未接入结构化 OGE/Open Cabinet 披露输入；本节不构成交易信号。
+- 持仓变化：未获取到可核验的最新披露。
+- 交易变化：未获取到可核验的最新披露。
+- 对今日计划影响：只作为消息层风险背景，不能提升任何标的执行等级。
+
 ## 重点执行候选
 ### MU
 - 参考 setup：breakout_pullback_continuation.md
@@ -107,6 +114,25 @@ class ValidateReportTest(unittest.TestCase):
 
         self.assertEqual(payload["status"], "pass")
         self.assertEqual(payload["errors"], [])
+
+    def test_pre_market_report_requires_trump_disclosure_news_section(self):
+        report = GOOD_REPORT.replace(
+            """## 消息层汇总
+### 特朗普持仓与交易变化
+- 数据来源：未接入结构化 OGE/Open Cabinet 披露输入；本节不构成交易信号。
+- 持仓变化：未获取到可核验的最新披露。
+- 交易变化：未获取到可核验的最新披露。
+- 对今日计划影响：只作为消息层风险背景，不能提升任何标的执行等级。
+
+""",
+            "",
+        )
+        temp, root = self.make_repo(report)
+        with temp:
+            payload = self.validate_repo(root)
+
+        self.assertEqual(payload["status"], "fail")
+        self.assertTrue(any("Trump disclosure news section" in error for error in payload["errors"]))
 
     def test_fails_missing_setup_and_invalidation(self):
         bad_report = """# 报告

@@ -94,6 +94,10 @@ def has_risk(text: str) -> bool:
     return "风险" in text and any(token in text for token in ("<=1%", "<= 1%", "单笔", "止损", "降仓", "放弃", "NO TRADE"))
 
 
+def has_pre_market_news_layer(text: str) -> bool:
+    return "## 消息层汇总" in text and "特朗普持仓与交易变化" in text
+
+
 def is_actionable_section(text: str) -> bool:
     return any(token in text for token in ("可执行候选", "重点候选", "重点观察", "值得明日重点观察"))
 
@@ -169,6 +173,11 @@ def validate_report_text(
 
     if session == "pre-market" and not is_brief and "不是交易建议" not in text and "不是交易指令" not in text:
         warnings.append(f"{label}: pre-market report should explicitly say candidates are not trade instructions")
+
+    if session == "pre-market" and not has_pre_market_news_layer(text):
+        errors.append(
+            f"{label}: missing Trump disclosure news section under ## 消息层汇总"
+        )
 
     if not is_brief and not has_trigger(text):
         errors.append(f"{label}: missing trigger condition wording")

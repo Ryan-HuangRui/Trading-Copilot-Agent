@@ -71,7 +71,7 @@ Paper execution is an execution extension to this report workflow, not a report-
    This removes stale symbols from the `今日关注` group only; it must not globally unfollow securities or remove them from other watchlists.
 12. Next pre-market context reuses the previous trading day's snapshot:
    ```bash
-   python3 script/prepare_daily_context.py --watchlist config/watchlist.json --skip-non-trading-day
+   python3 script/trading_copilot.py pre-market-plan --watchlist config/watchlist.json --skip-non-trading-day
    ```
 13. Inspect the pre-market context when the automation or operator needs a stable schema summary:
    ```bash
@@ -79,10 +79,12 @@ Paper execution is an execution extension to this report workflow, not a report-
    ```
 14. Pre-market report generation reads:
    - `report/<PRE_MARKET_DATE>/pre-market-context.json`
+   - `report/<PRE_MARKET_DATE>/external-disclosures/trump-trades.json` when available
 15. Pre-market output writes:
    - `report/<PRE_MARKET_DATE>/exec-brief.md`
    - `report/<PRE_MARKET_DATE>/pre-market.md`
    - `report/<PRE_MARKET_DATE>/pre-market-signals.json`
+   - both Markdown reports must include `## 消息层汇总` with a dedicated `### 特朗普持仓与交易变化` subsection; if no structured or freshly verified disclosure input is available, the subsection must explicitly state the data gap.
 16. Record LLM report-generation provenance after Codex writes the report artifacts:
    ```bash
    python3 script/trading_copilot.py llm-generation-manifest --session pre-market --date <PRE_MARKET_DATE> --model <MODEL> --prompt agent/daily_analysis_prompt.md --input report/<PRE_MARKET_DATE>/pre-market-context.json --generated-output report/<PRE_MARKET_DATE>/exec-brief.md --generated-output report/<PRE_MARKET_DATE>/pre-market.md --generated-output report/<PRE_MARKET_DATE>/pre-market-signals.json
@@ -97,17 +99,11 @@ Paper execution is an execution extension to this report workflow, not a report-
    python3 script/trading_copilot.py validate-report --session pre-market --date <PRE_MARKET_DATE>
    python3 script/trading_copilot.py validate-trade-plan --session pre-market --date <PRE_MARKET_DATE>
    ```
-19. Append the focused pre-market plan to `runtime/journal/signals.jsonl`:
+19. Run the manual append/review/sync commands only when debugging the deterministic delivery wrapper:
    ```bash
    python3 script/trading_copilot.py extract-report-signals --session pre-market --date <PRE_MARKET_DATE> --require-validation --append
-   ```
-20. Optional read-only account and position review:
-   ```bash
    python3 script/trading_copilot.py account-snapshot --date <PRE_MARKET_DATE>
    python3 script/trading_copilot.py position-review --date <PRE_MARKET_DATE> --append
-   ```
-21. Pre-market Longbridge sync incrementally adds the generated focus symbols to `今日关注`:
-   ```bash
    python3 script/trading_copilot.py sync-longbridge-watchlist --session pre-market --date <PRE_MARKET_DATE> --group-name 今日关注 --sync-mode add --require-validation --execute --no-create
    ```
 
@@ -140,13 +136,17 @@ The wrapper is a full replacement of the old manual validation/backfill/extract/
 ### Pre-market task
 Run:
 ```bash
-python3 script/prepare_daily_context.py --watchlist config/watchlist.json --skip-non-trading-day
+python3 script/trading_copilot.py pre-market-plan --watchlist config/watchlist.json --skip-non-trading-day
 ```
+
+The wrapper runs `external_disclosure_provider.py` by default and writes `report/<PRE_MARKET_DATE>/external-disclosures/trump-trades.json`. If the disclosure source fails, keep the generated status artifact as message-layer context and continue with the report; the report must state the data gap. Use `--no-external-disclosures` only when this source is intentionally disabled.
 
 If output contains `skipped=true`, stop. Otherwise read `agent/daily_analysis_prompt.md`, `knowledge/refined/`, and `report/<PRE_MARKET_DATE>/pre-market-context.json`, then generate:
 - `report/<PRE_MARKET_DATE>/exec-brief.md`
 - `report/<PRE_MARKET_DATE>/pre-market.md`
 - `report/<PRE_MARKET_DATE>/pre-market-signals.json`
+
+The two Markdown reports must include a `## 消息层汇总` section with a dedicated `### 特朗普持仓与交易变化` subsection. This subsection may summarize OGE/Open Cabinet/Quiver/InsiderCat disclosure evidence when such input is available, but it must not invent missing holdings or trades. It is a news-layer background summary only and must not upgrade any symbol from `watch_only` or `no_trade` to `conditional_executable`.
 
 After `exec-brief.md` and `pre-market.md` are generated, record the LLM generation manifest and hand the bundle to the deterministic delivery wrapper:
 ```bash
@@ -164,3 +164,4 @@ The wrapper is additive for `今日关注` by default. It may add new focus symb
 - `--require-validation` on report extraction and Longbridge sync runs both report validation and trade-plan validation; do not continue when either gate fails.
 - If market regime is unclear, data is insufficient, or refined rules do not support a setup, output `NO TRADE`.
 - Dynamic S&P 500 candidates are only an observation universe; they must still pass refined setup rules before appearing as executable candidates.
+- Trump holdings and trade disclosures are news-layer evidence only. They may identify overlap with the current observation universe and risk context, but they are not trading signals and must not alter watchlist membership or raise execution readiness.

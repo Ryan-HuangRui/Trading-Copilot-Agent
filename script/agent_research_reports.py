@@ -74,6 +74,16 @@ def provider_fixture_evidence(path: Path | None) -> dict[str, list[dict[str, Any
     return result
 
 
+def external_disclosure_evidence(path: Path | None) -> list[dict[str, Any]]:
+    if path is None or not path.exists():
+        return []
+    payload = read_json(path)
+    evidence = payload.get("evidence")
+    if not isinstance(evidence, list):
+        return []
+    return [item for item in evidence if isinstance(item, dict)]
+
+
 def build_report(
     *,
     report_type: str,
@@ -125,10 +135,16 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     market_path = resolve_path(repo_root, args.market_data) if args.market_data else repo_root / "report" / args.date / "agents" / "market-data.json"
     technicals_path = resolve_path(repo_root, args.technicals) if args.technicals else repo_root / "report" / args.date / "agents" / "technicals.json"
     fixture_path = resolve_path(repo_root, args.provider_fixture) if args.provider_fixture else repo_root / "tests" / "fixtures" / "agent_research" / "provider_contract_fixture.json"
+    external_disclosures_path = (
+        resolve_path(repo_root, args.external_disclosures)
+        if args.external_disclosures
+        else repo_root / "report" / args.date / "external-disclosures" / "trump-trades.json"
+    )
 
     market_payload = read_json(market_path)
     technicals_payload = read_json(technicals_path)
     fixture = provider_fixture_evidence(fixture_path)
+    external_evidence = external_disclosure_evidence(external_disclosures_path)
     symbols = normalize_symbols(args.symbol)
     artifacts: list[str] = []
     for symbol in symbols:
@@ -161,6 +177,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             report_evidence = [
                 item for item in fixture[report_type] if str(item.get("symbol") or "").upper() == symbol
             ]
+            if report_type == "news":
+                report_evidence.extend(
+                    item
+                    for item in external_evidence
+                    if str(item.get("symbol") or "").upper() == symbol
+                )
             reports.append(
                 build_report(
                     report_type=report_type,
@@ -198,6 +220,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--market-data")
     parser.add_argument("--technicals")
     parser.add_argument("--provider-fixture")
+    parser.add_argument("--external-disclosures")
     parser.add_argument("--output-dir")
     parser.add_argument("--markdown", action="store_true")
     parser.add_argument("--repo-root", default=str(Path(__file__).resolve().parents[1]))
