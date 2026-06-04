@@ -2546,7 +2546,13 @@ def run_paper_lifecycle(args: argparse.Namespace) -> None:
             workflow="paper_take_profit_plan",
             script="script/paper_take_profit_plan.py",
             execute=bool(args.execute_take_profit),
-            extra=["--exit-fraction", str(args.exit_fraction), "--tif", args.take_profit_tif],
+            extra=[
+                "--exit-fraction",
+                str(args.exit_fraction),
+                "--tif",
+                args.take_profit_tif,
+                *(["--resize-stop-before-submit"] if args.resize_stop_before_take_profit else []),
+            ],
         )
         break_even = exit_plan(
             workflow="paper_break_even_stop_plan",
@@ -2754,6 +2760,10 @@ def run_paper_take_profit_plan(args: argparse.Namespace) -> None:
         command.extend(["--output", args.output])
     if args.take_profit_journal:
         command.extend(["--take-profit-journal", args.take_profit_journal])
+    if args.stops_journal:
+        command.extend(["--stops-journal", args.stops_journal])
+    if args.resize_stop_before_submit:
+        command.append("--resize-stop-before-submit")
     if args.longbridge_cli:
         command.extend(["--longbridge-cli", args.longbridge_cli])
     if args.paper_execution_config:
@@ -3427,6 +3437,7 @@ def build_parser() -> argparse.ArgumentParser:
     paper_lifecycle.add_argument("--execute-protective-stop", action="store_true")
     paper_lifecycle.add_argument("--execute-take-profit", action="store_true")
     paper_lifecycle.add_argument("--execute-break-even-stop", action="store_true")
+    paper_lifecycle.add_argument("--resize-stop-before-take-profit", action="store_true")
     paper_lifecycle.add_argument("--expire-after-minutes", type=int, default=90)
     paper_lifecycle.add_argument("--stop-tif", default="gtc")
     paper_lifecycle.add_argument("--take-profit-tif", default="gtc")
@@ -3467,8 +3478,10 @@ def build_parser() -> argparse.ArgumentParser:
     paper_tp.add_argument("--state")
     paper_tp.add_argument("--output")
     paper_tp.add_argument("--take-profit-journal")
+    paper_tp.add_argument("--stops-journal")
     paper_tp.add_argument("--exit-fraction", type=float, default=0.5)
     paper_tp.add_argument("--tif", default="gtc")
+    paper_tp.add_argument("--resize-stop-before-submit", action="store_true")
     paper_tp.add_argument("--longbridge-cli")
     paper_tp.add_argument("--execute", action="store_true")
     paper_tp.add_argument("--paper-execution-config")

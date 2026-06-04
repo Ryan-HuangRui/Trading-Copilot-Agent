@@ -79,6 +79,7 @@ class PaperExecutionConfigTest(unittest.TestCase):
         self.assertEqual(actions["cancel"]["execution_status"], "config_disabled")
         self.assertEqual(actions["protective_stop"]["order_type"], "MIT")
         self.assertEqual(actions["break_even_stop_move"]["config_key"], "allow_break_even_stop_move")
+        self.assertEqual(actions["take_profit_stop_resize"]["config_key"], "allow_take_profit_stop_resize")
         self.assertIn("native_oco", unsupported)
         self.assertNotIn("market_entry", unsupported)
 
@@ -109,6 +110,19 @@ class PaperExecutionConfigTest(unittest.TestCase):
 
         config["allow_break_even_stop_move"] = True
         ensure_paper_write_allowed(config, execute=True, action="break_even_stop_move")
+
+    def test_take_profit_stop_resize_has_separate_gate(self):
+        config = {
+            "broker_writes_enabled": True,
+            "allow_take_profit": True,
+            "allow_take_profit_stop_resize": False,
+        }
+
+        with self.assertRaises(PermissionError):
+            ensure_paper_write_allowed(config, execute=True, action="take_profit_stop_resize")
+
+        config["allow_take_profit_stop_resize"] = True
+        ensure_paper_write_allowed(config, execute=True, action="take_profit_stop_resize")
 
     def test_intraday_entry_gate_is_supported_but_separate_from_entry_submit(self):
         config = {

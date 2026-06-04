@@ -320,6 +320,7 @@ class TradingCopilotWrapperTest(unittest.TestCase):
             execute_protective_stop=False,
             execute_take_profit=False,
             execute_break_even_stop=False,
+            resize_stop_before_take_profit=False,
             append_lessons=False,
             strategy_review=False,
             expire_after_minutes=90,
@@ -378,8 +379,9 @@ class TradingCopilotWrapperTest(unittest.TestCase):
             longbridge_cli="/usr/local/bin/longbridge",
             execute_cancel=True,
             execute_protective_stop=True,
-            execute_take_profit=False,
+            execute_take_profit=True,
             execute_break_even_stop=True,
+            resize_stop_before_take_profit=True,
             append_lessons=True,
             strategy_review=True,
             expire_after_minutes=90,
@@ -399,7 +401,8 @@ class TradingCopilotWrapperTest(unittest.TestCase):
         by_workflow = {Path(command[0]).stem: command for command in calls}
         self.assertIn("--execute", by_workflow["paper_order_cancel"])
         self.assertIn("--execute", by_workflow["paper_protective_stop_plan"])
-        self.assertNotIn("--execute", by_workflow["paper_take_profit_plan"])
+        self.assertIn("--execute", by_workflow["paper_take_profit_plan"])
+        self.assertIn("--resize-stop-before-submit", by_workflow["paper_take_profit_plan"])
         self.assertIn("--execute", by_workflow["paper_break_even_stop_plan"])
         self.assertIn("--paper-execution-config", by_workflow["paper_order_cancel"])
         self.assertIn("/usr/local/bin/longbridge", by_workflow["paper_order_cancel"])
@@ -407,7 +410,57 @@ class TradingCopilotWrapperTest(unittest.TestCase):
         self.assertIn("paper_strategy_review", [Path(command[0]).stem for command in calls])
         payload = emit.call_args.args[0]
         self.assertTrue(payload["execute_requested"]["cancel"])
-        self.assertFalse(payload["execute_requested"]["take_profit"])
+        self.assertTrue(payload["execute_requested"]["take_profit"])
+
+    def test_paper_take_profit_wrapper_passes_stop_resize_options(self):
+        calls = []
+
+        def fake_run_child(command):
+            calls.append(command)
+            payload = {
+                "status": "success",
+                "date": "2026-05-26",
+                "output": "report/2026-05-26/paper-take-profit-plan.json",
+                "dry_run": False,
+                "summary": {"take_profit_candidates": 1, "resized_stops": 1, "submitted": 1},
+            }
+            return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
+
+        args = Namespace(
+            date="2026-05-26",
+            repo_root=str(ROOT),
+            state="runtime/paper/2026-05-26/paper-execution-state.json",
+            output="report/2026-05-26/paper-take-profit-plan.json",
+            take_profit_journal="runtime/paper/2026-05-26/paper-take-profit-orders.jsonl",
+            stops_journal="runtime/paper/2026-05-26/paper-stop-orders.jsonl",
+            exit_fraction=0.5,
+            tif="gtc",
+            resize_stop_before_submit=True,
+            longbridge_cli="/usr/local/bin/longbridge",
+            paper_execution_config="config/paper_execution.local.json",
+            execute=True,
+        )
+
+        with patch.object(trading_copilot, "run_child", side_effect=fake_run_child), patch.object(
+            trading_copilot, "emit", side_effect=SystemExit
+        ) as emit:
+            with self.assertRaises(SystemExit):
+                trading_copilot.run_paper_take_profit_plan(args)
+
+        command = calls[0]
+        self.assertEqual(command[0], "script/paper_take_profit_plan.py")
+        self.assertIn("--stops-journal", command)
+        self.assertEqual(
+            command[command.index("--stops-journal") + 1],
+            "runtime/paper/2026-05-26/paper-stop-orders.jsonl",
+        )
+        self.assertIn("--take-profit-journal", command)
+        self.assertIn("--resize-stop-before-submit", command)
+        self.assertIn("--execute", command)
+        self.assertIn("--paper-execution-config", command)
+        payload = emit.call_args.args[0]
+        self.assertEqual(payload["workflow"], "paper-take-profit-plan")
+        self.assertEqual(payload["summary"]["resized_stops"], 1)
 
     def test_paper_lifecycle_wrapper_smoke_with_fixture_account(self):
         with tempfile.TemporaryDirectory() as tmp:

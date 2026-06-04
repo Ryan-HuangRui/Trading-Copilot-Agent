@@ -1118,6 +1118,7 @@ Execution command:
 
 ```bash
 python3 script/trading_copilot.py paper-take-profit-plan --date <DATE> --execute
+python3 script/trading_copilot.py paper-take-profit-plan --date <DATE> --execute --resize-stop-before-submit
 ```
 
 Inputs:
@@ -1135,6 +1136,7 @@ Required behavior:
 
 - Default behavior is dry-run and must not call broker write APIs.
 - Broker TP1 submission requires both `--execute` and `config/paper_execution.json` with `paper_execution.broker_writes_enabled=true` and `paper_execution.allow_take_profit=true`.
+- When `--resize-stop-before-submit` is used, stop resizing requires the separate `paper_execution.allow_take_profit_stop_resize=true` gate. The workflow must cancel the existing over-sized protective stop, submit a resized MIT stop for the post-TP1 remaining quantity, record it in `paper-stop-orders.jsonl`, and only then submit TP1.
 - Broker TP1 submission must use only `script/longbridge_paper_order_adapter.py`.
 - Only fully filled long buy entries with positive `take_profit`, positive filled quantity, and no existing TP1/take-profit order may become TP1 candidates.
 - The first TP1 plan uses Longbridge `sell` `LO` with `--price <take_profit>`, `tif=gtc` by default, and a default `--exit-fraction 0.5`.

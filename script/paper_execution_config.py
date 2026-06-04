@@ -14,6 +14,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "allow_cancel": False,
     "allow_protective_stop": False,
     "allow_take_profit": False,
+    "allow_take_profit_stop_resize": False,
     "allow_intraday_entry_submit": False,
     "allow_break_even_stop_move": False,
 }
@@ -24,6 +25,7 @@ ACTION_CONFIG_KEYS = {
     "cancel": "allow_cancel",
     "protective_stop": "allow_protective_stop",
     "take_profit": "allow_take_profit",
+    "take_profit_stop_resize": "allow_take_profit_stop_resize",
     "break_even_stop_move": "allow_break_even_stop_move",
 }
 
@@ -72,6 +74,15 @@ SUPPORTED_BROKER_ACTIONS: tuple[dict[str, Any], ...] = (
         "side": "sell",
         "workflow": "paper-take-profit-plan",
         "maturity": "dry_run_first",
+    },
+    {
+        "action": "take_profit_stop_resize",
+        "label": "Resize protective stop before TP1",
+        "config_key": "allow_take_profit_stop_resize",
+        "order_type": "cancel + MIT",
+        "side": "sell",
+        "workflow": "paper-take-profit-plan",
+        "maturity": "guarded_cancel_then_submit",
     },
     {
         "action": "break_even_stop_move",
