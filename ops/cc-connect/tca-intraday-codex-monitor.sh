@@ -124,14 +124,11 @@ PROMPT="你是 Trading-Copilot-Agent 的 cc-connect 盘中 Codex 盯盘定时任
 
 盘中模拟盘生命周期开关：TCA_INTRADAY_ENABLE_PAPER_LIFECYCLE=$ENABLE_PAPER_LIFECYCLE，TCA_INTRADAY_EXIT_EXECUTE=$ENABLE_EXIT_EXECUTE。
 - 只有 ENABLE_PAPER_LIFECYCLE=1 且 runtime/paper/$DATE/paper-orders.jsonl 存在时，才运行同步与 exit 管理：
-  python3 script/trading_copilot.py paper-account-snapshot --date $DATE
-  python3 script/trading_copilot.py paper-order-sync --date $DATE
-  python3 script/trading_copilot.py paper-order-cancel --date $DATE --paper-execution-config $PAPER_CONFIG
-  python3 script/trading_copilot.py paper-protective-stop-plan --date $DATE --paper-execution-config $PAPER_CONFIG
-  python3 script/trading_copilot.py paper-take-profit-plan --date $DATE --paper-execution-config $PAPER_CONFIG
-  python3 script/trading_copilot.py paper-break-even-stop-plan --date $DATE --paper-execution-config $PAPER_CONFIG
-- 只有 ENABLE_EXIT_EXECUTE=1 时，且对应 config gate 已启用，才可以给上述 exit workflow 添加 --execute。
-- exit 执行后必须再次 account-snapshot + paper-order-sync + paper-event-ledger + paper-execution-review，并发送一条简短飞书状态。
+  python3 script/trading_copilot.py paper-lifecycle --date $DATE --paper-execution-config $PAPER_CONFIG --append-lessons --strategy-review
+- 只有 ENABLE_EXIT_EXECUTE=1 时，且对应 config gate 已启用，才可以追加：
+  --execute-cancel --execute-protective-stop --execute-take-profit --execute-break-even-stop
+- 该 wrapper 已包含 account-snapshot、paper-order-sync、exit 计划、再次同步、paper-event-ledger、paper-execution-review。
+- lifecycle dry-run 或执行后，如果有 executed/submitted/moved/errors/candidate lessons，使用 cc-connect send 发送一条简短飞书状态。
 
 失败处理：
 - 任一步失败时，使用 cc-connect send 发送简短失败状态，包含 date、失败命令、reason、关键 log tail。
