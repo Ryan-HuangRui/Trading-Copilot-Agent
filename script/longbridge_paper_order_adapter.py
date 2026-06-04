@@ -210,14 +210,9 @@ class LongbridgePaperOrderAdapter:
     def validate_protective_stop_intent(self, intent: dict[str, Any]) -> None:
         if intent.get("side") != "sell":
             raise ValueError("only sell side is supported for protective stops")
-        if intent.get("order_type") != "MIT":
-            raise ValueError("only MIT stop orders are supported")
-        if int(intent.get("quantity") or 0) <= 0:
-            raise ValueError("quantity must be > 0")
-        if not intent.get("longbridge_symbol"):
-            raise ValueError("longbridge_symbol is required")
-        if float(intent.get("trigger_price") or 0) <= 0:
-            raise ValueError("trigger_price must be > 0")
+        errors = validate_order_shape(intent)
+        if errors:
+            raise ValueError("; ".join(errors))
 
     def submit_protective_stop_order(
         self,
@@ -229,26 +224,8 @@ class LongbridgePaperOrderAdapter:
         self.validate_protective_stop_intent(intent)
         self.ensure_write_allowed(execute=execute, action=action)
         account_channel = self.assert_paper_account()
-        quantity = str(int(intent["quantity"]))
-        trigger_price = format_decimal(float(intent["trigger_price"]))
         remark = str(intent.get("remark") or f"tca-stop:{intent['intent_id']}")
-        command = [
-            "order",
-            "sell",
-            str(intent["longbridge_symbol"]),
-            quantity,
-            "--order-type",
-            "MIT",
-            "--trigger-price",
-            trigger_price,
-            "--tif",
-            str(intent.get("tif") or "gtc"),
-            "--remark",
-            remark,
-            "--format",
-            "json",
-            "-y",
-        ]
+        command = self.submit_order_command({**intent, "remark": remark})
         raw_response = self.run_json(command)
         broker_order_id = None
         if isinstance(raw_response, dict):

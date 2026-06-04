@@ -398,7 +398,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     stop_intent = {
                         **candidate,
                         "quantity": candidate["post_tp_remaining_quantity"],
+                        "order_type": "MIT",
+                        "limit_price": None,
                         "trigger_price": candidate["stop_resize_trigger_price"],
+                        "trailing_amount": None,
+                        "trailing_percent": None,
+                        "limit_offset": None,
                         "remark": f"tca-resize-stop:{candidate['intent_id']}",
                     }
                     stop_result = adapter.submit_protective_stop_order(

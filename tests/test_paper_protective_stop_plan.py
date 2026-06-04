@@ -96,6 +96,66 @@ class PaperProtectiveStopPlanTest(unittest.TestCase):
                 ],
             )
 
+    def test_plan_creates_lit_sell_stop_from_stop_price(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.seed_state(root, [filled_entry()])
+
+            result = paper_protective_stop_plan.run(
+                paper_protective_stop_plan.build_args(
+                    repo_root=str(root),
+                    date="2026-05-26",
+                    order_type="LIT",
+                    limit_price=94.5,
+                )
+            )
+
+            payload = json.loads(Path(result["output"]).read_text(encoding="utf-8"))
+            candidate = payload["stop_candidates"][0]
+            self.assertEqual(candidate["order_type"], "LIT")
+            self.assertEqual(candidate["limit_price"], 94.5)
+            self.assertEqual(candidate["trigger_price"], 95.0)
+            self.assertEqual(candidate["preview_command"][candidate["preview_command"].index("--order-type") + 1], "LIT")
+            self.assertEqual(candidate["preview_command"][candidate["preview_command"].index("--price") + 1], "94.5")
+            self.assertEqual(candidate["preview_command"][candidate["preview_command"].index("--trigger-price") + 1], "95")
+
+    def test_plan_blocks_trailing_stop_without_required_trailing_percent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.seed_state(root, [filled_entry()])
+
+            result = paper_protective_stop_plan.run(
+                paper_protective_stop_plan.build_args(repo_root=str(root), date="2026-05-26", order_type="TSLPPCT")
+            )
+
+            self.assertEqual(result["summary"]["stop_candidates"], 0)
+            self.assertEqual(result["summary"]["blocked"], 1)
+            payload = json.loads(Path(result["output"]).read_text(encoding="utf-8"))
+            self.assertIn("trailing_percent must be > 0 for TSLPPCT", payload["blocked"][0]["reason"])
+
+    def test_plan_creates_trailing_percent_stop_when_shape_is_complete(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.seed_state(root, [filled_entry()])
+
+            result = paper_protective_stop_plan.run(
+                paper_protective_stop_plan.build_args(
+                    repo_root=str(root),
+                    date="2026-05-26",
+                    order_type="TSLPPCT",
+                    trailing_percent=2.5,
+                    limit_offset=0.3,
+                )
+            )
+
+            payload = json.loads(Path(result["output"]).read_text(encoding="utf-8"))
+            candidate = payload["stop_candidates"][0]
+            self.assertEqual(candidate["order_type"], "TSLPPCT")
+            self.assertEqual(candidate["trailing_percent"], 2.5)
+            self.assertEqual(candidate["limit_offset"], 0.3)
+            self.assertEqual(candidate["preview_command"][candidate["preview_command"].index("--trailing-percent") + 1], "2.5")
+            self.assertEqual(candidate["preview_command"][candidate["preview_command"].index("--limit-offset") + 1], "0.3")
+
     def test_plan_blocks_unfilled_partial_missing_stop_and_existing_stop(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -221,6 +281,10 @@ class PaperProtectiveStopPlanTest(unittest.TestCase):
                     str(root),
                     "--date",
                     "2026-05-26",
+                    "--order-type",
+                    "LIT",
+                    "--limit-price",
+                    "94.5",
                 ],
                 cwd=ROOT,
                 check=False,

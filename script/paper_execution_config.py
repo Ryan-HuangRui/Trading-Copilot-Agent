@@ -65,7 +65,7 @@ SUPPORTED_BROKER_ACTIONS: tuple[dict[str, Any], ...] = (
         "action": "protective_stop",
         "label": "Protective stop",
         "config_key": "allow_protective_stop",
-        "order_type": "MIT",
+        "order_type": "LO/ELO/MO/AO/ALO/ODD/SLO/LIT/MIT/TSLPAMT/TSLPPCT",
         "side": "sell",
         "workflow": "paper-protective-stop-plan",
         "maturity": "dry_run_first",

@@ -110,6 +110,8 @@ Build a dry-run protective stop plan for filled long paper entries:
 python3 script/trading_copilot.py paper-protective-stop-plan --date <DATE>
 ```
 
+The default protective stop is a Longbridge `sell MIT` at `stop_price`. Alternative paper stop order types can be dry-run with the shared shape flags, for example `--order-type LIT --limit-price <LIMIT>` or `--order-type TSLPPCT --trailing-percent 2.5 --limit-offset 0.3`.
+
 Submit guarded paper protective stops for filled long entries:
 
 ```bash

@@ -2544,7 +2544,39 @@ def run_paper_lifecycle(args: argparse.Namespace) -> None:
             workflow="paper_protective_stop_plan",
             script="script/paper_protective_stop_plan.py",
             execute=bool(args.execute_protective_stop),
-            extra=["--tif", args.stop_tif],
+            extra=[
+                "--order-type",
+                getattr(args, "stop_order_type", "MIT"),
+                "--tif",
+                args.stop_tif,
+                *(
+                    ["--limit-price", str(args.stop_limit_price)]
+                    if getattr(args, "stop_limit_price", None) is not None
+                    else []
+                ),
+                *(
+                    ["--trigger-price", str(args.stop_trigger_price)]
+                    if getattr(args, "stop_trigger_price", None) is not None
+                    else []
+                ),
+                *(
+                    ["--trailing-amount", str(args.stop_trailing_amount)]
+                    if getattr(args, "stop_trailing_amount", None) is not None
+                    else []
+                ),
+                *(
+                    ["--trailing-percent", str(args.stop_trailing_percent)]
+                    if getattr(args, "stop_trailing_percent", None) is not None
+                    else []
+                ),
+                *(
+                    ["--limit-offset", str(args.stop_limit_offset)]
+                    if getattr(args, "stop_limit_offset", None) is not None
+                    else []
+                ),
+                *(["--expire-date", args.stop_expire_date] if getattr(args, "stop_expire_date", None) else []),
+                *(["--outside-rth", args.stop_outside_rth] if getattr(args, "stop_outside_rth", None) else []),
+            ],
         )
         take_profit = exit_plan(
             workflow="paper_take_profit_plan",
@@ -2762,6 +2794,8 @@ def run_paper_protective_stop_plan(args: argparse.Namespace) -> None:
         args.date,
         "--repo-root",
         args.repo_root,
+        "--order-type",
+        getattr(args, "order_type", "MIT"),
         "--tif",
         args.tif,
     ]
@@ -2771,6 +2805,20 @@ def run_paper_protective_stop_plan(args: argparse.Namespace) -> None:
         command.extend(["--output", args.output])
     if args.stops_journal:
         command.extend(["--stops-journal", args.stops_journal])
+    optional_prices = [
+        ("--limit-price", getattr(args, "limit_price", None)),
+        ("--trigger-price", getattr(args, "trigger_price", None)),
+        ("--trailing-amount", getattr(args, "trailing_amount", None)),
+        ("--trailing-percent", getattr(args, "trailing_percent", None)),
+        ("--limit-offset", getattr(args, "limit_offset", None)),
+    ]
+    for flag, value in optional_prices:
+        if value is not None:
+            command.extend([flag, str(value)])
+    if getattr(args, "expire_date", None):
+        command.extend(["--expire-date", args.expire_date])
+    if getattr(args, "outside_rth", None):
+        command.extend(["--outside-rth", args.outside_rth])
     if args.longbridge_cli:
         command.extend(["--longbridge-cli", args.longbridge_cli])
     if args.paper_execution_config:
@@ -3564,6 +3612,14 @@ def build_parser() -> argparse.ArgumentParser:
     paper_lifecycle.add_argument("--resize-stop-before-take-profit", action="store_true")
     paper_lifecycle.add_argument("--expire-after-minutes", type=int, default=90)
     paper_lifecycle.add_argument("--stop-tif", default="gtc")
+    paper_lifecycle.add_argument("--stop-order-type", default="MIT")
+    paper_lifecycle.add_argument("--stop-limit-price", type=float)
+    paper_lifecycle.add_argument("--stop-trigger-price", type=float)
+    paper_lifecycle.add_argument("--stop-trailing-amount", type=float)
+    paper_lifecycle.add_argument("--stop-trailing-percent", type=float)
+    paper_lifecycle.add_argument("--stop-limit-offset", type=float)
+    paper_lifecycle.add_argument("--stop-expire-date")
+    paper_lifecycle.add_argument("--stop-outside-rth")
     paper_lifecycle.add_argument("--take-profit-tif", default="gtc")
     paper_lifecycle.add_argument("--take-profit-order-type", default="LO")
     paper_lifecycle.add_argument("--take-profit-limit-price", type=float)
@@ -3600,7 +3656,15 @@ def build_parser() -> argparse.ArgumentParser:
     paper_stop.add_argument("--state")
     paper_stop.add_argument("--output")
     paper_stop.add_argument("--stops-journal")
+    paper_stop.add_argument("--order-type", default="MIT")
+    paper_stop.add_argument("--limit-price", type=float)
+    paper_stop.add_argument("--trigger-price", type=float)
+    paper_stop.add_argument("--trailing-amount", type=float)
+    paper_stop.add_argument("--trailing-percent", type=float)
+    paper_stop.add_argument("--limit-offset", type=float)
     paper_stop.add_argument("--tif", default="gtc")
+    paper_stop.add_argument("--expire-date")
+    paper_stop.add_argument("--outside-rth")
     paper_stop.add_argument("--longbridge-cli")
     paper_stop.add_argument("--execute", action="store_true")
     paper_stop.add_argument("--paper-execution-config")

@@ -1079,6 +1079,8 @@ Canonical command:
 
 ```bash
 python3 script/trading_copilot.py paper-protective-stop-plan --date <DATE>
+python3 script/trading_copilot.py paper-protective-stop-plan --date <DATE> --order-type LIT --limit-price <LIMIT>
+python3 script/trading_copilot.py paper-protective-stop-plan --date <DATE> --order-type TSLPPCT --trailing-percent 2.5 --limit-offset 0.3
 ```
 
 Execution command:
@@ -1104,7 +1106,8 @@ Required behavior:
 - Broker stop submission requires both `--execute` and `config/paper_execution.json` with `paper_execution.broker_writes_enabled=true` and `paper_execution.allow_protective_stop=true`.
 - Broker stop submission must use only `script/longbridge_paper_order_adapter.py`.
 - Only fully filled long buy entries with positive `stop_price`, positive filled quantity, and no existing protective stop may become stop candidates.
-- The first stop plan uses Longbridge `sell` `MIT` with `--trigger-price <stop_price>` and `tif=gtc` by default.
+- The default stop plan uses Longbridge `sell` `MIT` with `--trigger-price <stop_price>` and `tif=gtc`.
+- Protective stops may use the shared Longbridge order shape through `--order-type`, `--limit-price`, `--trigger-price`, `--trailing-amount`, `--trailing-percent`, `--limit-offset`, `--expire-date`, and `--outside-rth`. Price-based orders default price to `stop_price`; trigger-based orders default trigger to `stop_price`.
 - Duplicate `intent_id` values already present in `paper-stop-orders.jsonl` must be blocked.
 - The artifact must separate `stop_candidates`, `blocked`, `submitted`, and `errors`.
 - The artifact must include `execution_policy` and `broker_capabilities`.
