@@ -34,6 +34,10 @@ def default_take_profit_path(repo_root: Path, date: str, explicit_path: str | No
     return resolve_path(repo_root, explicit_path, repo_root / "runtime" / "paper" / date / "paper-take-profit-orders.jsonl")
 
 
+def default_exits_path(repo_root: Path, date: str, explicit_path: str | None) -> Path:
+    return resolve_path(repo_root, explicit_path, repo_root / "runtime" / "paper" / date / "paper-exit-orders.jsonl")
+
+
 def default_state_path(repo_root: Path, date: str, explicit_path: str | None) -> Path:
     return resolve_path(repo_root, explicit_path, repo_root / "runtime" / "paper" / date / "paper-execution-state.json")
 
@@ -169,6 +173,11 @@ def status_event_type(entity_type: str, status: str) -> str:
             return "take_profit_filled"
         if status in {"rejected", "cancelled", "expired", "partially_filled", "accepted", "submitted"}:
             return f"take_profit_{status}"
+    if entity_type == "paper_exit_order":
+        if status == "filled":
+            return "exit_filled"
+        if status in {"rejected", "cancelled", "expired", "partially_filled", "accepted", "submitted"}:
+            return f"exit_{status}"
     return f"{entity_type}_{status}"
 
 
@@ -210,6 +219,7 @@ def collect_events(
     orders: list[dict[str, Any]],
     stops: list[dict[str, Any]],
     take_profits: list[dict[str, Any]],
+    exits: list[dict[str, Any]],
     state: dict[str, Any] | None,
 ) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
@@ -223,13 +233,16 @@ def collect_events(
             entity_type="paper_take_profit_order",
         )
     )
+    events.extend(submitted_events(date, exits, event_type="exit_submitted", entity_type="paper_exit_order"))
     if state:
         state_orders = state.get("orders") if isinstance(state.get("orders"), list) else []
         state_stops = state.get("protective_stops") if isinstance(state.get("protective_stops"), list) else []
         state_take_profits = state.get("take_profit_orders") if isinstance(state.get("take_profit_orders"), list) else []
+        state_exits = state.get("exit_orders") if isinstance(state.get("exit_orders"), list) else []
         events.extend(execution_state_events(date, state_orders, entity_type="paper_entry_order"))
         events.extend(execution_state_events(date, state_stops, entity_type="paper_stop_order"))
         events.extend(execution_state_events(date, state_take_profits, entity_type="paper_take_profit_order"))
+        events.extend(execution_state_events(date, state_exits, entity_type="paper_exit_order"))
 
     deduped: dict[str, dict[str, Any]] = {}
     for item in events:
@@ -252,6 +265,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     orders_path = default_orders_path(repo_root, args.date, args.orders_journal)
     stops_path = default_stops_path(repo_root, args.date, args.stops_journal)
     take_profit_path = default_take_profit_path(repo_root, args.date, args.take_profit_journal)
+    exits_path = default_exits_path(repo_root, args.date, args.exits_journal)
     state_path = default_state_path(repo_root, args.date, args.execution_state)
     events_path = default_events_path(repo_root, args.events_journal)
     output = default_output_path(repo_root, args.date, args.output)
@@ -259,8 +273,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     orders = load_order_records(orders_path)
     stops = load_order_records(stops_path)
     take_profits = load_order_records(take_profit_path)
+    exits = load_order_records(exits_path)
     state = load_json_if_exists(state_path)
-    new_events = collect_events(date=args.date, orders=orders, stops=stops, take_profits=take_profits, state=state)
+    new_events = collect_events(date=args.date, orders=orders, stops=stops, take_profits=take_profits, exits=exits, state=state)
     existing_events = load_existing_events(events_path)
     combined_events = replace_date_events(existing_events, date=args.date, new_events=new_events)
     write_jsonl(events_path, combined_events)
@@ -276,6 +291,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "source_orders_journal": str(orders_path),
         "source_stops_journal": str(stops_path),
         "source_take_profit_journal": str(take_profit_path),
+        "source_exits_journal": str(exits_path),
         "source_execution_state": str(state_path) if state_path.exists() else None,
         "events_journal": str(events_path),
         "summary": {
@@ -297,6 +313,7 @@ def build_args(**overrides: Any) -> argparse.Namespace:
         "orders_journal": None,
         "stops_journal": None,
         "take_profit_journal": None,
+        "exits_journal": None,
         "execution_state": None,
         "events_journal": None,
         "output": None,
@@ -312,6 +329,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--orders-journal")
     parser.add_argument("--stops-journal")
     parser.add_argument("--take-profit-journal")
+    parser.add_argument("--exits-journal")
     parser.add_argument("--execution-state")
     parser.add_argument("--events-journal")
     parser.add_argument("--output")

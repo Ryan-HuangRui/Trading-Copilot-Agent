@@ -304,6 +304,7 @@ class TradingCopilotWrapperTest(unittest.TestCase):
                 "paper_order_cancel": {"status": "success", "date": "2026-05-26", "output": "report/2026-05-26/paper-order-cancel-plan.json", "dry_run": True, "summary": {"cancel_candidates": 0}},
                 "paper_protective_stop_plan": {"status": "success", "date": "2026-05-26", "output": "report/2026-05-26/paper-protective-stop-plan.json", "dry_run": True, "summary": {"stop_candidates": 1}},
                 "paper_take_profit_plan": {"status": "success", "date": "2026-05-26", "output": "report/2026-05-26/paper-take-profit-plan.json", "dry_run": True, "summary": {"take_profit_candidates": 1}},
+                "paper_exit_plan": {"status": "success", "date": "2026-05-26", "output": "report/2026-05-26/paper-exit-plan.json", "dry_run": True, "summary": {"exit_candidates": 0}},
                 "paper_break_even_stop_plan": {"status": "success", "date": "2026-05-26", "output": "report/2026-05-26/paper-break-even-stop-plan.json", "dry_run": True, "summary": {"move_candidates": 0}},
                 "paper_event_ledger": {"status": "success", "date": "2026-05-26", "output": "report/2026-05-26/paper-event-ledger.json", "events_journal": "runtime/journal/events.jsonl", "summary": {"events": 3}},
                 "paper_execution_review": {"status": "success", "date": "2026-05-26", "output": "report/2026-05-26/paper-execution-review.json", "markdown": "report/2026-05-26/paper-execution-review.md", "summary": {"orders": 1}},
@@ -319,6 +320,7 @@ class TradingCopilotWrapperTest(unittest.TestCase):
             execute_cancel=False,
             execute_protective_stop=False,
             execute_take_profit=False,
+            execute_exit=False,
             execute_break_even_stop=False,
             resize_stop_before_take_profit=False,
             append_lessons=False,
@@ -326,6 +328,8 @@ class TradingCopilotWrapperTest(unittest.TestCase):
             expire_after_minutes=90,
             stop_tif="gtc",
             take_profit_tif="gtc",
+            exit_order_type="MO",
+            exit_tif="day",
             break_even_tif="gtc",
             exit_fraction=0.5,
             learning_dir="runtime/learning",
@@ -347,6 +351,7 @@ class TradingCopilotWrapperTest(unittest.TestCase):
                 "paper_order_sync",
                 "paper_protective_stop_plan",
                 "paper_take_profit_plan",
+                "paper_exit_plan",
                 "paper_break_even_stop_plan",
                 "paper_account_snapshot",
                 "paper_order_sync",
@@ -380,6 +385,7 @@ class TradingCopilotWrapperTest(unittest.TestCase):
             execute_cancel=True,
             execute_protective_stop=True,
             execute_take_profit=True,
+            execute_exit=True,
             execute_break_even_stop=True,
             resize_stop_before_take_profit=True,
             append_lessons=True,
@@ -387,6 +393,8 @@ class TradingCopilotWrapperTest(unittest.TestCase):
             expire_after_minutes=90,
             stop_tif="gtc",
             take_profit_tif="gtc",
+            exit_order_type="MO",
+            exit_tif="day",
             break_even_tif="gtc",
             exit_fraction=0.5,
             learning_dir="runtime/learning",
@@ -403,6 +411,8 @@ class TradingCopilotWrapperTest(unittest.TestCase):
         self.assertIn("--execute", by_workflow["paper_protective_stop_plan"])
         self.assertIn("--execute", by_workflow["paper_take_profit_plan"])
         self.assertIn("--resize-stop-before-submit", by_workflow["paper_take_profit_plan"])
+        self.assertIn("--execute", by_workflow["paper_exit_plan"])
+        self.assertIn("--order-type", by_workflow["paper_exit_plan"])
         self.assertIn("--execute", by_workflow["paper_break_even_stop_plan"])
         self.assertIn("--paper-execution-config", by_workflow["paper_order_cancel"])
         self.assertIn("/usr/local/bin/longbridge", by_workflow["paper_order_cancel"])
@@ -411,6 +421,7 @@ class TradingCopilotWrapperTest(unittest.TestCase):
         payload = emit.call_args.args[0]
         self.assertTrue(payload["execute_requested"]["cancel"])
         self.assertTrue(payload["execute_requested"]["take_profit"])
+        self.assertTrue(payload["execute_requested"]["exit"])
 
     def test_paper_take_profit_wrapper_passes_stop_resize_options(self):
         calls = []
@@ -461,6 +472,60 @@ class TradingCopilotWrapperTest(unittest.TestCase):
         payload = emit.call_args.args[0]
         self.assertEqual(payload["workflow"], "paper-take-profit-plan")
         self.assertEqual(payload["summary"]["resized_stops"], 1)
+
+    def test_paper_exit_plan_wrapper_passes_execute_and_order_options(self):
+        calls = []
+
+        def fake_run_child(command):
+            calls.append(command)
+            payload = {
+                "status": "success",
+                "date": "2026-05-26",
+                "output": "report/2026-05-26/paper-exit-plan.json",
+                "dry_run": False,
+                "summary": {"exit_candidates": 1, "submitted": 1},
+            }
+            return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
+
+        args = Namespace(
+            date="2026-05-26",
+            repo_root=str(ROOT),
+            state="runtime/paper/2026-05-26/paper-execution-state.json",
+            intraday_state="runtime/intraday/2026-05-26/state.json",
+            output="report/2026-05-26/paper-exit-plan.json",
+            exits_journal="runtime/paper/2026-05-26/paper-exit-orders.jsonl",
+            order_type="MIT",
+            limit_price=None,
+            trigger_price=95,
+            trailing_amount=None,
+            trailing_percent=None,
+            limit_offset=None,
+            tif="gtc",
+            expire_date=None,
+            outside_rth=None,
+            execute=True,
+            longbridge_cli="/usr/local/bin/longbridge",
+            paper_execution_config="config/paper_execution.local.json",
+        )
+
+        with patch.object(trading_copilot, "run_child", side_effect=fake_run_child), patch.object(
+            trading_copilot, "emit", side_effect=SystemExit
+        ) as emit:
+            with self.assertRaises(SystemExit):
+                trading_copilot.run_paper_exit_plan(args)
+
+        command = calls[0]
+        self.assertEqual(command[0], "script/paper_exit_plan.py")
+        self.assertIn("--intraday-state", command)
+        self.assertIn("--exits-journal", command)
+        self.assertIn("--order-type", command)
+        self.assertEqual(command[command.index("--order-type") + 1], "MIT")
+        self.assertIn("--trigger-price", command)
+        self.assertIn("--execute", command)
+        self.assertIn("--paper-execution-config", command)
+        payload = emit.call_args.args[0]
+        self.assertEqual(payload["workflow"], "paper-exit-plan")
+        self.assertEqual(payload["summary"]["submitted"], 1)
 
     def test_paper_lifecycle_wrapper_smoke_with_fixture_account(self):
         with tempfile.TemporaryDirectory() as tmp:

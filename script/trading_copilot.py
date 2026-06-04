@@ -2299,6 +2299,8 @@ def run_paper_order_sync(args: argparse.Namespace) -> None:
         command.extend(["--stops-journal", args.stops_journal])
     if args.take_profit_journal:
         command.extend(["--take-profit-journal", args.take_profit_journal])
+    if args.exits_journal:
+        command.extend(["--exits-journal", args.exits_journal])
     if args.paper_snapshot:
         command.extend(["--paper-snapshot", args.paper_snapshot])
     if args.output:
@@ -2330,6 +2332,8 @@ def run_paper_event_ledger(args: argparse.Namespace) -> None:
         command.extend(["--stops-journal", args.stops_journal])
     if args.take_profit_journal:
         command.extend(["--take-profit-journal", args.take_profit_journal])
+    if args.exits_journal:
+        command.extend(["--exits-journal", args.exits_journal])
     if args.execution_state:
         command.extend(["--execution-state", args.execution_state])
     if args.events_journal:
@@ -2554,6 +2558,17 @@ def run_paper_lifecycle(args: argparse.Namespace) -> None:
                 *(["--resize-stop-before-submit"] if args.resize_stop_before_take_profit else []),
             ],
         )
+        exit_position = exit_plan(
+            workflow="paper_exit_plan",
+            script="script/paper_exit_plan.py",
+            execute=bool(args.execute_exit),
+            extra=[
+                "--order-type",
+                args.exit_order_type,
+                "--tif",
+                args.exit_tif,
+            ],
+        )
         break_even = exit_plan(
             workflow="paper_break_even_stop_plan",
             script="script/paper_break_even_stop_plan.py",
@@ -2632,6 +2647,7 @@ def run_paper_lifecycle(args: argparse.Namespace) -> None:
         "paper_order_cancel": (cancel or {}).get("summary", {}),
         "paper_protective_stop_plan": (stop or {}).get("summary", {}),
         "paper_take_profit_plan": (take_profit or {}).get("summary", {}),
+        "paper_exit_plan": (exit_position or {}).get("summary", {}),
         "paper_break_even_stop_plan": (break_even or {}).get("summary", {}),
         "paper_event_ledger": (ledger or {}).get("summary", {}),
         "paper_execution_review": (review or {}).get("summary", {}),
@@ -2653,6 +2669,7 @@ def run_paper_lifecycle(args: argparse.Namespace) -> None:
                 args.execute_cancel,
                 args.execute_protective_stop,
                 args.execute_take_profit,
+                args.execute_exit,
                 args.execute_break_even_stop,
             ]
         ),
@@ -2660,6 +2677,7 @@ def run_paper_lifecycle(args: argparse.Namespace) -> None:
             "cancel": bool(args.execute_cancel),
             "protective_stop": bool(args.execute_protective_stop),
             "take_profit": bool(args.execute_take_profit),
+            "exit": bool(args.execute_exit),
             "break_even_stop": bool(args.execute_break_even_stop),
         },
         "steps": steps,
@@ -2777,6 +2795,60 @@ def run_paper_take_profit_plan(args: argparse.Namespace) -> None:
         emit(failed_response("paper-take-profit-plan", command, proc), 1)
 
     response = base_response("paper-take-profit-plan", command, stdout)
+    response["date"] = (stdout or {}).get("date") or args.date
+    response["artifacts"] = [stdout["output"]] if stdout and stdout.get("output") else []
+    response["dry_run"] = (stdout or {}).get("dry_run")
+    response["summary"] = (stdout or {}).get("summary")
+    emit(response)
+
+
+def run_paper_exit_plan(args: argparse.Namespace) -> None:
+    command = [
+        "script/paper_exit_plan.py",
+        "--date",
+        args.date,
+        "--repo-root",
+        args.repo_root,
+        "--order-type",
+        args.order_type,
+        "--tif",
+        args.tif,
+    ]
+    if args.state:
+        command.extend(["--state", args.state])
+    if args.intraday_state:
+        command.extend(["--intraday-state", args.intraday_state])
+    if args.output:
+        command.extend(["--output", args.output])
+    if args.exits_journal:
+        command.extend(["--exits-journal", args.exits_journal])
+    optional_prices = [
+        ("--limit-price", args.limit_price),
+        ("--trigger-price", args.trigger_price),
+        ("--trailing-amount", args.trailing_amount),
+        ("--trailing-percent", args.trailing_percent),
+        ("--limit-offset", args.limit_offset),
+    ]
+    for flag, value in optional_prices:
+        if value is not None:
+            command.extend([flag, str(value)])
+    if args.expire_date:
+        command.extend(["--expire-date", args.expire_date])
+    if args.outside_rth:
+        command.extend(["--outside-rth", args.outside_rth])
+    if args.longbridge_cli:
+        command.extend(["--longbridge-cli", args.longbridge_cli])
+    if args.paper_execution_config:
+        command.extend(["--paper-execution-config", args.paper_execution_config])
+    if args.execute:
+        command.append("--execute")
+
+    proc = run_child(command)
+    stdout = parse_json_output(proc.stdout)
+    if proc.returncode != 0:
+        emit(failed_response("paper-exit-plan", command, proc), 1)
+
+    response = base_response("paper-exit-plan", command, stdout)
     response["date"] = (stdout or {}).get("date") or args.date
     response["artifacts"] = [stdout["output"]] if stdout and stdout.get("output") else []
     response["dry_run"] = (stdout or {}).get("dry_run")
@@ -3387,6 +3459,7 @@ def build_parser() -> argparse.ArgumentParser:
     paper_sync.add_argument("--orders-journal")
     paper_sync.add_argument("--stops-journal")
     paper_sync.add_argument("--take-profit-journal")
+    paper_sync.add_argument("--exits-journal")
     paper_sync.add_argument("--paper-snapshot")
     paper_sync.add_argument("--output")
     paper_sync.add_argument("--repo-root", default=str(ROOT))
@@ -3397,6 +3470,7 @@ def build_parser() -> argparse.ArgumentParser:
     paper_events.add_argument("--orders-journal")
     paper_events.add_argument("--stops-journal")
     paper_events.add_argument("--take-profit-journal")
+    paper_events.add_argument("--exits-journal")
     paper_events.add_argument("--execution-state")
     paper_events.add_argument("--events-journal")
     paper_events.add_argument("--output")
@@ -3436,11 +3510,14 @@ def build_parser() -> argparse.ArgumentParser:
     paper_lifecycle.add_argument("--execute-cancel", action="store_true")
     paper_lifecycle.add_argument("--execute-protective-stop", action="store_true")
     paper_lifecycle.add_argument("--execute-take-profit", action="store_true")
+    paper_lifecycle.add_argument("--execute-exit", action="store_true")
     paper_lifecycle.add_argument("--execute-break-even-stop", action="store_true")
     paper_lifecycle.add_argument("--resize-stop-before-take-profit", action="store_true")
     paper_lifecycle.add_argument("--expire-after-minutes", type=int, default=90)
     paper_lifecycle.add_argument("--stop-tif", default="gtc")
     paper_lifecycle.add_argument("--take-profit-tif", default="gtc")
+    paper_lifecycle.add_argument("--exit-order-type", default="MO")
+    paper_lifecycle.add_argument("--exit-tif", default="day")
     paper_lifecycle.add_argument("--break-even-tif", default="gtc")
     paper_lifecycle.add_argument("--exit-fraction", type=float, default=0.5)
     paper_lifecycle.add_argument("--append-lessons", action="store_true")
@@ -3487,6 +3564,27 @@ def build_parser() -> argparse.ArgumentParser:
     paper_tp.add_argument("--paper-execution-config")
     paper_tp.add_argument("--repo-root", default=str(ROOT))
     paper_tp.set_defaults(func=run_paper_take_profit_plan)
+
+    paper_exit = sub.add_parser("paper-exit-plan", help="Build or submit guarded paper exits for invalidated intraday plans")
+    paper_exit.add_argument("--date", required=True)
+    paper_exit.add_argument("--state")
+    paper_exit.add_argument("--intraday-state")
+    paper_exit.add_argument("--output")
+    paper_exit.add_argument("--exits-journal")
+    paper_exit.add_argument("--order-type", default="MO")
+    paper_exit.add_argument("--limit-price", type=float)
+    paper_exit.add_argument("--trigger-price", type=float)
+    paper_exit.add_argument("--trailing-amount", type=float)
+    paper_exit.add_argument("--trailing-percent", type=float)
+    paper_exit.add_argument("--limit-offset", type=float)
+    paper_exit.add_argument("--tif", default="day")
+    paper_exit.add_argument("--expire-date")
+    paper_exit.add_argument("--outside-rth")
+    paper_exit.add_argument("--longbridge-cli")
+    paper_exit.add_argument("--execute", action="store_true")
+    paper_exit.add_argument("--paper-execution-config")
+    paper_exit.add_argument("--repo-root", default=str(ROOT))
+    paper_exit.set_defaults(func=run_paper_exit_plan)
 
     paper_be = sub.add_parser("paper-break-even-stop-plan", help="Build a dry-run break-even stop movement plan")
     paper_be.add_argument("--date", required=True)

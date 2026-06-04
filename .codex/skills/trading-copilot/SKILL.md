@@ -156,7 +156,7 @@ This workflow must not submit broker orders.
 2. Run `python3 script/trading_copilot.py paper-trade-preview --date <DATE> --session pre-market --require-validation` to convert complete Trade Plan Cards into dry-run order previews.
 3. Run `python3 script/trading_copilot.py paper-trade-submit --date <DATE> --session pre-market --require-validation` to prepare a dry-run controlled submission artifact.
 4. Only when the user explicitly wants simulated order submission and `config/paper_execution.json` enables `paper_execution.broker_writes_enabled=true` plus `paper_execution.allow_entry_submit=true`, run `python3 script/trading_copilot.py paper-trade-submit --date <DATE> --session pre-market --require-validation --execute`.
-5. Run `python3 script/trading_copilot.py paper-order-sync --date <DATE>` after refreshing the paper account snapshot to sync submitted entry, stop, and TP1 order state.
+5. Run `python3 script/trading_copilot.py paper-order-sync --date <DATE>` after refreshing the paper account snapshot to sync submitted entry, stop, TP1, and plan-invalidated exit order state.
 6. Run `python3 script/trading_copilot.py paper-event-ledger --date <DATE>` to project submitted and observed paper execution facts into `runtime/journal/events.jsonl`.
 7. Run `python3 script/trading_copilot.py paper-execution-review --date <DATE>` to generate paper execution quality JSON/Markdown without promoting lessons.
 8. Run `python3 script/trading_copilot.py paper-learning-lessons --date <DATE> --append` to append paper execution candidate lessons into the runtime learning queue.
@@ -167,9 +167,10 @@ This workflow must not submit broker orders.
 13. Only when the user explicitly wants simulated protective stop submission and `config/paper_execution.json` enables `paper_execution.allow_protective_stop=true`, run `python3 script/trading_copilot.py paper-protective-stop-plan --date <DATE> --execute`.
 14. Run `python3 script/trading_copilot.py paper-take-profit-plan --date <DATE>` to prepare a dry-run TP1 partial-exit plan for filled long entries.
 15. Only when the user explicitly wants simulated TP1 submission and `config/paper_execution.json` enables `paper_execution.allow_take_profit=true`, run `python3 script/trading_copilot.py paper-take-profit-plan --date <DATE> --execute`.
-16. Run `python3 script/trading_copilot.py paper-break-even-stop-plan --date <DATE>` to prepare a break-even stop movement plan after TP1 fill evidence exists. It defaults to dry-run; only when the user explicitly wants simulated stop movement and `config/paper_execution.json` enables `paper_execution.allow_break_even_stop_move=true`, run `python3 script/trading_copilot.py paper-break-even-stop-plan --date <DATE> --execute`.
-17. Run `python3 script/trading_copilot.py paper-trade-review --date <DATE> --session pre-market --append` only after paper executions exist and should be recorded.
-18. Treat paper results as execution feedback. Do not promote paper P/L directly into `knowledge/refined/`.
+16. Run `python3 script/trading_copilot.py paper-exit-plan --date <DATE>` to prepare a full/remaining-position exit plan when `runtime/intraday/<DATE>/state.json` marks an open paper position as `invalidated`. It defaults to dry-run; only when the user explicitly wants simulated plan-invalidated exits and `config/paper_execution.json` enables both `paper_execution.allow_exit_cancel_replace=true` and `paper_execution.allow_exit_submit=true`, run `python3 script/trading_copilot.py paper-exit-plan --date <DATE> --execute`.
+17. Run `python3 script/trading_copilot.py paper-break-even-stop-plan --date <DATE>` to prepare a break-even stop movement plan after TP1 fill evidence exists. It defaults to dry-run; only when the user explicitly wants simulated stop movement and `config/paper_execution.json` enables `paper_execution.allow_break_even_stop_move=true`, run `python3 script/trading_copilot.py paper-break-even-stop-plan --date <DATE> --execute`.
+18. Run `python3 script/trading_copilot.py paper-trade-review --date <DATE> --session pre-market --append` only after paper executions exist and should be recorded.
+19. Treat paper results as execution feedback. Do not promote paper P/L directly into `knowledge/refined/`.
 
 For repeated lifecycle management, prefer the unified wrapper:
 
@@ -177,7 +178,7 @@ For repeated lifecycle management, prefer the unified wrapper:
 python3 script/trading_copilot.py paper-lifecycle --date <DATE>
 ```
 
-Use `--execute-cancel`, `--execute-protective-stop`, `--execute-take-profit`, or `--execute-break-even-stop` only with the matching paper execution config gates enabled.
+Use `--execute-cancel`, `--execute-protective-stop`, `--execute-take-profit`, `--execute-exit`, or `--execute-break-even-stop` only with the matching paper execution config gates enabled.
 
 ### Intraday Paper Entry
 

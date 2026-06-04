@@ -65,6 +65,8 @@ class PaperExecutionConfigTest(unittest.TestCase):
             "allow_protective_stop": False,
             "allow_take_profit": False,
             "allow_break_even_stop_move": False,
+            "allow_exit_cancel_replace": False,
+            "allow_exit_submit": False,
         }
 
         matrix = broker_capability_matrix(config)
@@ -80,6 +82,8 @@ class PaperExecutionConfigTest(unittest.TestCase):
         self.assertEqual(actions["protective_stop"]["order_type"], "MIT")
         self.assertEqual(actions["break_even_stop_move"]["config_key"], "allow_break_even_stop_move")
         self.assertEqual(actions["take_profit_stop_resize"]["config_key"], "allow_take_profit_stop_resize")
+        self.assertEqual(actions["exit_cancel_replace"]["config_key"], "allow_exit_cancel_replace")
+        self.assertEqual(actions["exit_submit"]["config_key"], "allow_exit_submit")
         self.assertIn("native_oco", unsupported)
         self.assertNotIn("market_entry", unsupported)
 
@@ -96,6 +100,24 @@ class PaperExecutionConfigTest(unittest.TestCase):
         self.assertIn("cancel", policy["dry_run_only_actions"])
         self.assertIn("protective_stop", policy["dry_run_only_actions"])
         self.assertIn("break_even_stop_move", policy["dry_run_only_actions"])
+        self.assertIn("exit_submit", policy["dry_run_only_actions"])
+
+    def test_exit_submit_and_cancel_replace_have_separate_gates(self):
+        config = {
+            "broker_writes_enabled": True,
+            "allow_exit_cancel_replace": False,
+            "allow_exit_submit": False,
+        }
+
+        with self.assertRaises(PermissionError):
+            ensure_paper_write_allowed(config, execute=True, action="exit_cancel_replace")
+        with self.assertRaises(PermissionError):
+            ensure_paper_write_allowed(config, execute=True, action="exit_submit")
+
+        config["allow_exit_cancel_replace"] = True
+        config["allow_exit_submit"] = True
+        ensure_paper_write_allowed(config, execute=True, action="exit_cancel_replace")
+        ensure_paper_write_allowed(config, execute=True, action="exit_submit")
 
     def test_break_even_stop_move_has_separate_gate(self):
         config = {

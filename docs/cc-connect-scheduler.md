@@ -420,11 +420,12 @@ TCA_INTRADAY_CANCEL_EXECUTE=1 \
 TCA_INTRADAY_PROTECTIVE_STOP_EXECUTE=1 \
 TCA_INTRADAY_TAKE_PROFIT_EXECUTE=0 \
 TCA_INTRADAY_RESIZE_STOP_BEFORE_TAKE_PROFIT=0 \
+TCA_INTRADAY_PLAN_EXIT_EXECUTE=0 \
 TCA_INTRADAY_BREAK_EVEN_STOP_EXECUTE=0 \
 bash ops/cc-connect/tca-intraday-codex-monitor.sh <DATE>
 ```
 
-This requires the ignored NAS-local `config/paper_execution.local.json` to set `broker_writes_enabled=true`, `allow_intraday_entry_submit=true`, `allow_cancel=true`, and `allow_protective_stop=true`. The wrapper still submits only when Codex writes a validated monitor sidecar and `intraday-dry-run` reports ready orders. TP1 and break-even stop movement stay disabled in NAS cron; additionally, TP1 execution is blocked in code when an active protective stop quantity exceeds the post-TP1 remaining quantity unless `--resize-stop-before-submit` is explicitly used with the separate stop-resize gate.
+This requires the ignored NAS-local `config/paper_execution.local.json` to set `broker_writes_enabled=true`, `allow_intraday_entry_submit=true`, `allow_cancel=true`, and `allow_protective_stop=true`. The wrapper still submits only when Codex writes a validated monitor sidecar and `intraday-dry-run` reports ready orders. TP1, plan-invalidated full exit, and break-even stop movement stay disabled in NAS cron; additionally, TP1 execution is blocked in code when an active protective stop quantity exceeds the post-TP1 remaining quantity unless `--resize-stop-before-submit` is explicitly used with the separate stop-resize gate. Plan-invalidated full exit requires both `TCA_INTRADAY_PLAN_EXIT_EXECUTE=1` and local gates `allow_exit_cancel_replace=true` plus `allow_exit_submit=true`.
 
 Optional dry-run paper checks:
 

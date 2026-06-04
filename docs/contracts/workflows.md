@@ -1146,6 +1146,44 @@ Required behavior:
 - The artifact must include `execution_policy` and `broker_capabilities`.
 - Successful TP1 records must preserve `intent_id`, `entry_broker_order_id`, `broker_order_id`, `remark`, `raw_request`, `raw_response`, `exit_fraction`, and `submitted_at`.
 
+## paper-exit-plan
+
+Purpose: build or execute a guarded full/remaining-position exit plan when the intraday tracker marks an open paper position's plan as invalidated.
+
+Canonical command:
+
+```bash
+python3 script/trading_copilot.py paper-exit-plan --date <DATE>
+```
+
+Execution command:
+
+```bash
+python3 script/trading_copilot.py paper-exit-plan --date <DATE> --execute
+```
+
+Inputs:
+
+- `runtime/paper/<DATE>/paper-execution-state.json`.
+- `runtime/intraday/<DATE>/state.json`.
+- Optional `runtime/paper/<DATE>/paper-exit-orders.jsonl` for duplicate detection.
+
+Output:
+
+- `report/<DATE>/paper-exit-plan.json`
+- `runtime/paper/<DATE>/paper-exit-orders.jsonl` only when `--execute` successfully submits an exit order.
+
+Required behavior:
+
+- Default behavior is dry-run and must not call broker write APIs.
+- Broker execution requires `--execute`, paper account validation, and config gates `allow_exit_cancel_replace=true` plus `allow_exit_submit=true`.
+- Only filled long entries with an open lifecycle state and positive remaining quantity may become exit candidates.
+- The first trigger source is `runtime/intraday/<DATE>/state.json` with symbol state `invalidated`.
+- Execution must cancel open protective stop and TP1 orders before submitting the exit order, so independent exit orders cannot over-exit the simulated position.
+- The default exit order type is Longbridge `sell` `MO`; `LO`, `MIT`, `LIT`, and trailing order types are available through the shared order model when their required price/trigger/trailing fields are supplied.
+- Duplicate `intent_id` values already present in `paper-exit-orders.jsonl` must be blocked.
+- The artifact must separate `exit_candidates`, `blocked`, `submitted`, and `errors`, and include `execution_policy` and `broker_capabilities`.
+
 ## paper-break-even-stop-plan
 
 Purpose: build or execute a guarded plan to move an existing protective stop to break-even after TP1 fill evidence exists.

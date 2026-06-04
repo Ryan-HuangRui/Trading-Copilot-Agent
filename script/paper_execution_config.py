@@ -16,6 +16,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "allow_take_profit": False,
     "allow_take_profit_stop_resize": False,
     "allow_intraday_entry_submit": False,
+    "allow_exit_cancel_replace": False,
+    "allow_exit_submit": False,
     "allow_break_even_stop_move": False,
 }
 
@@ -26,6 +28,8 @@ ACTION_CONFIG_KEYS = {
     "protective_stop": "allow_protective_stop",
     "take_profit": "allow_take_profit",
     "take_profit_stop_resize": "allow_take_profit_stop_resize",
+    "exit_cancel_replace": "allow_exit_cancel_replace",
+    "exit_submit": "allow_exit_submit",
     "break_even_stop_move": "allow_break_even_stop_move",
 }
 
@@ -92,6 +96,24 @@ SUPPORTED_BROKER_ACTIONS: tuple[dict[str, Any], ...] = (
         "side": "sell",
         "workflow": "paper-break-even-stop-plan",
         "maturity": "guarded_cancel_then_submit",
+    },
+    {
+        "action": "exit_cancel_replace",
+        "label": "Cancel open exit orders before full exit",
+        "config_key": "allow_exit_cancel_replace",
+        "order_type": "cancel",
+        "side": None,
+        "workflow": "paper-exit-plan",
+        "maturity": "guarded_cancel_then_submit",
+    },
+    {
+        "action": "exit_submit",
+        "label": "Plan-invalidated exit order",
+        "config_key": "allow_exit_submit",
+        "order_type": "MO/LO/ELO/AO/ALO/ODD/SLO/LIT/MIT/TSLPAMT/TSLPPCT",
+        "side": "sell",
+        "workflow": "paper-exit-plan",
+        "maturity": "guarded_exit",
     },
 )
 

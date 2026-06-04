@@ -85,6 +85,26 @@ def take_profit_record(**overrides) -> dict:
     return record
 
 
+def exit_record(**overrides) -> dict:
+    record = {
+        "kind": "paper_exit_order",
+        "intent_id": "intent-1",
+        "source_signal_id": "sig-1",
+        "entry_broker_order_id": "entry-o-1",
+        "symbol": "MU",
+        "longbridge_symbol": "MU.US",
+        "side": "sell",
+        "order_type": "MO",
+        "quantity": 100,
+        "remark": "tca-exit:intent-1",
+        "broker_order_id": "exit-o-1",
+        "submit_status": "submitted",
+        "submitted_at": "2026-05-26T15:50:00+00:00",
+    }
+    record.update(overrides)
+    return record
+
+
 def execution_state() -> dict:
     return {
         "date": "2026-05-26",
@@ -130,6 +150,21 @@ def execution_state() -> dict:
                 "avg_fill_price": 112.1,
             }
         ],
+        "exit_orders": [
+            {
+                "kind": "paper_exit_order",
+                "intent_id": "intent-1",
+                "source_signal_id": "sig-1",
+                "entry_broker_order_id": "entry-o-1",
+                "symbol": "MU",
+                "side": "sell",
+                "quantity": 100,
+                "broker_order_id": "exit-o-1",
+                "status": "filled",
+                "filled_quantity": 100,
+                "avg_fill_price": 94.8,
+            }
+        ],
     }
 
 
@@ -139,6 +174,7 @@ class PaperEventLedgerTest(unittest.TestCase):
         append_jsonl(base / "paper-orders.jsonl", order_record())
         append_jsonl(base / "paper-stop-orders.jsonl", stop_record())
         append_jsonl(base / "paper-take-profit-orders.jsonl", take_profit_record())
+        append_jsonl(base / "paper-exit-orders.jsonl", exit_record())
         write_json(base / "paper-execution-state.json", execution_state())
 
     def test_event_ledger_projects_submitted_and_state_events_idempotently(self):
@@ -159,6 +195,8 @@ class PaperEventLedgerTest(unittest.TestCase):
             self.assertIn("stop_accepted", event_types)
             self.assertIn("take_profit_submitted", event_types)
             self.assertIn("take_profit_filled", event_types)
+            self.assertIn("exit_submitted", event_types)
+            self.assertIn("exit_filled", event_types)
             journal = root / "runtime" / "journal" / "events.jsonl"
             lines = [line for line in journal.read_text(encoding="utf-8").splitlines() if line.strip()]
             self.assertEqual(len(lines), len(events))
@@ -189,7 +227,7 @@ class PaperEventLedgerTest(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, msg=proc.stderr or proc.stdout)
             payload = json.loads(proc.stdout)
             self.assertEqual(payload["workflow"], "paper-event-ledger")
-            self.assertEqual(payload["summary"]["events_written_for_date"], 6)
+            self.assertEqual(payload["summary"]["events_written_for_date"], 8)
             self.assertEqual(len(payload["artifacts"]), 2)
 
 

@@ -87,6 +87,26 @@ def take_profit_order(**overrides) -> dict:
     return record
 
 
+def exit_order(**overrides) -> dict:
+    record = {
+        "kind": "paper_exit_order",
+        "intent_id": "2026-05-26:pre-market:MU:abc123",
+        "source_signal_id": "sig-1",
+        "entry_broker_order_id": "paper-o-1",
+        "symbol": "MU",
+        "longbridge_symbol": "MU.US",
+        "side": "sell",
+        "order_type": "MO",
+        "quantity": 200,
+        "exit_reason": "intraday_plan_invalidated",
+        "remark": "tca-exit:2026-05-26:pre-market:MU:abc123",
+        "broker_order_id": "exit-o-1",
+        "submitted_at": "2026-05-26T15:50:00+00:00",
+    }
+    record.update(overrides)
+    return record
+
+
 def snapshot(**overrides) -> dict:
     payload = {
         "date": "2026-05-26",
@@ -164,6 +184,9 @@ class PaperOrderSyncTest(unittest.TestCase):
             take_profit or take_profit_order(),
         )
 
+    def seed_exit_order(self, root: Path, order: dict | None = None) -> None:
+        append_jsonl(root / "runtime" / "paper" / "2026-05-26" / "paper-exit-orders.jsonl", order or exit_order())
+
     def test_sync_matches_by_broker_order_id_and_marks_filled(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -220,6 +243,50 @@ class PaperOrderSyncTest(unittest.TestCase):
             self.assertEqual(entry["lifecycle"]["take_profit_status"], "tp1_filled")
             self.assertEqual(entry["lifecycle"]["remaining_quantity"], 100)
             self.assertEqual(entry["lifecycle"]["overall_status"], "partially_exited")
+
+    def test_sync_exit_orders_and_closes_entry_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paper_snapshot = snapshot(
+                orders=[
+                    snapshot()["orders"][0],
+                    {
+                        "order_id": "exit-o-1",
+                        "symbol": "MU",
+                        "market": "US",
+                        "side": "sell",
+                        "quantity": 200,
+                        "status": "filled",
+                        "raw": {"order_id": "exit-o-1", "remark": "tca-exit:2026-05-26:pre-market:MU:abc123"},
+                    },
+                ],
+                executions=[
+                    snapshot()["executions"][0],
+                    {
+                        "order_id": "exit-o-1",
+                        "symbol": "MU",
+                        "market": "US",
+                        "side": "sell",
+                        "quantity": 200,
+                        "price": 94.8,
+                        "raw": {"order_id": "exit-o-1"},
+                    },
+                ],
+            )
+            self.seed(root, paper_snapshot=paper_snapshot)
+            self.seed_exit_order(root)
+
+            result = paper_order_sync.run(paper_order_sync.build_args(repo_root=str(root), date="2026-05-26"))
+
+            state = json.loads(Path(result["output"]).read_text(encoding="utf-8"))
+            self.assertEqual(state["exit_summary"]["exit_orders"]["filled"], 1)
+            self.assertEqual(state["exit_orders"][0]["status"], "filled")
+            entry = state["orders"][0]
+            self.assertEqual(entry["exit_order_id"], "exit-o-1")
+            self.assertEqual(entry["exit_status"], "filled")
+            self.assertEqual(entry["exit_filled_quantity"], 200)
+            self.assertEqual(entry["remaining_quantity"], 0)
+            self.assertEqual(entry["lifecycle"]["overall_status"], "closed")
 
     def test_sync_uses_latest_stop_record_for_same_intent(self):
         with tempfile.TemporaryDirectory() as tmp:

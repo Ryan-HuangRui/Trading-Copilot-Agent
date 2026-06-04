@@ -30,6 +30,10 @@ def default_take_profit_path(repo_root: Path, date: str, explicit_path: str | No
     return resolve_path(repo_root, explicit_path, repo_root / "runtime" / "paper" / date / "paper-take-profit-orders.jsonl")
 
 
+def default_exits_path(repo_root: Path, date: str, explicit_path: str | None) -> Path:
+    return resolve_path(repo_root, explicit_path, repo_root / "runtime" / "paper" / date / "paper-exit-orders.jsonl")
+
+
 def default_snapshot_path(repo_root: Path, date: str, explicit_path: str | None) -> Path:
     return resolve_path(repo_root, explicit_path, repo_root / "runtime" / "paper" / date / "paper-account-snapshot.json")
 
@@ -282,6 +286,7 @@ def enrich_entry_with_exits(
     *,
     protective_stop: dict[str, Any] | None,
     take_profit: dict[str, Any] | None,
+    exit_order: dict[str, Any] | None,
 ) -> dict[str, Any]:
     enriched = dict(entry)
     if protective_stop:
@@ -302,6 +307,17 @@ def enrich_entry_with_exits(
         enriched["take_profit_filled_quantity"] = filled_quantity
         enriched["tp1_filled_quantity"] = filled_quantity
         enriched["remaining_quantity"] = int(remaining_quantity) if remaining_quantity == int(remaining_quantity) else remaining_quantity
+    if exit_order:
+        filled_quantity = as_float(exit_order.get("filled_quantity")) or 0.0
+        current_remaining = as_float(enriched.get("remaining_quantity"))
+        if current_remaining is None:
+            current_remaining = as_float(entry.get("filled_quantity")) or 0.0
+        remaining_quantity = max(0.0, current_remaining - filled_quantity)
+        enriched["exit_order_id"] = exit_order.get("broker_order_id")
+        enriched["exit_status"] = exit_order.get("status")
+        enriched["exit_filled_quantity"] = filled_quantity
+        enriched["exit_avg_fill_price"] = exit_order.get("avg_fill_price")
+        enriched["remaining_quantity"] = int(remaining_quantity) if remaining_quantity == int(remaining_quantity) else remaining_quantity
     enriched["lifecycle"] = lifecycle_summary(enriched)
     return enriched
 
@@ -315,6 +331,8 @@ def lifecycle_summary(entry: dict[str, Any]) -> dict[str, Any]:
     stop_status = str(entry.get("stop_status") or "")
     tp_status = str(entry.get("tp1_status") or entry.get("take_profit_status") or "")
     tp_filled_quantity = as_float(entry.get("tp1_filled_quantity") or entry.get("take_profit_filled_quantity")) or 0.0
+    exit_status = str(entry.get("exit_status") or "")
+    exit_filled_quantity = as_float(entry.get("exit_filled_quantity")) or 0.0
 
     if entry_status in {"cancelled", "rejected", "expired"}:
         protection_status = "not_applicable"
@@ -343,7 +361,11 @@ def lifecycle_summary(entry: dict[str, Any]) -> dict[str, Any]:
         else:
             take_profit_status = "no_tp1"
 
-        if protection_status == "stopped_out":
+        if exit_filled_quantity > 0 and remaining_quantity <= 0:
+            overall_status = "closed"
+        elif exit_status in {"submitted", "accepted", "partially_filled"}:
+            overall_status = "exit_open"
+        elif protection_status == "stopped_out":
             overall_status = "stopped_out"
         elif remaining_quantity <= 0 and (tp_filled_quantity > 0 or tp_status == "filled"):
             overall_status = "closed"
@@ -368,11 +390,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     orders_path = default_orders_path(repo_root, args.date, args.orders_journal)
     stops_path = default_stops_path(repo_root, args.date, args.stops_journal)
     take_profit_path = default_take_profit_path(repo_root, args.date, args.take_profit_journal)
+    exits_path = default_exits_path(repo_root, args.date, args.exits_journal)
     snapshot_path = default_snapshot_path(repo_root, args.date, args.paper_snapshot)
     output = default_output_path(repo_root, args.date, args.output)
     submitted_orders = load_order_records(orders_path)
     submitted_stops = load_order_records(stops_path)
     submitted_take_profits = load_order_records(take_profit_path)
+    submitted_exits = load_order_records(exits_path)
     snapshot = read_json(snapshot_path)
     broker_orders = snapshot.get("orders") if isinstance(snapshot.get("orders"), list) else []
     executions = snapshot.get("executions") if isinstance(snapshot.get("executions"), list) else []
@@ -391,13 +415,20 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         for order in submitted_take_profits
         if isinstance(order, dict) and order.get("intent_id")
     ]
+    synced_exits = [
+        synced_exit_order(order, broker_orders, executions)
+        for order in submitted_exits
+        if isinstance(order, dict) and order.get("intent_id")
+    ]
     stops_by_intent = first_by_intent(synced_stops)
     take_profits_by_intent = first_by_intent(synced_take_profits)
+    exits_by_intent = first_by_intent(synced_exits)
     enriched_orders = [
         enrich_entry_with_exits(
             order,
             protective_stop=stops_by_intent.get(str(order.get("intent_id") or "")),
             take_profit=take_profits_by_intent.get(str(order.get("intent_id") or "")),
+            exit_order=exits_by_intent.get(str(order.get("intent_id") or "")),
         )
         for order in synced
     ]
@@ -405,6 +436,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     exit_summary = {
         "protective_stops": status_summary(synced_stops),
         "take_profit_orders": status_summary(synced_take_profits),
+        "exit_orders": status_summary(synced_exits),
     }
     payload = {
         "schema_version": "paper-execution-state/v2",
@@ -413,6 +445,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "source_orders_journal": str(orders_path),
         "source_stops_journal": str(stops_path),
         "source_take_profit_journal": str(take_profit_path),
+        "source_exits_journal": str(exits_path),
         "source_paper_snapshot": str(snapshot_path),
         "broker_capabilities": broker_capability_matrix(),
         "summary": summary,
@@ -420,6 +453,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "orders": enriched_orders,
         "protective_stops": synced_stops,
         "take_profit_orders": synced_take_profits,
+        "exit_orders": synced_exits,
         "safety_note": "Read-only paper order sync. This workflow does not submit, cancel, or replace orders.",
     }
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -433,6 +467,7 @@ def build_args(**overrides: Any) -> argparse.Namespace:
         "orders_journal": None,
         "stops_journal": None,
         "take_profit_journal": None,
+        "exits_journal": None,
         "paper_snapshot": None,
         "output": None,
         "repo_root": str(Path(__file__).resolve().parents[1]),
@@ -447,6 +482,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--orders-journal")
     parser.add_argument("--stops-journal")
     parser.add_argument("--take-profit-journal")
+    parser.add_argument("--exits-journal")
     parser.add_argument("--paper-snapshot")
     parser.add_argument("--output")
     parser.add_argument("--repo-root", default=str(Path(__file__).resolve().parents[1]))
