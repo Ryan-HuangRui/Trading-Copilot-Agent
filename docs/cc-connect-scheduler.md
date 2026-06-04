@@ -409,6 +409,16 @@ bash ops/cc-connect/tca-intraday-codex-monitor.sh <DATE>
 
 Default wrapper behavior is read-only: run `tca-intraday-notify.sh`, append `report/<DATE>/intraday.md`, update `runtime/intraday/<DATE>/state.json`, and send Feishu only when the notification filter has an unsent important event.
 
+Current NAS production cron enables opportunity-review dry-run and lifecycle dry-run while keeping all broker-write switches off:
+
+```bash
+TCA_INTRADAY_ENABLE_PAPER_DRY_RUN=1 \
+TCA_INTRADAY_ENABLE_PAPER_LIFECYCLE=1 \
+TCA_INTRADAY_PAPER_EXECUTE=0 \
+TCA_INTRADAY_EXIT_EXECUTE=0 \
+bash ops/cc-connect/tca-intraday-codex-monitor.sh <DATE>
+```
+
 Optional dry-run paper checks:
 
 ```bash
@@ -417,12 +427,10 @@ bash ops/cc-connect/tca-intraday-codex-monitor.sh <DATE>
 
 python3 script/trading_copilot.py monitor-brief --state config/monitor_state.json --interval 5min
 python3 script/trading_copilot.py intraday-opportunity-context --date <DATE>
-python3 script/trading_copilot.py extract-monitor-signals --date <DATE>
-python3 script/trading_copilot.py validate-trade-plan --session monitor --date <DATE>
-python3 script/trading_copilot.py paper-trade-preview --date <DATE> --session monitor --require-validation
-python3 script/trading_copilot.py paper-trade-submit --date <DATE> --session monitor --require-validation
-python3 script/trading_copilot.py feishu-summary --session monitor --date <DATE>
-python3 script/trading_copilot.py extract-monitor-signals --append
+# Codex writes reviewed report/<DATE>/monitor-signals.json from the opportunity context.
+python3 script/trading_copilot.py validate-trade-plan --session monitor --date <DATE> --signals report/<DATE>/monitor-signals.json
+python3 script/trading_copilot.py paper-account-snapshot --date <DATE>
+python3 script/trading_copilot.py intraday-dry-run --date <DATE> --signals report/<DATE>/monitor-signals.json
 ```
 
 If Codex writes a reviewed `report/<DATE>/monitor-signals.json` from `intraday-opportunity-context`, use:
@@ -447,6 +455,8 @@ Optional guarded lifecycle planning:
 ```bash
 TCA_INTRADAY_ENABLE_PAPER_LIFECYCLE=1 \
 bash ops/cc-connect/tca-intraday-codex-monitor.sh <DATE>
+
+python3 script/trading_copilot.py paper-lifecycle --date <DATE> --paper-execution-config config/paper_execution.local.json --append-lessons --strategy-review
 ```
 
 Use monitor sidecar and journal entries as observation records unless Codex writes a validated monitor Trade Plan Card and the explicit paper gates are enabled.
