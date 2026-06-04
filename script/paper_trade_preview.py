@@ -14,6 +14,8 @@ from paper_order_models import (
     TRAILING_PERCENT_REQUIRED_ORDER_TYPES,
     TRIGGER_PRICE_REQUIRED_ORDER_TYPES,
     normalize_order_type,
+    normalize_tif,
+    normalized_text,
 )
 from signal_artifacts import read_json, resolve_signals_path, sidecar_source, stable_signal_id
 from validate_trade_plan import validate as validate_trade_plan
@@ -64,6 +66,9 @@ def build_order_preview(
     direction = str(signal.get("direction") or "long").lower()
     entry = signal.get("entry") if isinstance(signal.get("entry"), dict) else {}
     order_type = normalize_order_type(entry.get("order_type"))
+    order_tif = normalize_tif(entry.get("tif") or tif)
+    expire_date = normalized_text(entry.get("expire_date"))
+    outside_rth = normalized_text(entry.get("outside_rth"))
     trigger_price = as_float(entry.get("trigger_price"))
     entry_price = as_float(entry.get("limit_price"))
     if entry_price is None:
@@ -110,6 +115,10 @@ def build_order_preview(
         reasons.append("risk.max_account_risk_pct must be > 0")
     if net_liquidation is None or net_liquidation <= 0:
         reasons.append("account.net_liquidation must be > 0")
+    if order_tif == "gtd" and not expire_date:
+        reasons.append("entry.expire_date is required when tif is gtd")
+    if outside_rth and outside_rth not in {"RTH_ONLY", "ANY_TIME", "OVERNIGHT"}:
+        reasons.append("entry.outside_rth must be RTH_ONLY, ANY_TIME, or OVERNIGHT")
 
     quantity = 0
     risk_budget = 0.0
@@ -144,7 +153,9 @@ def build_order_preview(
         "estimated_account_risk": round(quantity * float(risk_per_share or 0), 4),
         "estimated_notional": round(quantity * float(reference_price or 0), 4),
         "order_type": order_type,
-        "tif": tif,
+        "tif": order_tif,
+        "expire_date": expire_date,
+        "outside_rth": outside_rth,
     }
     if not reasons:
         command = [
@@ -166,7 +177,12 @@ def build_order_preview(
             command.extend(["--trailing-percent", format_decimal(float(trailing_percent))])
         if order_type.startswith("TSLP") and limit_offset is not None:
             command.extend(["--limit-offset", format_decimal(float(limit_offset))])
-        command.extend(["--tif", tif, "--format", "json"])
+        command.extend(["--tif", order_tif])
+        if order_tif == "gtd":
+            command.extend(["--expire-date", str(expire_date)])
+        if outside_rth:
+            command.extend(["--outside-rth", outside_rth])
+        command.extend(["--format", "json"])
         preview["preview_command"] = command
     return preview
 

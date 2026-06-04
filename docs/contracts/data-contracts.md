@@ -227,7 +227,7 @@ Expected signal fields:
 - `status`: `planned`, `observed`, or `no_trade`.
 - `plan_type`: `trade_plan`, `watch_only`, or `no_trade`.
 - `execution_status`: `conditional_executable`, `waiting_trigger`, `watch_only`, or `no_trade`.
-- `entry`: for conditional plans, includes `trigger_price`, confirmation, and no-chase rule.
+- `entry`: for conditional plans, includes `trigger_price`, confirmation, and no-chase rule. It may also include Longbridge paper order fields such as `order_type`, `limit_price`, `tif`, `expire_date`, `outside_rth`, `trailing_amount`, `trailing_percent`, and `limit_offset`.
 - `stop`: for conditional plans, includes `initial_stop` and invalidation text.
 - `take_profit`: for conditional plans, includes `tp1` and management rules.
 - `execution_rules`: for conditional plans, includes valid time window and `skip_conditions`.

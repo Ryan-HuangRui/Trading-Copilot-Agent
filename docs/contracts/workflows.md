@@ -777,6 +777,9 @@ Required behavior:
 - Default is dry-run only.
 - With `--require-validation`, a complete `conditional_executable` Trade Plan Card is required.
 - Quantity is computed from paper account net liquidation, `risk.max_account_risk_pct`, `risk.risk_per_share`, and available cash.
+- Entry order type comes from `entry.order_type` and supports the shared Longbridge paper order model: `LO`, `ELO`, `MO`, `AO`, `ALO`, `ODD`, `SLO`, `LIT`, `MIT`, `TSLPAMT`, and `TSLPPCT`.
+- Preview must preserve entry-level `tif`, `expire_date` for `gtd`, and `outside_rth` when supplied. If `entry.tif` is absent, the command-level `--tif` default is used.
+- Required order-shape fields must block incomplete previews: price for price-based orders, trigger price for trigger orders, trailing amount/percent for trailing orders, and `expire_date` for `gtd`.
 - The output may include preview CLI commands for human/manual use, but the workflow must not execute them.
 - Unsupported directions or incomplete risk data must produce blocked previews, not orders.
 

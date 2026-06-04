@@ -68,6 +68,16 @@ class PaperRiskGuardTest(unittest.TestCase):
 
         self.assertTrue(result["passed"], result["errors"])
 
+    def test_gtd_and_outside_rth_entry_order_passes_guard(self):
+        result = evaluate_order_intent(
+            intent(order_type="LIT", trigger_price=101, tif="gtd", expire_date="2026-06-19", outside_rth="RTH_ONLY"),
+            account_snapshot={"account_channel": "lb_papertrading", "account": {"net_liquidation": 100000, "cash": 25000}},
+            submitted_intent_ids=set(),
+            config=RiskGuardConfig(max_daily_risk_pct=3, max_daily_orders=3),
+        )
+
+        self.assertTrue(result["passed"], result["errors"])
+
     def test_non_paper_account_fails_guard(self):
         result = evaluate_order_intent(
             intent(),

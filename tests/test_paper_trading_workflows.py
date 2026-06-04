@@ -152,6 +152,35 @@ class PaperTradingWorkflowTest(unittest.TestCase):
         self.assertEqual(preview["preview_command"][preview["preview_command"].index("--price") + 1], "100")
         self.assertEqual(preview["preview_command"][preview["preview_command"].index("--trigger-price") + 1], "101")
 
+    def test_build_order_preview_preserves_time_in_force_and_session_fields(self):
+        signal = valid_signals()["signals"][0]
+        signal = {
+            **signal,
+            "entry": {
+                "limit_price": 100,
+                "trigger_price": 101,
+                "order_type": "LIT",
+                "tif": "gtd",
+                "expire_date": "2026-06-19",
+                "outside_rth": "RTH_ONLY",
+            },
+        }
+
+        preview = build_order_preview(
+            signal=signal,
+            account=paper_snapshot()["account"],
+            default_market="US",
+            tif="day",
+        )
+
+        self.assertEqual(preview["status"], "ready")
+        self.assertEqual(preview["tif"], "gtd")
+        self.assertEqual(preview["expire_date"], "2026-06-19")
+        self.assertEqual(preview["outside_rth"], "RTH_ONLY")
+        self.assertEqual(preview["preview_command"][preview["preview_command"].index("--tif") + 1], "gtd")
+        self.assertEqual(preview["preview_command"][preview["preview_command"].index("--expire-date") + 1], "2026-06-19")
+        self.assertEqual(preview["preview_command"][preview["preview_command"].index("--outside-rth") + 1], "RTH_ONLY")
+
     def test_paper_account_snapshot_from_fixture_writes_orders_and_executions(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
