@@ -13,6 +13,16 @@ from signal_artifacts import read_json
 
 
 WORKFLOW = "paper-event-ledger"
+ORDER_SHAPE_FIELDS = (
+    "limit_price",
+    "trigger_price",
+    "trailing_amount",
+    "trailing_percent",
+    "limit_offset",
+    "tif",
+    "expire_date",
+    "outside_rth",
+)
 
 
 def resolve_path(repo_root: Path, explicit_path: str | None, default_path: Path) -> Path:
@@ -130,6 +140,22 @@ def submitted_events(date: str, records: list[dict[str, Any]], *, event_type: st
         current_intent_id = intent_id(record)
         if not current_intent_id:
             continue
+        payload = {
+            "intent_id": current_intent_id,
+            "source_signal_id": record.get("source_signal_id"),
+            "broker_order_id": broker_id(record) or None,
+            "entry_broker_order_id": record.get("entry_broker_order_id"),
+            "symbol": record.get("symbol"),
+            "longbridge_symbol": record.get("longbridge_symbol"),
+            "side": record.get("side"),
+            "order_type": record.get("order_type"),
+            "quantity": record.get("quantity"),
+            "remark": record.get("remark"),
+            "raw_request": record.get("raw_request") if isinstance(record.get("raw_request"), dict) else {},
+            "raw_response": record.get("raw_response") if isinstance(record.get("raw_response"), dict) else {},
+        }
+        for field in ORDER_SHAPE_FIELDS:
+            payload[field] = record.get(field)
         events.append(
             event(
                 date=date,
@@ -138,20 +164,7 @@ def submitted_events(date: str, records: list[dict[str, Any]], *, event_type: st
                 entity_id=current_intent_id,
                 status=str(record.get("submit_status") or "submitted"),
                 occurred_at=record.get("submitted_at"),
-                payload={
-                    "intent_id": current_intent_id,
-                    "source_signal_id": record.get("source_signal_id"),
-                    "broker_order_id": broker_id(record) or None,
-                    "entry_broker_order_id": record.get("entry_broker_order_id"),
-                    "symbol": record.get("symbol"),
-                    "longbridge_symbol": record.get("longbridge_symbol"),
-                    "side": record.get("side"),
-                    "order_type": record.get("order_type"),
-                    "quantity": record.get("quantity"),
-                    "remark": record.get("remark"),
-                    "raw_request": record.get("raw_request") if isinstance(record.get("raw_request"), dict) else {},
-                    "raw_response": record.get("raw_response") if isinstance(record.get("raw_response"), dict) else {},
-                },
+                payload=payload,
             )
         )
     return events
@@ -188,6 +201,22 @@ def execution_state_events(date: str, records: list[dict[str, Any]], *, entity_t
         status = str(record.get("status") or "").strip()
         if not current_intent_id or not status:
             continue
+        payload = {
+            "intent_id": current_intent_id,
+            "source_signal_id": record.get("source_signal_id"),
+            "broker_order_id": broker_id(record) or None,
+            "entry_broker_order_id": record.get("entry_broker_order_id"),
+            "symbol": record.get("symbol"),
+            "longbridge_symbol": record.get("longbridge_symbol"),
+            "side": record.get("side"),
+            "order_type": record.get("order_type"),
+            "quantity": record.get("quantity"),
+            "filled_quantity": record.get("filled_quantity"),
+            "avg_fill_price": record.get("avg_fill_price"),
+            "match": record.get("match") if isinstance(record.get("match"), dict) else {},
+        }
+        for field in ORDER_SHAPE_FIELDS:
+            payload[field] = record.get(field)
         events.append(
             event(
                 date=date,
@@ -196,18 +225,7 @@ def execution_state_events(date: str, records: list[dict[str, Any]], *, entity_t
                 entity_id=current_intent_id,
                 status=status,
                 occurred_at=record.get("submitted_at"),
-                payload={
-                    "intent_id": current_intent_id,
-                    "source_signal_id": record.get("source_signal_id"),
-                    "broker_order_id": broker_id(record) or None,
-                    "entry_broker_order_id": record.get("entry_broker_order_id"),
-                    "symbol": record.get("symbol"),
-                    "side": record.get("side"),
-                    "quantity": record.get("quantity"),
-                    "filled_quantity": record.get("filled_quantity"),
-                    "avg_fill_price": record.get("avg_fill_price"),
-                    "match": record.get("match") if isinstance(record.get("match"), dict) else {},
-                },
+                payload=payload,
             )
         )
     return events

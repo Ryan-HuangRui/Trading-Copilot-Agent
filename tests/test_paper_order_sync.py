@@ -226,6 +226,35 @@ class PaperOrderSyncTest(unittest.TestCase):
             self.assertEqual(entry["tp1_filled_quantity"], 100)
             self.assertEqual(entry["remaining_quantity"], 100)
 
+    def test_sync_preserves_take_profit_order_shape_fields(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.seed(root)
+            self.seed_exit_orders(
+                root,
+                take_profit=take_profit_order(
+                    order_type="TSLPPCT",
+                    limit_price=None,
+                    trigger_price=None,
+                    trailing_percent=2.5,
+                    limit_offset=0.3,
+                    tif="gtc",
+                    expire_date=None,
+                    outside_rth="RTH_ONLY",
+                ),
+            )
+
+            result = paper_order_sync.run(paper_order_sync.build_args(repo_root=str(root), date="2026-05-26"))
+
+            state = json.loads(Path(result["output"]).read_text(encoding="utf-8"))
+            tp = state["take_profit_orders"][0]
+            self.assertEqual(tp["order_type"], "TSLPPCT")
+            self.assertIsNone(tp["limit_price"])
+            self.assertEqual(tp["trailing_percent"], 2.5)
+            self.assertEqual(tp["limit_offset"], 0.3)
+            self.assertEqual(tp["tif"], "gtc")
+            self.assertEqual(tp["outside_rth"], "RTH_ONLY")
+
     def test_state_v2_includes_capabilities_and_lifecycle(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

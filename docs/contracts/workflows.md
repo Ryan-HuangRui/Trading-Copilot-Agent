@@ -843,6 +843,7 @@ Required behavior:
 - Must match submitted entry, protective stop, and TP1 orders by `broker_order_id`, then `remark`, then `intent_id`, then `symbol + side + quantity` fallback.
 - Must summarize order states including `submitted`, `accepted`, `partially_filled`, `filled`, `cancelled`, `rejected`, and `expired`.
 - Must include `protective_stops`, `take_profit_orders`, and `exit_summary` in the execution state when those journals exist.
+- Must preserve order shape fields for entry/stop/TP1/exit records, including limit, trigger, trailing, `tif`, `expire_date`, and `outside_rth`.
 - Must enrich entry orders with matched stop/TP1 fields such as `protective_stop_order_id`, `stop_status`, `take_profit_order_id`, `tp1_status`, `tp1_filled_quantity`, and `remaining_quantity`.
 - Must enrich entry orders with a `lifecycle` summary including entry, protection, TP1, remaining quantity, and overall lifecycle status.
 - Must preserve matched broker order and execution payloads for audit and later review.
@@ -946,6 +947,7 @@ Required behavior:
 - Must be read-only with respect to broker APIs; it must not submit, cancel, replace, or adjust orders.
 - Must emit deterministic event ids so repeated runs for the same date replace the same workflow/date projection without duplicate events.
 - Must preserve existing events from other workflows or dates.
+- Must include order shape fields in submitted and state-derived event payloads so non-LO TP1, trigger, and trailing orders remain auditable.
 - Must emit at least submitted events from paper journals and observed status events from `paper-execution-state.json` when available.
 - Event payloads must preserve `intent_id`, `source_signal_id`, `broker_order_id`, `symbol`, `side`, `quantity`, `remark`, and raw request/response fields when present.
 

@@ -143,7 +143,9 @@ def execution_state() -> dict:
                 "entry_broker_order_id": "entry-o-1",
                 "symbol": "MU",
                 "side": "sell",
+                "order_type": "LO",
                 "quantity": 100,
+                "limit_price": 112,
                 "broker_order_id": "tp-o-1",
                 "status": "filled",
                 "filled_quantity": 100,
@@ -202,6 +204,49 @@ class PaperEventLedgerTest(unittest.TestCase):
             self.assertEqual(len(lines), len(events))
             event_ids = [json.loads(line)["event_id"] for line in lines]
             self.assertEqual(len(event_ids), len(set(event_ids)))
+
+    def test_event_payload_preserves_take_profit_order_shape_fields(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            base = root / "runtime" / "paper" / "2026-05-26"
+            trailing_tp = take_profit_record(
+                order_type="TSLPPCT",
+                limit_price=None,
+                trailing_percent=2.5,
+                limit_offset=0.3,
+                tif="gtc",
+                outside_rth="RTH_ONLY",
+            )
+            append_jsonl(base / "paper-take-profit-orders.jsonl", trailing_tp)
+            state = execution_state()
+            state["orders"] = []
+            state["protective_stops"] = []
+            state["exit_orders"] = []
+            state["take_profit_orders"][0].update(
+                {
+                    "order_type": "TSLPPCT",
+                    "limit_price": None,
+                    "trailing_percent": 2.5,
+                    "limit_offset": 0.3,
+                    "tif": "gtc",
+                    "outside_rth": "RTH_ONLY",
+                }
+            )
+            write_json(base / "paper-execution-state.json", state)
+
+            result = paper_event_ledger.run(paper_event_ledger.build_args(repo_root=str(root), date="2026-05-26"))
+
+            output = json.loads(Path(result["output"]).read_text(encoding="utf-8"))
+            events_by_type = {event["event_type"]: event for event in output["events"]}
+            submitted_payload = events_by_type["take_profit_submitted"]["payload"]
+            filled_payload = events_by_type["take_profit_filled"]["payload"]
+            self.assertEqual(submitted_payload["order_type"], "TSLPPCT")
+            self.assertEqual(submitted_payload["trailing_percent"], 2.5)
+            self.assertEqual(submitted_payload["limit_offset"], 0.3)
+            self.assertEqual(submitted_payload["outside_rth"], "RTH_ONLY")
+            self.assertEqual(filled_payload["order_type"], "TSLPPCT")
+            self.assertEqual(filled_payload["trailing_percent"], 2.5)
+            self.assertEqual(filled_payload["limit_offset"], 0.3)
 
     def test_wrapper_exposes_event_ledger(self):
         with tempfile.TemporaryDirectory() as tmp:

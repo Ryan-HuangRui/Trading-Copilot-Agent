@@ -11,6 +11,18 @@ from paper_execution_config import broker_capability_matrix
 from signal_artifacts import read_json
 
 
+ORDER_SHAPE_FIELDS = (
+    "limit_price",
+    "trigger_price",
+    "trailing_amount",
+    "trailing_percent",
+    "limit_offset",
+    "tif",
+    "expire_date",
+    "outside_rth",
+)
+
+
 def resolve_path(repo_root: Path, explicit_path: str | None, default_path: Path) -> Path:
     if explicit_path:
         path = Path(explicit_path)
@@ -212,7 +224,7 @@ def synced_order(intent: dict[str, Any], broker_orders: list[dict[str, Any]], ex
         status = "submitted"
 
     resolved_broker_order_id = str(intent.get("broker_order_id") or "") or broker_order_id(broker_order or {})
-    return {
+    synced = {
         "intent_id": intent.get("intent_id"),
         "source_signal_id": intent.get("source_signal_id"),
         "date": intent.get("date"),
@@ -222,7 +234,6 @@ def synced_order(intent: dict[str, Any], broker_orders: list[dict[str, Any]], ex
         "side": intent.get("side"),
         "order_type": intent.get("order_type"),
         "quantity": intent.get("quantity"),
-        "limit_price": intent.get("limit_price"),
         "remark": intent.get("remark"),
         "submitted_at": intent.get("submitted_at"),
         "broker_order_id": resolved_broker_order_id or None,
@@ -237,13 +248,15 @@ def synced_order(intent: dict[str, Any], broker_orders: list[dict[str, Any]], ex
         "broker_order": broker_order,
         "executions": matched_executions,
     }
+    for field in ORDER_SHAPE_FIELDS:
+        synced[field] = intent.get(field)
+    return synced
 
 
 def synced_exit_order(intent: dict[str, Any], broker_orders: list[dict[str, Any]], executions: list[dict[str, Any]]) -> dict[str, Any]:
     synced = synced_order(intent, broker_orders, executions)
     synced["kind"] = intent.get("kind")
     synced["entry_broker_order_id"] = intent.get("entry_broker_order_id")
-    synced["trigger_price"] = intent.get("trigger_price")
     synced["take_profit"] = intent.get("take_profit")
     synced["exit_fraction"] = intent.get("exit_fraction")
     return synced
