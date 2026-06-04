@@ -115,7 +115,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     paper_execution_config=paper_execution_config,
                 )
             try:
-                submit_result = adapter.submit_limit_order(intent, execute=True, action=broker_action)
+                submit_result = adapter.submit_order(intent, execute=True, action=broker_action)
                 record = paper_order_record(
                     intent=intent,
                     submit_status="submitted",

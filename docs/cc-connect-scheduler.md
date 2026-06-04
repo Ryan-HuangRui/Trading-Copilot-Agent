@@ -328,7 +328,7 @@ Recommended cc connect instruction:
 ```text
 Run Trading-Copilot-Agent paper entry execution for <DATE> only if the paper dry-run artifact was reviewed
 or the scheduler's paper-entry policy allows automatic paper entry execution.
-Submit only ready long limit-buy entry intents to the Longbridge paper account.
+Submit only ready long entry intents to the Longbridge paper account.
 Do not run cancel, protective-stop, TP1, break-even, or real-account operations.
 ```
 

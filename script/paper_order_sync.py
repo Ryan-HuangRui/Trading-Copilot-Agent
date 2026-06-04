@@ -139,6 +139,7 @@ def find_executions(intent: dict[str, Any], broker_order: dict[str, Any] | None,
         matched = [execution for execution in executions if broker_order_id(execution) == order_id]
         if matched:
             return matched, "broker_order_id"
+        return [], "broker_order_id"
 
     remark = str(intent.get("remark") or "")
     if remark:
@@ -271,7 +272,7 @@ def first_by_intent(items: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     indexed: dict[str, dict[str, Any]] = {}
     for item in items:
         intent_id = str(item.get("intent_id") or "")
-        if intent_id and intent_id not in indexed:
+        if intent_id:
             indexed[intent_id] = item
     return indexed
 

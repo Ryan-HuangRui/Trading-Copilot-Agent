@@ -9,6 +9,15 @@ from typing import Any
 
 from longbridge_paper_trade_adapter import PAPER_ACCOUNT_CHANNEL, ensure_paper_account
 from paper_execution_config import ensure_paper_write_allowed, normalize_paper_execution_config
+from paper_order_models import (
+    PRICE_REQUIRED_ORDER_TYPES,
+    TRAILING_AMOUNT_REQUIRED_ORDER_TYPES,
+    TRAILING_PERCENT_REQUIRED_ORDER_TYPES,
+    TRIGGER_PRICE_REQUIRED_ORDER_TYPES,
+    normalize_order_type,
+    normalize_tif,
+    validate_order_shape,
+)
 
 
 def format_decimal(value: float) -> str:
@@ -36,6 +45,13 @@ def parse_json_output(output: str) -> Any:
                 continue
             return payload
         raise
+
+
+def broker_order_id_from_response(raw_response: Any) -> str | None:
+    if not isinstance(raw_response, dict):
+        return None
+    broker_order_id = raw_response.get("order_id") or raw_response.get("id") or raw_response.get("broker_order_id")
+    return str(broker_order_id) if broker_order_id else None
 
 
 class LongbridgePaperOrderAdapter:
@@ -82,6 +98,66 @@ class LongbridgePaperOrderAdapter:
         if float(intent.get("limit_price") or 0) <= 0:
             raise ValueError("limit_price must be > 0")
 
+    def validate_order_intent(self, intent: dict[str, Any]) -> None:
+        errors = validate_order_shape(intent)
+        if errors:
+            raise ValueError("; ".join(errors))
+
+    def submit_order_command(self, intent: dict[str, Any]) -> list[str]:
+        self.validate_order_intent(intent)
+        order_type = normalize_order_type(intent.get("order_type"))
+        tif = normalize_tif(intent.get("tif"))
+        remark = str(intent.get("remark") or f"tca:{intent['intent_id']}")
+        command = [
+            "order",
+            str(intent["side"]),
+            str(intent["longbridge_symbol"]),
+            str(int(intent["quantity"])),
+            "--order-type",
+            order_type,
+        ]
+        if order_type in PRICE_REQUIRED_ORDER_TYPES:
+            command.extend(["--price", format_decimal(float(intent["limit_price"]))])
+        if order_type in TRIGGER_PRICE_REQUIRED_ORDER_TYPES:
+            command.extend(["--trigger-price", format_decimal(float(intent["trigger_price"]))])
+        if order_type in TRAILING_AMOUNT_REQUIRED_ORDER_TYPES:
+            command.extend(["--trailing-amount", format_decimal(float(intent["trailing_amount"]))])
+        if order_type in TRAILING_PERCENT_REQUIRED_ORDER_TYPES:
+            command.extend(["--trailing-percent", format_decimal(float(intent["trailing_percent"]))])
+        if order_type.startswith("TSLP") and intent.get("limit_offset") is not None:
+            command.extend(["--limit-offset", format_decimal(float(intent["limit_offset"]))])
+        command.extend(["--tif", tif])
+        if tif == "gtd":
+            command.extend(["--expire-date", str(intent["expire_date"])])
+        if intent.get("outside_rth"):
+            command.extend(["--outside-rth", str(intent["outside_rth"])])
+        command.extend(["--remark", remark, "--format", "json", "-y"])
+        return command
+
+    def submit_order(
+        self,
+        intent: dict[str, Any],
+        *,
+        execute: bool,
+        action: str = "entry_submit",
+    ) -> dict[str, Any]:
+        self.ensure_write_allowed(execute=execute, action=action)
+        account_channel = self.assert_paper_account()
+        command = self.submit_order_command(intent)
+        raw_response = self.run_json(command)
+        broker_order_id = broker_order_id_from_response(raw_response)
+        return {
+            "broker": "longbridge",
+            "account_channel": account_channel or PAPER_ACCOUNT_CHANNEL,
+            "broker_order_id": broker_order_id,
+            "raw_request": {
+                "command": command,
+                "intent_id": intent["intent_id"],
+                "remark": str(intent.get("remark") or f"tca:{intent['intent_id']}"),
+            },
+            "raw_response": raw_response if isinstance(raw_response, dict) else {"response": raw_response},
+        }
+
     def submit_limit_order(
         self,
         intent: dict[str, Any],
@@ -92,54 +168,19 @@ class LongbridgePaperOrderAdapter:
         if action not in {"entry_submit", "intraday_entry_submit"}:
             raise ValueError(f"unsupported limit order action: {action}")
         self.validate_limit_buy_intent(intent)
-        self.ensure_write_allowed(execute=execute, action=action)
-        account_channel = self.assert_paper_account()
-        quantity = str(int(intent["quantity"]))
-        price = format_decimal(float(intent["limit_price"]))
-        remark = str(intent.get("remark") or f"tca:{intent['intent_id']}")
-        command = [
-            "order",
-            "buy",
-            str(intent["longbridge_symbol"]),
-            quantity,
-            "--price",
-            price,
-            "--order-type",
-            "LO",
-            "--tif",
-            str(intent.get("tif") or "day"),
-            "--remark",
-            remark,
-            "--format",
-            "json",
-            "-y",
-        ]
-        raw_response = self.run_json(command)
-        broker_order_id = None
-        if isinstance(raw_response, dict):
-            broker_order_id = raw_response.get("order_id") or raw_response.get("id") or raw_response.get("broker_order_id")
-        return {
-            "broker": "longbridge",
-            "account_channel": account_channel or PAPER_ACCOUNT_CHANNEL,
-            "broker_order_id": str(broker_order_id) if broker_order_id else None,
-            "raw_request": {
-                "command": command,
-                "intent_id": intent["intent_id"],
-                "remark": remark,
-            },
-            "raw_response": raw_response if isinstance(raw_response, dict) else {"response": raw_response},
-        }
+        return self.submit_order(intent, execute=execute, action=action)
 
     def cancel_order(
         self,
         broker_order_id: str,
         *,
         execute: bool,
+        action: str = "cancel",
     ) -> dict[str, Any]:
         order_id = str(broker_order_id or "").strip()
         if not order_id:
             raise ValueError("broker_order_id is required")
-        self.ensure_write_allowed(execute=execute, action="cancel")
+        self.ensure_write_allowed(execute=execute, action=action)
         account_channel = self.assert_paper_account()
         command = ["order", "cancel", order_id, "--format", "json", "-y"]
         output = self.run_text(command)
@@ -183,9 +224,10 @@ class LongbridgePaperOrderAdapter:
         intent: dict[str, Any],
         *,
         execute: bool,
+        action: str = "protective_stop",
     ) -> dict[str, Any]:
         self.validate_protective_stop_intent(intent)
-        self.ensure_write_allowed(execute=execute, action="protective_stop")
+        self.ensure_write_allowed(execute=execute, action=action)
         account_channel = self.assert_paper_account()
         quantity = str(int(intent["quantity"]))
         trigger_price = format_decimal(float(intent["trigger_price"]))

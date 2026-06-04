@@ -7,7 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from longbridge_paper_order_adapter import format_decimal
+from longbridge_paper_order_adapter import LongbridgePaperOrderAdapter, format_decimal
+from paper_execution_config import broker_capability_matrix, load_paper_execution_config, paper_execution_policy
 from signal_artifacts import read_json
 
 
@@ -44,6 +45,12 @@ def load_jsonl_records(path: Path) -> list[dict[str, Any]]:
         if isinstance(record, dict):
             records.append(record)
     return records
+
+
+def append_jsonl(path: Path, record: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
 
 
 def stop_records_by_intent(path: Path) -> dict[str, dict[str, Any]]:
@@ -203,6 +210,42 @@ def break_even_candidate_or_block(
     )
 
 
+def break_even_stop_record(
+    candidate: dict[str, Any],
+    *,
+    cancel_result: dict[str, Any],
+    submit_result: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "kind": "paper_break_even_stop_order",
+        "intent_id": candidate["intent_id"],
+        "source_signal_id": candidate.get("source_signal_id"),
+        "entry_broker_order_id": candidate.get("entry_broker_order_id"),
+        "replaces_broker_order_id": candidate.get("existing_stop_order_id"),
+        "symbol": candidate.get("symbol"),
+        "longbridge_symbol": candidate.get("longbridge_symbol"),
+        "side": candidate.get("side"),
+        "order_type": candidate.get("order_type"),
+        "quantity": candidate.get("remaining_quantity"),
+        "trigger_price": candidate.get("trigger_price"),
+        "tif": candidate.get("tif"),
+        "buffer_pct": candidate.get("buffer_pct"),
+        "remark": candidate.get("remark"),
+        "broker": "longbridge",
+        "account_channel": submit_result.get("account_channel") or cancel_result.get("account_channel"),
+        "broker_order_id": submit_result.get("broker_order_id"),
+        "submit_status": "submitted",
+        "submitted_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "cancel_result": {
+            "broker_order_id": cancel_result.get("broker_order_id"),
+            "raw_request": cancel_result.get("raw_request") if isinstance(cancel_result.get("raw_request"), dict) else {},
+            "raw_response": cancel_result.get("raw_response") if isinstance(cancel_result.get("raw_response"), dict) else {},
+        },
+        "raw_request": submit_result.get("raw_request") if isinstance(submit_result.get("raw_request"), dict) else {},
+        "raw_response": submit_result.get("raw_response") if isinstance(submit_result.get("raw_response"), dict) else {},
+    }
+
+
 def run(args: argparse.Namespace) -> dict[str, Any]:
     if args.buffer_pct < 0:
         raise ValueError("--buffer-pct must be >= 0")
@@ -210,6 +253,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     state_path = default_state_path(repo_root, args.date, args.state)
     stops_path = default_stops_path(repo_root, args.date, args.stops_journal)
     output = default_output_path(repo_root, args.date, args.output)
+    paper_execution_config, paper_execution_config_path = load_paper_execution_config(
+        repo_root,
+        getattr(args, "paper_execution_config", None),
+    )
     state = read_json(state_path)
     orders = state.get("orders")
     if not isinstance(orders, list):
@@ -218,6 +265,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
     move_candidates: list[dict[str, Any]] = []
     blocked: list[dict[str, Any]] = []
+    moved: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
     for order in orders:
         if not isinstance(order, dict):
             continue
@@ -227,28 +276,66 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         else:
             blocked.append(record)
 
+    if args.execute and move_candidates:
+        adapter = LongbridgePaperOrderAdapter(
+            cli=args.longbridge_cli,
+            paper_execution_config=paper_execution_config,
+        )
+        for candidate in move_candidates:
+            try:
+                cancel_result = adapter.cancel_order(
+                    str(candidate["existing_stop_order_id"]),
+                    execute=True,
+                    action="break_even_stop_move",
+                )
+                submit_result = adapter.submit_protective_stop_order(
+                    {
+                        **candidate,
+                        "quantity": candidate["remaining_quantity"],
+                    },
+                    execute=True,
+                    action="break_even_stop_move",
+                )
+                record = break_even_stop_record(candidate, cancel_result=cancel_result, submit_result=submit_result)
+                append_jsonl(stops_path, record)
+                moved.append(record)
+            except Exception as exc:
+                errors.append({**candidate, "error": str(exc)})
+
     summary = {
         "total": len([order for order in orders if isinstance(order, dict)]),
         "move_candidates": len(move_candidates),
         "blocked": len(blocked),
+        "moved": len(moved),
+        "errors": len(errors),
     }
     payload = {
         "date": args.date,
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "dry_run": True,
-        "execute_supported": False,
+        "dry_run": not args.execute,
+        "execute_requested": bool(args.execute),
+        "execute_supported": True,
         "source_execution_state": str(state_path),
         "source_stops_journal": str(stops_path),
+        "paper_execution_config": str(paper_execution_config_path),
+        "execution_policy": paper_execution_policy(paper_execution_config),
+        "broker_capabilities": broker_capability_matrix(paper_execution_config),
         "buffer_pct": args.buffer_pct,
         "tif": args.tif,
         "move_candidates": move_candidates,
         "blocked": blocked,
+        "moved": moved,
+        "errors": errors,
         "summary": summary,
-        "safety_note": "Dry-run break-even stop movement plan only. This workflow does not cancel, replace, or submit broker orders.",
+        "safety_note": (
+            "Dry-run break-even stop movement plan only. This workflow does not call broker write APIs."
+            if not args.execute
+            else "Executed break-even stop movement through guarded cancel + new MIT stop submission."
+        ),
     }
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    return {"status": "success", "date": args.date, "output": str(output), "dry_run": True, "summary": summary}
+    return {"status": "success", "date": args.date, "output": str(output), "dry_run": payload["dry_run"], "summary": summary}
 
 
 def build_args(**overrides: Any) -> argparse.Namespace:
@@ -259,6 +346,9 @@ def build_args(**overrides: Any) -> argparse.Namespace:
         "output": None,
         "buffer_pct": 0.0,
         "tif": "gtc",
+        "execute": False,
+        "longbridge_cli": None,
+        "paper_execution_config": None,
         "repo_root": str(Path(__file__).resolve().parents[1]),
     }
     values.update(overrides)
@@ -266,13 +356,16 @@ def build_args(**overrides: Any) -> argparse.Namespace:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Build a dry-run break-even stop movement plan for paper entries")
+    parser = argparse.ArgumentParser(description="Build or execute a guarded break-even stop movement plan for paper entries")
     parser.add_argument("--date", required=True)
     parser.add_argument("--state")
     parser.add_argument("--stops-journal")
     parser.add_argument("--output")
     parser.add_argument("--buffer-pct", type=float, default=0.0)
     parser.add_argument("--tif", default="gtc")
+    parser.add_argument("--execute", action="store_true", help="Cancel the old stop and submit a new guarded break-even MIT stop")
+    parser.add_argument("--longbridge-cli")
+    parser.add_argument("--paper-execution-config")
     parser.add_argument("--repo-root", default=str(Path(__file__).resolve().parents[1]))
     return parser
 

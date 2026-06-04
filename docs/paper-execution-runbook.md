@@ -173,7 +173,7 @@ python3 script/trading_copilot.py paper-take-profit-plan --date "$DATE"
 python3 script/trading_copilot.py paper-break-even-stop-plan --date "$DATE"
 ```
 
-Do not enable these execution commands in the initial rollout:
+Do not enable these exit execution commands in the initial rollout:
 
 ```bash
 python3 script/trading_copilot.py paper-order-cancel --date "$DATE" --execute
@@ -181,11 +181,11 @@ python3 script/trading_copilot.py paper-order-cancel --date "$DATE" --execute
 python3 script/trading_copilot.py paper-protective-stop-plan --date "$DATE" --execute
 
 python3 script/trading_copilot.py paper-take-profit-plan --date "$DATE" --execute
+
+python3 script/trading_copilot.py paper-break-even-stop-plan --date "$DATE" --execute
 ```
 
-Reason: current protective-stop planning submits a stop for the full filled quantity, while TP1 planning submits a partial sell order. Until OCO, stop resize, and cancel/replace behavior are explicitly implemented, automatic exit execution can create oversell or state-drift risk.
-
-`paper-break-even-stop-plan` is plan-only. It does not cancel, replace, or submit broker orders.
+Reason: current protective-stop planning submits a stop for the full filled quantity, while TP1 planning submits a partial sell order. Break-even movement is implemented as cancel old stop plus submit a new MIT stop because Longbridge `order replace` cannot modify MIT trigger prices. Keep automatic exit execution disabled until the operator has reviewed OCO, stop resize, and cancel-then-submit state-drift risk.
 
 For cc-connect deployments, `ops/cc-connect/tca-paper-sync-review.sh` runs cancel planning in dry-run mode by default. It adds `--execute` to `paper-order-cancel` only when `TCA_PAPER_CANCEL_EXECUTE=1` is set for that task, and the selected config must still enable `broker_writes_enabled=true` plus `allow_cancel=true`.
 
@@ -201,7 +201,8 @@ Use a config file as the paper broker-write policy. The tracked `config/paper_ex
     "allow_intraday_entry_submit": false,
     "allow_cancel": false,
     "allow_protective_stop": false,
-    "allow_take_profit": false
+    "allow_take_profit": false,
+    "allow_break_even_stop_move": false
   }
 }
 ```

@@ -7,7 +7,7 @@ All workflows must preserve the repository safety rules:
 - Never place real trades.
 - Read-only Longbridge real-account snapshots are allowed only through the account snapshot workflow; real-account order placement, cancellation, replacement, and automatic position changes are prohibited.
 - Paper broker writes are allowed only through dedicated guarded paper adapters, only against `lb_papertrading`, and only for explicitly contracted operations.
-- Current paper write scope is limited to guarded entry limit-buy submission, guarded cancellation of expired unfilled entry orders, guarded protective stop submission, and guarded TP1 partial-exit submission. Paper replace, break-even stop movement, trailing stops, OCO, market orders, short selling, and real-account writes remain out of scope.
+- Current paper write scope is limited to guarded paper entry submission, guarded cancellation of expired unfilled entry orders, guarded protective stop submission, guarded TP1 partial-exit submission, and guarded break-even stop movement. Paper replace, OCO, short selling, and real-account writes remain out of scope.
 - Do not output deterministic buy/sell instructions.
 - Use scenarios, triggers, invalidation, risk, and `NO TRADE`.
 - Use `knowledge/refined/` as the only rule source for trading conclusions.
@@ -1112,7 +1112,7 @@ Required behavior:
 
 ## paper-break-even-stop-plan
 
-Purpose: build a dry-run plan to move an existing protective stop to break-even after TP1 fill evidence exists.
+Purpose: build or execute a guarded plan to move an existing protective stop to break-even after TP1 fill evidence exists.
 
 Canonical command:
 
@@ -1136,7 +1136,9 @@ Required behavior:
 - TP1 fill evidence may come from `tp1_status=filled`, `take_profit_status=filled`, or positive `tp1_filled_quantity` / `take_profit_filled_quantity` in the execution state.
 - Break-even price is based on `avg_fill_price`, falling back to entry/limit price, with optional non-negative `--buffer-pct`.
 - Candidates must include the existing stop order id, remaining quantity, new trigger price, and preview steps for canceling the old stop and submitting a replacement `sell MIT`.
-- Because cancel/replace safety needs separate execution design, there is no `--execute` mode for this workflow.
+- The default mode is dry-run. `--execute` is allowed only against `lb_papertrading` when the selected paper execution config enables `broker_writes_enabled=true` and `allow_break_even_stop_move=true`.
+- Execution must cancel the old stop first and submit a new `sell MIT` stop for the remaining quantity. Longbridge `order replace` must not be used for this movement because it cannot update MIT trigger prices.
+- Successful movement records must be appended to `runtime/paper/<DATE>/paper-stop-orders.jsonl` and preserve the replaced stop id, new stop id, raw cancel request/response, raw submit request/response, and `intent_id`.
 
 Required behavior for outcome backfill:
 

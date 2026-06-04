@@ -15,6 +15,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "allow_protective_stop": False,
     "allow_take_profit": False,
     "allow_intraday_entry_submit": False,
+    "allow_break_even_stop_move": False,
 }
 
 ACTION_CONFIG_KEYS = {
@@ -23,23 +24,24 @@ ACTION_CONFIG_KEYS = {
     "cancel": "allow_cancel",
     "protective_stop": "allow_protective_stop",
     "take_profit": "allow_take_profit",
+    "break_even_stop_move": "allow_break_even_stop_move",
 }
 
 SUPPORTED_BROKER_ACTIONS: tuple[dict[str, Any], ...] = (
     {
         "action": "entry_submit",
-        "label": "Entry limit buy",
+        "label": "Entry order",
         "config_key": "allow_entry_submit",
-        "order_type": "LO",
+        "order_type": "LO/ELO/MO/AO/ALO/ODD/SLO/LIT/MIT/TSLPAMT/TSLPPCT",
         "side": "buy",
         "workflow": "paper-trade-submit",
         "maturity": "initial_rollout",
     },
     {
         "action": "intraday_entry_submit",
-        "label": "Intraday monitor entry limit buy",
+        "label": "Intraday monitor entry order",
         "config_key": "allow_intraday_entry_submit",
-        "order_type": "LO",
+        "order_type": "LO/ELO/MO/AO/ALO/ODD/SLO/LIT/MIT/TSLPAMT/TSLPPCT",
         "side": "buy",
         "workflow": "intraday-paper-entry",
         "maturity": "guarded_phase3",
@@ -71,23 +73,22 @@ SUPPORTED_BROKER_ACTIONS: tuple[dict[str, Any], ...] = (
         "workflow": "paper-take-profit-plan",
         "maturity": "dry_run_first",
     },
+    {
+        "action": "break_even_stop_move",
+        "label": "Break-even stop move",
+        "config_key": "allow_break_even_stop_move",
+        "order_type": "MIT",
+        "side": "sell",
+        "workflow": "paper-break-even-stop-plan",
+        "maturity": "guarded_cancel_then_submit",
+    },
 )
 
 UNSUPPORTED_BROKER_ACTIONS: tuple[dict[str, Any], ...] = (
     {
-        "action": "market_entry",
-        "label": "Market entry",
-        "reason": "slippage and fill-price controls are not designed",
-    },
-    {
         "action": "native_oco",
         "label": "Native OCO/bracket order",
         "reason": "broker capability and local cancel-replace safety are not contracted",
-    },
-    {
-        "action": "cancel_replace",
-        "label": "Cancel/replace stop movement",
-        "reason": "break-even stop workflow is currently dry-run only",
     },
     {
         "action": "short_entry",

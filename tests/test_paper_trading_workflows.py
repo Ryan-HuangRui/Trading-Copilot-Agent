@@ -100,16 +100,57 @@ class PaperTradingWorkflowTest(unittest.TestCase):
                 "buy",
                 "MU.US",
                 "200",
-                "--price",
-                "100",
                 "--order-type",
                 "LO",
+                "--price",
+                "100",
                 "--tif",
                 "day",
                 "--format",
                 "json",
             ],
         )
+
+    def test_build_order_preview_supports_market_order_without_price_flag(self):
+        signal = valid_signals()["signals"][0]
+        signal = {
+            **signal,
+            "entry": {"trigger_price": 100, "order_type": "MO"},
+        }
+
+        preview = build_order_preview(
+            signal=signal,
+            account=paper_snapshot()["account"],
+            default_market="US",
+            tif="day",
+        )
+
+        self.assertEqual(preview["status"], "ready")
+        self.assertEqual(preview["order_type"], "MO")
+        self.assertEqual(preview["entry_price"], 100.0)
+        self.assertNotIn("--price", preview["preview_command"])
+        self.assertEqual(preview["preview_command"][5:7], ["--order-type", "MO"])
+
+    def test_build_order_preview_supports_lit_price_and_trigger(self):
+        signal = valid_signals()["signals"][0]
+        signal = {
+            **signal,
+            "entry": {"limit_price": 100, "trigger_price": 101, "order_type": "LIT"},
+        }
+
+        preview = build_order_preview(
+            signal=signal,
+            account=paper_snapshot()["account"],
+            default_market="US",
+            tif="day",
+        )
+
+        self.assertEqual(preview["status"], "ready")
+        self.assertEqual(preview["order_type"], "LIT")
+        self.assertEqual(preview["entry_price"], 100.0)
+        self.assertEqual(preview["trigger_price"], 101.0)
+        self.assertEqual(preview["preview_command"][preview["preview_command"].index("--price") + 1], "100")
+        self.assertEqual(preview["preview_command"][preview["preview_command"].index("--trigger-price") + 1], "101")
 
     def test_paper_account_snapshot_from_fixture_writes_orders_and_executions(self):
         with tempfile.TemporaryDirectory() as tmp:

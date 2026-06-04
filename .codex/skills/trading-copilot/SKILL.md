@@ -165,7 +165,7 @@ This workflow must not submit broker orders.
 13. Only when the user explicitly wants simulated protective stop submission and `config/paper_execution.json` enables `paper_execution.allow_protective_stop=true`, run `python3 script/trading_copilot.py paper-protective-stop-plan --date <DATE> --execute`.
 14. Run `python3 script/trading_copilot.py paper-take-profit-plan --date <DATE>` to prepare a dry-run TP1 partial-exit plan for filled long entries.
 15. Only when the user explicitly wants simulated TP1 submission and `config/paper_execution.json` enables `paper_execution.allow_take_profit=true`, run `python3 script/trading_copilot.py paper-take-profit-plan --date <DATE> --execute`.
-16. Run `python3 script/trading_copilot.py paper-break-even-stop-plan --date <DATE>` to prepare a dry-run break-even stop movement plan after TP1 fill evidence exists. This workflow is plan-only and must not cancel, replace, or submit broker orders.
+16. Run `python3 script/trading_copilot.py paper-break-even-stop-plan --date <DATE>` to prepare a break-even stop movement plan after TP1 fill evidence exists. It defaults to dry-run; only when the user explicitly wants simulated stop movement and `config/paper_execution.json` enables `paper_execution.allow_break_even_stop_move=true`, run `python3 script/trading_copilot.py paper-break-even-stop-plan --date <DATE> --execute`.
 17. Run `python3 script/trading_copilot.py paper-trade-review --date <DATE> --session pre-market --append` only after paper executions exist and should be recorded.
 18. Treat paper results as execution feedback. Do not promote paper P/L directly into `knowledge/refined/`.
 

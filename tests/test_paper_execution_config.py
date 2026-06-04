@@ -64,6 +64,7 @@ class PaperExecutionConfigTest(unittest.TestCase):
             "allow_cancel": False,
             "allow_protective_stop": False,
             "allow_take_profit": False,
+            "allow_break_even_stop_move": False,
         }
 
         matrix = broker_capability_matrix(config)
@@ -74,10 +75,12 @@ class PaperExecutionConfigTest(unittest.TestCase):
         self.assertEqual(matrix["account_channel"], "lb_papertrading")
         self.assertEqual(actions["entry_submit"]["execution_status"], "enabled")
         self.assertEqual(actions["entry_submit"]["config_key"], "allow_entry_submit")
+        self.assertIn("MO", actions["entry_submit"]["order_type"])
         self.assertEqual(actions["cancel"]["execution_status"], "config_disabled")
         self.assertEqual(actions["protective_stop"]["order_type"], "MIT")
+        self.assertEqual(actions["break_even_stop_move"]["config_key"], "allow_break_even_stop_move")
         self.assertIn("native_oco", unsupported)
-        self.assertIn("market_entry", unsupported)
+        self.assertNotIn("market_entry", unsupported)
 
     def test_policy_summarizes_allowed_and_dry_run_only_actions(self):
         config = {
@@ -91,6 +94,21 @@ class PaperExecutionConfigTest(unittest.TestCase):
         self.assertEqual(policy["allowed_broker_writes"], ["entry_submit"])
         self.assertIn("cancel", policy["dry_run_only_actions"])
         self.assertIn("protective_stop", policy["dry_run_only_actions"])
+        self.assertIn("break_even_stop_move", policy["dry_run_only_actions"])
+
+    def test_break_even_stop_move_has_separate_gate(self):
+        config = {
+            "broker_writes_enabled": True,
+            "allow_cancel": True,
+            "allow_protective_stop": True,
+            "allow_break_even_stop_move": False,
+        }
+
+        with self.assertRaises(PermissionError):
+            ensure_paper_write_allowed(config, execute=True, action="break_even_stop_move")
+
+        config["allow_break_even_stop_move"] = True
+        ensure_paper_write_allowed(config, execute=True, action="break_even_stop_move")
 
     def test_intraday_entry_gate_is_supported_but_separate_from_entry_submit(self):
         config = {

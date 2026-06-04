@@ -220,6 +220,58 @@ class PaperOrderSyncTest(unittest.TestCase):
             self.assertEqual(entry["lifecycle"]["remaining_quantity"], 100)
             self.assertEqual(entry["lifecycle"]["overall_status"], "partially_exited")
 
+    def test_sync_uses_latest_stop_record_for_same_intent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.seed(
+                root,
+                paper_snapshot=snapshot(
+                    orders=[
+                        snapshot()["orders"][0],
+                        {
+                            "order_id": "stop-o-1",
+                            "symbol": "MU",
+                            "market": "US",
+                            "side": "sell",
+                            "quantity": 200,
+                            "trigger_price": 95,
+                            "status": "cancelled",
+                            "raw": {"order_id": "stop-o-1"},
+                        },
+                        {
+                            "order_id": "stop-o-2",
+                            "symbol": "MU",
+                            "market": "US",
+                            "side": "sell",
+                            "quantity": 100,
+                            "trigger_price": 100.2,
+                            "status": "accepted",
+                            "raw": {"order_id": "stop-o-2"},
+                        },
+                    ]
+                ),
+            )
+            stop_path = root / "runtime" / "paper" / "2026-05-26" / "paper-stop-orders.jsonl"
+            append_jsonl(stop_path, stop_order(broker_order_id="stop-o-1", trigger_price=95, quantity=200))
+            append_jsonl(
+                stop_path,
+                stop_order(
+                    kind="paper_break_even_stop_order",
+                    broker_order_id="stop-o-2",
+                    trigger_price=100.2,
+                    quantity=100,
+                    remark="tca-be-stop:2026-05-26:pre-market:MU:abc123",
+                ),
+            )
+
+            result = paper_order_sync.run(paper_order_sync.build_args(repo_root=str(root), date="2026-05-26"))
+
+            state = json.loads(Path(result["output"]).read_text(encoding="utf-8"))
+            entry = state["orders"][0]
+            self.assertEqual(entry["protective_stop_order_id"], "stop-o-2")
+            self.assertEqual(entry["current_stop_price"], 100.2)
+            self.assertEqual(entry["stop_status"], "accepted")
+
     def test_sync_matches_by_remark_when_broker_order_id_is_missing(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

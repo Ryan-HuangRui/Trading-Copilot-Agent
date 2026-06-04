@@ -60,7 +60,7 @@ Acceptance:
 
 ## Milestone 1: Controlled Paper Entry Submission
 
-Goal: automatically submit Longbridge paper entry limit buy orders from validated plans.
+Goal: automatically submit guarded Longbridge paper long entry orders from validated plans.
 
 Implementation status: order models, risk guard, dry-run submission, guarded Longbridge paper order adapter, `paper-trade-submit --execute` integration, and fixture smoke coverage are implemented.
 
@@ -68,14 +68,13 @@ Scope:
 
 - Long only
 - Buy only
-- Limit orders only
+- Longbridge-supported entry order types only
 - Paper account only
 - Entry orders only
 
 Out of scope:
 
 - Short selling
-- Market orders
 - Stop-loss orders
 - Take-profit orders
 - OCO
@@ -104,8 +103,8 @@ Adapter boundary:
 
 - `longbridge_paper_trade_adapter.py` remains read-only.
 - `longbridge_paper_order_adapter.py` is the only paper broker-write adapter.
-- The first adapter write capability is limited to `long buy` `LO` entry orders.
-- Cancel, replace, stop, take-profit, OCO, market orders, short selling, and real-money orders remain out of scope for Milestone 1.
+- The adapter write capability supports Longbridge order types `LO`, `ELO`, `MO`, `AO`, `ALO`, `ODD`, `SLO`, `LIT`, `MIT`, `TSLPAMT`, and `TSLPPCT`, with command-shape validation for required price, trigger, and trailing fields.
+- Replace, OCO, short selling, and real-money orders remain out of scope for Milestone 1.
 
 Idempotency:
 
@@ -160,7 +159,7 @@ Recommended sequence:
 3. Add TP1 partial exits.
 4. Add break-even stop movement or trailing logic only after basic exits are stable.
 
-Implementation status: `paper-order-cancel` now generates a dry-run cancel plan for expired unfilled entry orders and can execute those cancels through the guarded paper adapter when `--execute` and the cancel gate in `config/paper_execution.json` are both enabled. `paper-protective-stop-plan` now generates a `sell MIT --trigger-price <stop>` plan for filled long entries and can submit those protective stops through the guarded paper adapter under the same config-driven execution gates. `paper-take-profit-plan` now generates a default 50% TP1 partial-exit `sell LO --price <tp1>` plan for filled long entries and can submit those take-profit orders through the guarded paper adapter under the same config-driven execution gates. `paper-break-even-stop-plan` now generates a dry-run-only plan to move existing protective stops to break-even after TP1 fill evidence exists; it does not execute cancel/replace.
+Implementation status: `paper-order-cancel` now generates a dry-run cancel plan for expired unfilled entry orders and can execute those cancels through the guarded paper adapter when `--execute` and the cancel gate in `config/paper_execution.json` are both enabled. `paper-protective-stop-plan` now generates a `sell MIT --trigger-price <stop>` plan for filled long entries and can submit those protective stops through the guarded paper adapter under the same config-driven execution gates. `paper-take-profit-plan` now generates a default 50% TP1 partial-exit `sell LO --price <tp1>` plan for filled long entries and can submit those take-profit orders through the guarded paper adapter under the same config-driven execution gates. `paper-break-even-stop-plan` now generates a break-even stop movement plan after TP1 fill evidence exists and can execute it as guarded cancel old stop plus submit new MIT stop when `allow_break_even_stop_move=true`.
 
 All exit actions must use the same paper-account, config gate, execute flag, idempotency, and audit-log gates as entry submission.
 
@@ -169,7 +168,7 @@ The default scheduler posture remains dry-run for exit management. Deployment au
 - `TCA_PAPER_CANCEL_EXECUTE=1` is set for the cc-connect sync task.
 - The selected paper execution config enables both `broker_writes_enabled=true` and `allow_cancel=true`.
 
-Protective-stop and TP1 broker writes should remain manual or dry-run until bracket/OCO or cancel-replace safety is designed.
+Protective-stop, TP1, and break-even broker writes should remain manual or dry-run until bracket/OCO and cancel-then-submit state-drift risk are operationally accepted.
 
 ## Milestone 3.5: Broker Capability Matrix
 

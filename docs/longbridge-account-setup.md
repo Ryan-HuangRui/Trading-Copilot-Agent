@@ -1,6 +1,6 @@
 # Longbridge Account Snapshot Setup
 
-This runbook covers the read-only account snapshot, paper account snapshot, paper order preview/submit/cancel/protective-stop/review, and position review workflows. Production account workflows remain read-only. Paper writes are limited to guarded Longbridge paper-account entry orders, expired unfilled entry-order cancellation, and protective stop submission.
+This runbook covers the read-only account snapshot, paper account snapshot, paper order preview/submit/cancel/protective-stop/review, and position review workflows. Production account workflows remain read-only. Paper writes are limited to guarded Longbridge paper-account entry orders, expired unfilled entry-order cancellation, protective stop submission, TP1 partial exits, and break-even stop movement.
 
 ## Safety Boundary
 
@@ -8,7 +8,7 @@ This runbook covers the read-only account snapshot, paper account snapshot, pape
 - Allowed operations are read-only account, assets, positions, portfolio, quote, and market lookups.
 - Order, cancel, replace, modify, trade, buy, sell, submit, and watchlist write tokens are rejected by the adapter.
 - `script/longbridge_paper_trade_adapter.py` is separate and only supports Longbridge paper accounts. It may read paper order and execution lists after verifying `account_channel=lb_papertrading`.
-- `script/longbridge_paper_order_adapter.py` is the only broker-write adapter. It requires `account_channel=lb_papertrading`, `--execute`, and the matching `config/paper_execution.json` action gate, and currently supports simulated limit buy entry orders, expired unfilled entry-order cancellation, protective stop submission, and TP1 partial-exit submission.
+- `script/longbridge_paper_order_adapter.py` is the only broker-write adapter. It requires `account_channel=lb_papertrading`, `--execute`, and the matching `config/paper_execution.json` action gate, and currently supports simulated long entry orders across Longbridge-supported order types, expired unfilled entry-order cancellation, protective stop submission, TP1 partial-exit submission, and break-even stop movement.
 - Downstream scripts read `runtime/account/<DATE>/account-snapshot.json` instead of calling Longbridge directly.
 
 ## Longbridge CLI Commands
@@ -132,10 +132,16 @@ python3 script/trading_copilot.py paper-take-profit-plan --date <DATE> --execute
 
 This requires `paper_execution.allow_take_profit=true`; keep it false during the initial rollout.
 
-Build a dry-run break-even stop movement plan after TP1 fill evidence exists:
+Build a break-even stop movement plan after TP1 fill evidence exists:
 
 ```bash
 python3 script/trading_copilot.py paper-break-even-stop-plan --date <DATE>
+```
+
+Execute a guarded break-even stop movement after enabling `paper_execution.allow_break_even_stop_move=true`:
+
+```bash
+python3 script/trading_copilot.py paper-break-even-stop-plan --date <DATE> --execute
 ```
 
 Review observed paper executions against the preview and append matched paper fills:
