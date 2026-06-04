@@ -396,20 +396,32 @@ Keep these execution switches disabled in the initial rollout:
   "paper_execution": {
     "allow_cancel": false,
     "allow_protective_stop": false,
-    "allow_take_profit": false
+    "allow_take_profit": false,
+    "allow_break_even_stop_move": false
   }
 }
 ```
 
-Do not add `--execute` to `paper-order-cancel`, `paper-protective-stop-plan`, or `paper-take-profit-plan` while those config gates are false. Current exit-management execution is intentionally dry-run because protective stops use the full filled quantity while TP1 uses a partial exit quantity; automatic execution needs OCO or stop resize/cancel-replace safety before rollout.
+Do not add `--execute` to `paper-order-cancel`, `paper-protective-stop-plan`, `paper-take-profit-plan`, or `paper-break-even-stop-plan` while those config gates are false. Current exit-management execution is intentionally dry-run because protective stops use the full filled quantity while TP1 uses a partial exit quantity; automatic execution needs OCO or stop resize/cancel-then-submit safety before rollout.
 
 The provided `ops/cc-connect/tca-paper-sync-review.sh` keeps `paper-order-cancel` dry-run unless `TCA_PAPER_CANCEL_EXECUTE=1` is set for that task. Even with that environment switch, cancellation still requires the selected `config/paper_execution.local.json` to enable both `paper_execution.broker_writes_enabled=true` and `paper_execution.allow_cancel=true`.
 
 ## Optional Monitor Journal Task
 
-If intraday monitoring is enabled, keep scan generation, sidecar generation, dry-run paper checks, and journal append separate:
+If intraday monitoring is enabled, keep scan generation, sidecar generation, dry-run paper checks, and journal append separate. The tracked Codex wrapper is:
 
 ```bash
+bash ops/cc-connect/tca-intraday-codex-monitor.sh <DATE>
+```
+
+Default wrapper behavior is read-only: run `tca-intraday-notify.sh`, append `report/<DATE>/intraday.md`, update `runtime/intraday/<DATE>/state.json`, and send Feishu only when the notification filter has an unsent important event.
+
+Optional dry-run paper checks:
+
+```bash
+TCA_INTRADAY_ENABLE_PAPER_DRY_RUN=1 \
+bash ops/cc-connect/tca-intraday-codex-monitor.sh <DATE>
+
 python3 script/trading_copilot.py monitor-brief --state config/monitor_state.json --interval 5min
 python3 script/trading_copilot.py extract-monitor-signals --date <DATE>
 python3 script/trading_copilot.py validate-trade-plan --session monitor --date <DATE>
@@ -419,7 +431,25 @@ python3 script/trading_copilot.py feishu-summary --session monitor --date <DATE>
 python3 script/trading_copilot.py extract-monitor-signals --append
 ```
 
-Use monitor sidecar and journal entries as observation records only. They are not execution instructions. cc connect must never schedule `paper-trade-submit --session monitor --execute`.
+Optional guarded intraday paper entry:
+
+```bash
+TCA_INTRADAY_ENABLE_PAPER_DRY_RUN=1 \
+TCA_INTRADAY_PAPER_EXECUTE=1 \
+TCA_PAPER_EXECUTION_CONFIG=config/paper_execution.local.json \
+bash ops/cc-connect/tca-intraday-codex-monitor.sh <DATE>
+```
+
+The wrapper must use `intraday-paper-entry --execute`, never `paper-trade-submit --session monitor --execute`.
+
+Optional guarded lifecycle planning:
+
+```bash
+TCA_INTRADAY_ENABLE_PAPER_LIFECYCLE=1 \
+bash ops/cc-connect/tca-intraday-codex-monitor.sh <DATE>
+```
+
+Use monitor sidecar and journal entries as observation records unless Codex writes a validated monitor Trade Plan Card and the explicit paper gates are enabled.
 
 ## Feishu Message Shape
 
