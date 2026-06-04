@@ -23,6 +23,7 @@ config/rate_limit_state.json
 config/longbridge_rate_limit_state.json
 config/delivery_state.json
 config/paper_execution.local.json
+config/intraday_watchlist.json
 config/watchlist.json
 
 # Local assistant persona/context files (not project source)
