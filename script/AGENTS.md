@@ -80,6 +80,7 @@
 - Submit guarded paper TP1 partial exits after enabling `paper_execution.allow_take_profit=true`: `python3 script/trading_copilot.py paper-take-profit-plan --date 2026-05-06 --execute`.
 - Build break-even stop movement plan: `python3 script/trading_copilot.py paper-break-even-stop-plan --date 2026-05-06`.
 - Move stops to break-even after enabling `paper_execution.allow_break_even_stop_move=true`: `python3 script/trading_copilot.py paper-break-even-stop-plan --date 2026-05-06 --execute`.
+- Run lifecycle with a non-market plan-invalidated exit shape: `python3 script/trading_copilot.py paper-lifecycle --date 2026-05-06 --exit-order-type LIT --exit-limit-price <LIMIT> --exit-trigger-price <TRIGGER>`.
 - Review paper executions: `python3 script/trading_copilot.py paper-trade-review --date 2026-05-06 --session pre-market --append`.
 - Run position review: `python3 script/trading_copilot.py position-review --date 2026-05-06 --append`.
 - Run data quality review: `python3 script/trading_copilot.py data-quality --date 2026-05-06`.

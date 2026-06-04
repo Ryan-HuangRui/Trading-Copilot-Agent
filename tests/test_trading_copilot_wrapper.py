@@ -368,8 +368,15 @@ class TradingCopilotWrapperTest(unittest.TestCase):
             expire_after_minutes=90,
             stop_tif="gtc",
             take_profit_tif="gtc",
-            exit_order_type="MO",
-            exit_tif="day",
+            exit_order_type="LIT",
+            exit_limit_price=94.5,
+            exit_trigger_price=95.0,
+            exit_trailing_amount=None,
+            exit_trailing_percent=None,
+            exit_limit_offset=None,
+            exit_tif="gtd",
+            exit_expire_date="2026-05-27",
+            exit_outside_rth="false",
             break_even_tif="gtc",
             exit_fraction=0.5,
             learning_dir="runtime/learning",
@@ -400,6 +407,13 @@ class TradingCopilotWrapperTest(unittest.TestCase):
             ],
         )
         self.assertNotIn("--execute", [part for command in calls for part in command])
+        by_workflow = {Path(command[0]).stem: command for command in calls}
+        self.assertEqual(by_workflow["paper_exit_plan"][by_workflow["paper_exit_plan"].index("--order-type") + 1], "LIT")
+        self.assertEqual(by_workflow["paper_exit_plan"][by_workflow["paper_exit_plan"].index("--limit-price") + 1], "94.5")
+        self.assertEqual(by_workflow["paper_exit_plan"][by_workflow["paper_exit_plan"].index("--trigger-price") + 1], "95.0")
+        self.assertEqual(by_workflow["paper_exit_plan"][by_workflow["paper_exit_plan"].index("--tif") + 1], "gtd")
+        self.assertEqual(by_workflow["paper_exit_plan"][by_workflow["paper_exit_plan"].index("--expire-date") + 1], "2026-05-27")
+        self.assertEqual(by_workflow["paper_exit_plan"][by_workflow["paper_exit_plan"].index("--outside-rth") + 1], "false")
         payload = emit.call_args.args[0]
         self.assertEqual(payload["workflow"], "paper-lifecycle")
         self.assertEqual(payload["summary"]["paper_order_sync"]["filled"], 1)
@@ -433,8 +447,15 @@ class TradingCopilotWrapperTest(unittest.TestCase):
             expire_after_minutes=90,
             stop_tif="gtc",
             take_profit_tif="gtc",
-            exit_order_type="MO",
-            exit_tif="day",
+            exit_order_type="LIT",
+            exit_limit_price=94.5,
+            exit_trigger_price=95.0,
+            exit_trailing_amount=None,
+            exit_trailing_percent=None,
+            exit_limit_offset=None,
+            exit_tif="gtd",
+            exit_expire_date="2026-05-27",
+            exit_outside_rth="false",
             break_even_tif="gtc",
             exit_fraction=0.5,
             learning_dir="runtime/learning",
@@ -453,6 +474,11 @@ class TradingCopilotWrapperTest(unittest.TestCase):
         self.assertIn("--resize-stop-before-submit", by_workflow["paper_take_profit_plan"])
         self.assertIn("--execute", by_workflow["paper_exit_plan"])
         self.assertIn("--order-type", by_workflow["paper_exit_plan"])
+        self.assertEqual(by_workflow["paper_exit_plan"][by_workflow["paper_exit_plan"].index("--order-type") + 1], "LIT")
+        self.assertEqual(by_workflow["paper_exit_plan"][by_workflow["paper_exit_plan"].index("--limit-price") + 1], "94.5")
+        self.assertEqual(by_workflow["paper_exit_plan"][by_workflow["paper_exit_plan"].index("--trigger-price") + 1], "95.0")
+        self.assertEqual(by_workflow["paper_exit_plan"][by_workflow["paper_exit_plan"].index("--expire-date") + 1], "2026-05-27")
+        self.assertEqual(by_workflow["paper_exit_plan"][by_workflow["paper_exit_plan"].index("--outside-rth") + 1], "false")
         self.assertIn("--execute", by_workflow["paper_break_even_stop_plan"])
         self.assertIn("--paper-execution-config", by_workflow["paper_order_cancel"])
         self.assertIn("/usr/local/bin/longbridge", by_workflow["paper_order_cancel"])

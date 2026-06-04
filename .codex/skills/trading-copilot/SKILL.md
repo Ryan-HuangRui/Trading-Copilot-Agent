@@ -181,6 +181,8 @@ python3 script/trading_copilot.py paper-lifecycle --date <DATE>
 
 Use `--execute-cancel`, `--execute-protective-stop`, `--execute-take-profit`, `--execute-exit`, or `--execute-break-even-stop` only with the matching paper execution config gates enabled.
 
+For lifecycle-managed plan-invalidated exits, use the `--exit-*` shape flags when the exit order is not the default market order: `--exit-order-type`, `--exit-limit-price`, `--exit-trigger-price`, `--exit-trailing-amount`, `--exit-trailing-percent`, `--exit-limit-offset`, `--exit-expire-date`, and `--exit-outside-rth`.
+
 ### Intraday Paper Entry
 
 Use this only for Phase 3 after reviewed monitor dry-run evidence exists.

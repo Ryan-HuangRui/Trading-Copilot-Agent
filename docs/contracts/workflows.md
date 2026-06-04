@@ -1273,6 +1273,7 @@ python3 script/trading_copilot.py paper-lifecycle --date <DATE> \
   --execute-cancel \
   --execute-protective-stop \
   --execute-take-profit \
+  --execute-exit \
   --execute-break-even-stop
 ```
 
@@ -1280,6 +1281,7 @@ Required behavior:
 
 - The wrapper must run paper account snapshot and paper order sync before exit planning.
 - It must run cancel, protective-stop, TP1, and break-even workflows, passing `--execute` only for the explicitly requested action flags.
+- For plan-invalidated exits, it must pass shared exit order shape fields through to `paper-exit-plan`: `--exit-order-type`, `--exit-limit-price`, `--exit-trigger-price`, `--exit-trailing-amount`, `--exit-trailing-percent`, `--exit-limit-offset`, `--exit-expire-date`, and `--exit-outside-rth`.
 - It must refresh paper account snapshot and order sync after exit planning, then run paper event ledger and paper execution review.
 - It may append paper learning lessons only with `--append-lessons`.
 - It may refresh strategy-level paper review only with `--strategy-review`.

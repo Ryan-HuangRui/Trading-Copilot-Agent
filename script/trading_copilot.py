@@ -2663,6 +2663,33 @@ def run_paper_lifecycle(args: argparse.Namespace) -> None:
                 args.exit_order_type,
                 "--tif",
                 args.exit_tif,
+                *(
+                    ["--limit-price", str(args.exit_limit_price)]
+                    if getattr(args, "exit_limit_price", None) is not None
+                    else []
+                ),
+                *(
+                    ["--trigger-price", str(args.exit_trigger_price)]
+                    if getattr(args, "exit_trigger_price", None) is not None
+                    else []
+                ),
+                *(
+                    ["--trailing-amount", str(args.exit_trailing_amount)]
+                    if getattr(args, "exit_trailing_amount", None) is not None
+                    else []
+                ),
+                *(
+                    ["--trailing-percent", str(args.exit_trailing_percent)]
+                    if getattr(args, "exit_trailing_percent", None) is not None
+                    else []
+                ),
+                *(
+                    ["--limit-offset", str(args.exit_limit_offset)]
+                    if getattr(args, "exit_limit_offset", None) is not None
+                    else []
+                ),
+                *(["--expire-date", args.exit_expire_date] if getattr(args, "exit_expire_date", None) else []),
+                *(["--outside-rth", args.exit_outside_rth] if getattr(args, "exit_outside_rth", None) else []),
                 "--decisions",
                 f"report/{args.date}/paper-exit-decisions.json",
             ],
@@ -3677,6 +3704,13 @@ def build_parser() -> argparse.ArgumentParser:
     paper_lifecycle.add_argument("--take-profit-outside-rth")
     paper_lifecycle.add_argument("--exit-order-type", default="MO")
     paper_lifecycle.add_argument("--exit-tif", default="day")
+    paper_lifecycle.add_argument("--exit-limit-price", type=float)
+    paper_lifecycle.add_argument("--exit-trigger-price", type=float)
+    paper_lifecycle.add_argument("--exit-trailing-amount", type=float)
+    paper_lifecycle.add_argument("--exit-trailing-percent", type=float)
+    paper_lifecycle.add_argument("--exit-limit-offset", type=float)
+    paper_lifecycle.add_argument("--exit-expire-date")
+    paper_lifecycle.add_argument("--exit-outside-rth")
     paper_lifecycle.add_argument("--break-even-tif", default="gtc")
     paper_lifecycle.add_argument("--exit-fraction", type=float, default=0.5)
     paper_lifecycle.add_argument("--append-lessons", action="store_true")
