@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+set -u
+
+REPO="${TCA_REPO:-/home/admin_ryan/repo/Trading-Copilot-Agent}"
+CC="${CC_CONNECT_BIN:-/home/admin_ryan/.local/bin/cc-connect}"
+PROJECT="${CC_CONNECT_PROJECT:-trading-copilot}"
+SESSION="${CC_CONNECT_SESSION:-feishu:oc_0df4740c94656aaa83249668668c3994:ou_f60f6e25add2b35cc00bb933b6e3960c}"
+DATE_ARG="${1:-}"
+DATE="${DATE_ARG:-$(TZ=America/New_York date +%F)}"
+TOP_N="${TCA_INTRADAY_TOP_N:-5}"
+INTERVAL="${TCA_INTRADAY_INTERVAL:-5min}"
+STATE="${TCA_INTRADAY_MONITOR_STATE:-config/monitor_state.json}"
+STATUS="success"
+LOG="$(mktemp)"
+RESULT="$(mktemp)"
+
+cd "$REPO" || exit 1
+
+run_step() {
+  echo >>"$LOG"
+  echo "$ $*" >>"$LOG"
+  "$@" >>"$LOG" 2>&1
+  local rc=$?
+  if [ "$rc" -ne 0 ]; then
+    STATUS="failed"
+    echo "step failed rc=$rc" >>"$LOG"
+  fi
+  return "$rc"
+}
+
+if [ "${TCA_INTRADAY_SKIP_MONITOR:-0}" != "1" ]; then
+  run_step python3 script/trading_copilot.py monitor-brief --state "$STATE" --interval "$INTERVAL"
+fi
+
+if [ "$STATUS" = "success" ]; then
+  run_step python3 script/trading_copilot.py intraday-tracker --date "$DATE" --top-n "$TOP_N"
+fi
+
+if [ "$STATUS" = "success" ]; then
+  echo >>"$LOG"
+  echo "$ python3 script/intraday_event_notify.py --date $DATE --mark-sent" >>"$LOG"
+  python3 script/intraday_event_notify.py --date "$DATE" --mark-sent >"$RESULT" 2>>"$LOG"
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    STATUS="failed"
+    echo "step failed rc=$rc" >>"$LOG"
+  fi
+fi
+
+if [ ! -s "$RESULT" ]; then
+  python3 - "$RESULT" "$STATUS" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+result_path, status = sys.argv[1:3]
+payload = {"status": status, "should_send": False, "reason": "notification payload missing"}
+Path(result_path).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+PY
+fi
+
+SHOULD_SEND="$(python3 - "$RESULT" <<'PY'
+import json, sys
+payload = json.loads(open(sys.argv[1], encoding="utf-8").read())
+print("1" if payload.get("should_send") else "0")
+PY
+)"
+
+MESSAGE="$(python3 - "$RESULT" <<'PY'
+import json, sys
+payload = json.loads(open(sys.argv[1], encoding="utf-8").read())
+print(payload.get("message_output") or "")
+PY
+)"
+
+if [ "$STATUS" = "success" ] && [ "$SHOULD_SEND" = "1" ] && [ -n "$MESSAGE" ] && [ -s "$MESSAGE" ]; then
+  "$CC" send -p "$PROJECT" -s "$SESSION" --stdin <"$MESSAGE"
+fi
+
+cat "$RESULT"
+if [ "$STATUS" != "success" ]; then
+  echo "--- log tail ---"
+  tail -120 "$LOG"
+fi
+
+rm -f "$LOG" "$RESULT"
+[ "$STATUS" = "success" ]

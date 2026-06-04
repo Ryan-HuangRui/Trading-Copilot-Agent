@@ -37,6 +37,17 @@ It writes:
 - `runtime/intraday/<DATE>/state.json`
 - `runtime/intraday/<DATE>/events.jsonl`
 
+## Active Notification
+
+```bash
+python3 script/intraday_event_notify.py --date <DATE> --mark-sent
+bash ops/cc-connect/tca-intraday-notify.sh <DATE>
+```
+
+`intraday_event_notify.py` builds `report/<DATE>/intraday-notification.md` only when unsent `notify=true` events exist. It records sent ids in `runtime/intraday/<DATE>/sent-events.json`.
+
+`tca-intraday-notify.sh` can be called by a Codex scheduled task. It runs monitor/tracker first unless `TCA_INTRADAY_SKIP_MONITOR=1`, then sends the generated notification through cc-connect.
+
 ## Phase 2 Dry-Run Command
 
 ```bash
@@ -60,3 +71,4 @@ Only use `--execute` after reviewed dry-run evidence exists and `config/paper_ex
 - Treat `state.json` as the machine-readable prior state source.
 - Treat `events.jsonl` as notification candidates for cc connect or another delivery layer.
 - Only important state changes should produce notification events.
+- Do not resend events already present in `sent-events.json`.

@@ -118,6 +118,10 @@ Use this for Phase 1 read-only pre-market plan tracking.
 3. Treat `report/<DATE>/intraday.md` as the human-readable rolling log.
 4. Treat `runtime/intraday/<DATE>/state.json` as the machine-readable prior state.
 5. Treat `runtime/intraday/<DATE>/events.jsonl` as notification candidates only, not broker instructions.
+6. To build and deduplicate an active notification, run:
+   `python3 script/intraday_event_notify.py --date <DATE> --mark-sent`.
+7. To send through cc-connect, run:
+   `bash ops/cc-connect/tca-intraday-notify.sh <DATE>`.
 
 The tracker reads `report/<DATE>/pre-market-signals.json`, optional `config/intraday_watchlist.json`, and `report/latest-monitor.json`.
 

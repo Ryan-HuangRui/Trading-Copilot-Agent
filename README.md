@@ -277,6 +277,12 @@ Memory 只能降低置信度、增加限制或触发人工 review，不能提高
 - `intraday-tracker` 读取盘前 `pre-market-signals.json` 的 topN、可选 `config/intraday_watchlist.json` 人工观察列表、上一轮 `report/<DATE>/intraday.md` 和结构化 state。
 - `intraday-tracker` 追加 `report/<DATE>/intraday.md`，更新 `runtime/intraday/<DATE>/state.json`，仅在重要状态变化时追加 `runtime/intraday/<DATE>/events.jsonl`。
 - `events.jsonl` 是 cc connect 或其他通知层的候选输入，不是执行指令。
+- 主动飞书通知：
+  ```bash
+  TCA_INTRADAY_SKIP_MONITOR=1 bash ops/cc-connect/tca-intraday-notify.sh YYYY-MM-DD
+  # 生产轮询时去掉 TCA_INTRADAY_SKIP_MONITOR=1，让脚本先跑 monitor-brief 再跑 intraday-tracker
+  ```
+- `tca-intraday-notify.sh` 只会发送尚未发送过的 `notify=true` 事件，并把已发送事件记录到 `runtime/intraday/<DATE>/sent-events.json`。
 - 可选生成 monitor sidecar：`python3 script/trading_copilot.py extract-monitor-signals --date YYYY-MM-DD`
 - 可选写入 journal：`python3 script/trading_copilot.py extract-monitor-signals --append`
 - monitor scan 原生输出 setup/risk_quality/journal_appendable；journal 记录仍只是观察，不是执行指令

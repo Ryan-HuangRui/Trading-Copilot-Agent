@@ -10,6 +10,7 @@
 - `pre_market_report.py`: scripted pre-market report generator.
 - `monitor_scan.py`: 5m watchlist/position scan and `report/latest-monitor.json` writer.
 - `intraday_tracker.py`: read-only pre-market plan tracker that appends `report/<DATE>/intraday.md` and updates `runtime/intraday/<DATE>/state.json` / `events.jsonl`.
+- `intraday_event_notify.py`: builds a Feishu-ready message from unsent intraday tracker events and records sent event ids.
 - `longbridge_cli_adapter.py`: read-only Longbridge CLI guard. Do not add order/write commands.
 - `longbridge_account_snapshot.py`: read-only account/position snapshot writer under `runtime/account/`.
 - `longbridge_paper_trade_adapter.py`: Longbridge paper-account guard and read-only paper order/execution fetcher.
@@ -91,6 +92,7 @@
 - Generate scripted report with guard: `python3 script/pre_market_report.py --watchlist config/watchlist.json --skip-non-trading-day`.
 - Monitor scan: `python3 script/monitor_scan.py --state config/monitor_state.json --interval 5min`.
 - Intraday tracker: `python3 script/intraday_tracker.py --date 2026-05-06 --top-n 5`.
+- Intraday event notification payload: `python3 script/intraday_event_notify.py --date 2026-05-06 --mark-sent`.
 - Refresh source metadata: `python3 script/import_priceactions_knowledge.py`.
 
 ## Conventions
@@ -100,6 +102,7 @@
 - Preserve provider rate limits unless the data provider contract is intentionally changed. Longbridge uses `config/longbridge_rate_limit_state.json`; Twelve Data fallback uses `config/rate_limit_state.json`.
 - Keep output writes under ignored runtime paths (`raw_data/`, `report/`, `config/rate_limit_state.json`, `config/longbridge_rate_limit_state.json`) unless the task is metadata import.
 - Intraday tracker events are notification candidates only. Do not treat `runtime/intraday/<DATE>/events.jsonl` as execution instructions.
+- Intraday event notification must deduplicate with `runtime/intraday/<DATE>/sent-events.json`.
 - Do not enable `paper-trade-submit --session monitor --execute`; use the dedicated `intraday-paper-entry` wrapper for the Phase 3 paper-only path.
 - Longbridge account workflows are read-only. Paper-trading workflows may inspect paper orders/executions and produce dry-run previews/submissions. Broker writes are allowed only through `longbridge_paper_order_adapter.py`, only for paper accounts, and only when the explicit execution gates are enabled.
 - If adding a script that fetches market data, reuse `build_market_data_client()` so Longbridge remains primary and Twelve Data remains fallback.
