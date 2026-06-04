@@ -96,6 +96,61 @@ class PaperTakeProfitPlanTest(unittest.TestCase):
                 ],
             )
 
+    def test_plan_creates_mit_sell_tp1_from_take_profit_trigger(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.seed_state(root, [filled_entry()])
+
+            result = paper_take_profit_plan.run(
+                paper_take_profit_plan.build_args(repo_root=str(root), date="2026-05-26", order_type="MIT")
+            )
+
+            payload = json.loads(Path(result["output"]).read_text(encoding="utf-8"))
+            candidate = payload["take_profit_candidates"][0]
+            self.assertEqual(candidate["order_type"], "MIT")
+            self.assertIsNone(candidate["limit_price"])
+            self.assertEqual(candidate["trigger_price"], 112.0)
+            self.assertNotIn("--price", candidate["preview_command"])
+            self.assertEqual(candidate["preview_command"][candidate["preview_command"].index("--order-type") + 1], "MIT")
+            self.assertEqual(candidate["preview_command"][candidate["preview_command"].index("--trigger-price") + 1], "112")
+
+    def test_plan_blocks_trailing_tp1_without_required_trailing_percent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.seed_state(root, [filled_entry()])
+
+            result = paper_take_profit_plan.run(
+                paper_take_profit_plan.build_args(repo_root=str(root), date="2026-05-26", order_type="TSLPPCT")
+            )
+
+            self.assertEqual(result["summary"]["take_profit_candidates"], 0)
+            self.assertEqual(result["summary"]["blocked"], 1)
+            payload = json.loads(Path(result["output"]).read_text(encoding="utf-8"))
+            self.assertIn("trailing_percent must be > 0 for TSLPPCT", payload["blocked"][0]["reason"])
+
+    def test_plan_creates_trailing_percent_tp1_when_shape_is_complete(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.seed_state(root, [filled_entry()])
+
+            result = paper_take_profit_plan.run(
+                paper_take_profit_plan.build_args(
+                    repo_root=str(root),
+                    date="2026-05-26",
+                    order_type="TSLPPCT",
+                    trailing_percent=2.5,
+                    limit_offset=0.3,
+                )
+            )
+
+            payload = json.loads(Path(result["output"]).read_text(encoding="utf-8"))
+            candidate = payload["take_profit_candidates"][0]
+            self.assertEqual(candidate["order_type"], "TSLPPCT")
+            self.assertEqual(candidate["trailing_percent"], 2.5)
+            self.assertEqual(candidate["limit_offset"], 0.3)
+            self.assertEqual(candidate["preview_command"][candidate["preview_command"].index("--trailing-percent") + 1], "2.5")
+            self.assertEqual(candidate["preview_command"][candidate["preview_command"].index("--limit-offset") + 1], "0.3")
+
     def test_plan_blocks_unfilled_missing_tp_existing_tp_and_invalid_fraction(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -346,6 +401,8 @@ class PaperTakeProfitPlanTest(unittest.TestCase):
                     str(root),
                     "--date",
                     "2026-05-26",
+                    "--order-type",
+                    "MIT",
                 ],
                 cwd=ROOT,
                 check=False,

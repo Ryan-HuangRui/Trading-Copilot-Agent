@@ -9,6 +9,15 @@ from typing import Any
 
 from longbridge_paper_order_adapter import LongbridgePaperOrderAdapter, format_decimal
 from paper_execution_config import broker_capability_matrix, load_paper_execution_config, paper_execution_policy
+from paper_order_models import (
+    PRICE_REQUIRED_ORDER_TYPES,
+    TRAILING_AMOUNT_REQUIRED_ORDER_TYPES,
+    TRAILING_PERCENT_REQUIRED_ORDER_TYPES,
+    TRIGGER_PRICE_REQUIRED_ORDER_TYPES,
+    normalize_order_type,
+    normalize_tif,
+    validate_order_shape,
+)
 from signal_artifacts import read_json
 
 
@@ -125,7 +134,15 @@ def take_profit_candidate_or_block(
     order: dict[str, Any],
     *,
     exit_fraction: float,
+    order_type: str,
+    limit_price: float | None,
+    trigger_price: float | None,
+    trailing_amount: float | None,
+    trailing_percent: float | None,
+    limit_offset: float | None,
     tif: str,
+    expire_date: str | None,
+    outside_rth: str | None,
     resize_stop_before_submit: bool,
 ) -> tuple[str, dict[str, Any]]:
     intent_id = str(order.get("intent_id") or "")
@@ -135,6 +152,14 @@ def take_profit_candidate_or_block(
     take_profit_price = as_float(order.get("take_profit"))
     stop_resize_trigger_price = as_float(order.get("current_stop_price") or order.get("stop_price"))
     longbridge_symbol = str(order.get("longbridge_symbol") or "")
+    normalized_order_type = normalize_order_type(order_type)
+    normalized_tif = normalize_tif(tif)
+    resolved_limit_price = limit_price
+    if resolved_limit_price is None and normalized_order_type in PRICE_REQUIRED_ORDER_TYPES:
+        resolved_limit_price = take_profit_price
+    resolved_trigger_price = trigger_price
+    if resolved_trigger_price is None and normalized_order_type in TRIGGER_PRICE_REQUIRED_ORDER_TYPES:
+        resolved_trigger_price = take_profit_price
     remark = f"tca-tp1:{intent_id}"
     base = {
         "intent_id": intent_id,
@@ -152,6 +177,16 @@ def take_profit_candidate_or_block(
         "protective_stop_quantity": as_quantity(order.get("protective_stop_quantity") or order.get("stop_quantity")),
         "stop_resize_trigger_price": stop_resize_trigger_price,
         "take_profit": take_profit_price,
+        "side": "sell",
+        "order_type": normalized_order_type,
+        "limit_price": resolved_limit_price,
+        "trigger_price": resolved_trigger_price,
+        "trailing_amount": trailing_amount,
+        "trailing_percent": trailing_percent,
+        "limit_offset": limit_offset,
+        "tif": normalized_tif,
+        "expire_date": expire_date,
+        "outside_rth": outside_rth,
         "avg_fill_price": order.get("avg_fill_price"),
         "exit_fraction": exit_fraction,
         "remark": remark,
@@ -168,6 +203,24 @@ def take_profit_candidate_or_block(
         return "blocked", {**base, "reason": "take_profit is required"}
     if quantity <= 0:
         return "blocked", {**base, "reason": "quantity must be > 0"}
+    shape_errors = validate_order_shape(
+        {
+            "side": "sell",
+            "longbridge_symbol": longbridge_symbol,
+            "quantity": quantity,
+            "order_type": normalized_order_type,
+            "limit_price": resolved_limit_price,
+            "trigger_price": resolved_trigger_price,
+            "trailing_amount": trailing_amount,
+            "trailing_percent": trailing_percent,
+            "limit_offset": limit_offset,
+            "tif": normalized_tif,
+            "expire_date": expire_date,
+            "outside_rth": outside_rth,
+        }
+    )
+    if shape_errors:
+        return "blocked", {**base, "reason": "; ".join(shape_errors)}
     stop_resize_required = active_stop_over_exit_risk(order, post_tp_remaining_quantity=post_tp_remaining_quantity)
     if stop_resize_required and not resize_stop_before_submit:
         return "blocked", {**base, "reason": "active protective stop quantity exceeds post-TP1 remaining quantity"}
@@ -193,7 +246,7 @@ def take_profit_candidate_or_block(
                     "--trigger-price",
                     format_decimal(stop_resize_trigger_price),
                     "--tif",
-                    tif,
+                    normalized_tif,
                     "--remark",
                     f"tca-resize-stop:{intent_id}",
                     "--format",
@@ -207,25 +260,40 @@ def take_profit_candidate_or_block(
         "sell",
         longbridge_symbol,
         str(quantity),
-        "--price",
-        format_decimal(take_profit_price),
-        "--order-type",
-        "LO",
-        "--tif",
-        tif,
+    ]
+    if normalized_order_type in PRICE_REQUIRED_ORDER_TYPES:
+        command.extend(["--price", format_decimal(float(resolved_limit_price))])
+    command.extend(["--order-type", normalized_order_type])
+    if normalized_order_type in TRIGGER_PRICE_REQUIRED_ORDER_TYPES:
+        command.extend(["--trigger-price", format_decimal(float(resolved_trigger_price))])
+    if normalized_order_type in TRAILING_AMOUNT_REQUIRED_ORDER_TYPES:
+        command.extend(["--trailing-amount", format_decimal(float(trailing_amount))])
+    if normalized_order_type in TRAILING_PERCENT_REQUIRED_ORDER_TYPES:
+        command.extend(["--trailing-percent", format_decimal(float(trailing_percent))])
+    if normalized_order_type.startswith("TSLP") and limit_offset is not None:
+        command.extend(["--limit-offset", format_decimal(float(limit_offset))])
+    command.extend(
+        [
+            "--tif",
+            normalized_tif,
+        ]
+    )
+    if normalized_tif == "gtd":
+        command.extend(["--expire-date", str(expire_date)])
+    if outside_rth:
+        command.extend(["--outside-rth", str(outside_rth)])
+    command.extend(
+        [
         "--remark",
         remark,
         "--format",
         "json",
-    ]
+        ]
+    )
     return (
         "candidate",
         {
             **base,
-            "side": "sell",
-            "order_type": "LO",
-            "limit_price": take_profit_price,
-            "tif": tif,
             "requires_stop_resize": stop_resize_required,
             "resize_preview_steps": resize_preview_steps,
             "preview_command": command,
@@ -246,9 +314,15 @@ def take_profit_order_record(candidate: dict[str, Any], submit_result: dict[str,
         "order_type": candidate.get("order_type"),
         "quantity": candidate.get("quantity"),
         "limit_price": candidate.get("limit_price"),
+        "trigger_price": candidate.get("trigger_price"),
+        "trailing_amount": candidate.get("trailing_amount"),
+        "trailing_percent": candidate.get("trailing_percent"),
+        "limit_offset": candidate.get("limit_offset"),
         "take_profit": candidate.get("take_profit"),
         "exit_fraction": candidate.get("exit_fraction"),
         "tif": candidate.get("tif"),
+        "expire_date": candidate.get("expire_date"),
+        "outside_rth": candidate.get("outside_rth"),
         "remark": candidate.get("remark"),
         "broker": "longbridge",
         "account_channel": submit_result.get("account_channel"),
@@ -289,7 +363,15 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         bucket, record = take_profit_candidate_or_block(
             order,
             exit_fraction=args.exit_fraction,
+            order_type=args.order_type,
+            limit_price=args.limit_price,
+            trigger_price=args.trigger_price,
+            trailing_amount=args.trailing_amount,
+            trailing_percent=args.trailing_percent,
+            limit_offset=args.limit_offset,
             tif=args.tif,
+            expire_date=args.expire_date,
+            outside_rth=args.outside_rth,
             resize_stop_before_submit=args.resize_stop_before_submit,
         )
         if bucket == "candidate":
@@ -354,9 +436,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "paper_execution_config": str(paper_execution_config_path),
         "execution_policy": paper_execution_policy(paper_execution_config),
         "broker_capabilities": broker_capability_matrix(paper_execution_config),
-        "take_profit_order_type": "LO",
+        "take_profit_order_type": normalize_order_type(args.order_type),
         "exit_fraction": args.exit_fraction,
-        "tif": args.tif,
+        "tif": normalize_tif(args.tif),
+        "expire_date": args.expire_date,
+        "outside_rth": args.outside_rth,
         "take_profit_candidates": take_profit_candidates,
         "blocked": blocked,
         "resized_stops": resized_stops,
@@ -382,7 +466,15 @@ def build_args(**overrides: Any) -> argparse.Namespace:
         "take_profit_journal": None,
         "stops_journal": None,
         "exit_fraction": 0.5,
+        "order_type": "LO",
+        "limit_price": None,
+        "trigger_price": None,
+        "trailing_amount": None,
+        "trailing_percent": None,
+        "limit_offset": None,
         "tif": "gtc",
+        "expire_date": None,
+        "outside_rth": None,
         "resize_stop_before_submit": False,
         "execute": False,
         "longbridge_cli": None,
@@ -401,7 +493,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--take-profit-journal")
     parser.add_argument("--stops-journal")
     parser.add_argument("--exit-fraction", type=float, default=0.5)
+    parser.add_argument("--order-type", default="LO")
+    parser.add_argument("--limit-price", type=float)
+    parser.add_argument("--trigger-price", type=float)
+    parser.add_argument("--trailing-amount", type=float)
+    parser.add_argument("--trailing-percent", type=float)
+    parser.add_argument("--limit-offset", type=float)
     parser.add_argument("--tif", default="gtc")
+    parser.add_argument("--expire-date")
+    parser.add_argument("--outside-rth")
     parser.add_argument("--resize-stop-before-submit", action="store_true")
     parser.add_argument("--execute", action="store_true", help="Submit passing TP1 candidates through the guarded paper adapter")
     parser.add_argument("--longbridge-cli")

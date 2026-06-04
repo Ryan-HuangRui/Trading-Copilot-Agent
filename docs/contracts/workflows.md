@@ -1116,6 +1116,8 @@ Canonical command:
 
 ```bash
 python3 script/trading_copilot.py paper-take-profit-plan --date <DATE>
+python3 script/trading_copilot.py paper-take-profit-plan --date <DATE> --order-type MIT
+python3 script/trading_copilot.py paper-take-profit-plan --date <DATE> --order-type TSLPPCT --trailing-percent 2.5 --limit-offset 0.3
 ```
 
 Execution command:
@@ -1143,12 +1145,13 @@ Required behavior:
 - When `--resize-stop-before-submit` is used, stop resizing requires the separate `paper_execution.allow_take_profit_stop_resize=true` gate. The workflow must cancel the existing over-sized protective stop, submit a resized MIT stop for the post-TP1 remaining quantity, record it in `paper-stop-orders.jsonl`, and only then submit TP1.
 - Broker TP1 submission must use only `script/longbridge_paper_order_adapter.py`.
 - Only fully filled long buy entries with positive `take_profit`, positive filled quantity, and no existing TP1/take-profit order may become TP1 candidates.
-- The first TP1 plan uses Longbridge `sell` `LO` with `--price <take_profit>`, `tif=gtc` by default, and a default `--exit-fraction 0.5`.
+- The default TP1 plan uses Longbridge `sell` `LO` with `--price <take_profit>`, `tif=gtc`, and `--exit-fraction 0.5`.
+- TP1 may use the shared Longbridge order shape through `--order-type`, `--limit-price`, `--trigger-price`, `--trailing-amount`, `--trailing-percent`, `--limit-offset`, `--expire-date`, and `--outside-rth`. `LO`/price-based orders default the price to `take_profit`; trigger-based orders default the trigger to `take_profit`.
 - TP1 execution must block when an active protective stop quantity exceeds the post-TP1 remaining quantity. This prevents full-size stop plus partial TP orders from creating over-exit risk when no OCO link exists.
 - Duplicate `intent_id` values already present in `paper-take-profit-orders.jsonl` must be blocked.
 - The artifact must separate `take_profit_candidates`, `blocked`, `submitted`, and `errors`.
 - The artifact must include `execution_policy` and `broker_capabilities`.
-- Successful TP1 records must preserve `intent_id`, `entry_broker_order_id`, `broker_order_id`, `remark`, `raw_request`, `raw_response`, `exit_fraction`, and `submitted_at`.
+- Successful TP1 records must preserve `intent_id`, `entry_broker_order_id`, `broker_order_id`, order shape fields, `remark`, `raw_request`, `raw_response`, `exit_fraction`, and `submitted_at`.
 
 ## paper-exit-plan
 

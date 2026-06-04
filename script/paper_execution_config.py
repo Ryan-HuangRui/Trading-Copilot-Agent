@@ -74,7 +74,7 @@ SUPPORTED_BROKER_ACTIONS: tuple[dict[str, Any], ...] = (
         "action": "take_profit",
         "label": "TP1 partial exit",
         "config_key": "allow_take_profit",
-        "order_type": "LO",
+        "order_type": "LO/ELO/MO/AO/ALO/ODD/SLO/LIT/MIT/TSLPAMT/TSLPPCT",
         "side": "sell",
         "workflow": "paper-take-profit-plan",
         "maturity": "dry_run_first",

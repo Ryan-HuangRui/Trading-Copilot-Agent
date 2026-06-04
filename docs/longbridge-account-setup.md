@@ -124,6 +124,8 @@ Build a dry-run TP1 partial-exit plan for filled long paper entries:
 python3 script/trading_copilot.py paper-take-profit-plan --date <DATE>
 ```
 
+The default TP1 order is a Longbridge `sell LO` at `take_profit`. Alternative paper TP1 order types can be dry-run with the shared shape flags, for example `--order-type MIT` or `--order-type TSLPPCT --trailing-percent 2.5 --limit-offset 0.3`.
+
 Submit guarded paper TP1 partial exits for filled long entries:
 
 ```bash

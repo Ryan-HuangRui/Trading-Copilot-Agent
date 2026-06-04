@@ -30,7 +30,7 @@
 - `paper_strategy_review.py`: aggregate paper execution reviews by setup and symbol without editing refined rules.
 - `paper_order_cancel.py`: cancel-plan builder for expired unfilled paper entry orders; defaults to dry-run and only cancels through the gated paper order adapter when execution gates are explicitly enabled.
 - `paper_protective_stop_plan.py`: protective stop planner for filled long paper entries. It defaults to dry-run and only submits paper stops through the gated paper order adapter when execution gates are explicitly enabled.
-- `paper_take_profit_plan.py`: TP1 partial-exit planner for filled long paper entries. It defaults to dry-run and only submits paper take-profit orders through the gated paper order adapter when execution gates are explicitly enabled.
+- `paper_take_profit_plan.py`: TP1 partial-exit planner for filled long paper entries. It defaults to dry-run, defaults TP1 to `sell LO`, supports shared Longbridge paper order shape fields for alternate TP1 order types, and only submits through the gated paper order adapter when execution gates are explicitly enabled.
 - `paper_break_even_stop_plan.py`: break-even stop movement planner for filled long paper entries after TP1 fill evidence. It defaults to dry-run and only performs guarded cancel + new MIT stop submission when execution gates are explicitly enabled.
 - `paper_trade_review.py`: compares submitted/previewed paper orders with observed paper executions and can append matched paper fills to the journal.
 - `position_review.py`: compares read-only positions with a session-specific signal sidecar and writes review artifacts.

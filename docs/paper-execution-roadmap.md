@@ -159,7 +159,7 @@ Recommended sequence:
 3. Add TP1 partial exits.
 4. Add break-even stop movement or trailing logic only after basic exits are stable.
 
-Implementation status: `paper-order-cancel` now generates a dry-run cancel plan for expired unfilled entry orders and can execute those cancels through the guarded paper adapter when `--execute` and the cancel gate in `config/paper_execution.json` are both enabled. `paper-protective-stop-plan` now generates a `sell MIT --trigger-price <stop>` plan for filled long entries and can submit those protective stops through the guarded paper adapter under the same config-driven execution gates. `paper-take-profit-plan` now generates a default 50% TP1 partial-exit `sell LO --price <tp1>` plan for filled long entries and can submit those take-profit orders through the guarded paper adapter under the same config-driven execution gates. `paper-break-even-stop-plan` now generates a break-even stop movement plan after TP1 fill evidence exists and can execute it as guarded cancel old stop plus submit new MIT stop when `allow_break_even_stop_move=true`.
+Implementation status: `paper-order-cancel` now generates a dry-run cancel plan for expired unfilled entry orders and can execute those cancels through the guarded paper adapter when `--execute` and the cancel gate in `config/paper_execution.json` are both enabled. `paper-protective-stop-plan` now generates a `sell MIT --trigger-price <stop>` plan for filled long entries and can submit those protective stops through the guarded paper adapter under the same config-driven execution gates. `paper-take-profit-plan` now generates a default 50% TP1 partial-exit `sell LO --price <tp1>` plan for filled long entries, can use the shared Longbridge order shape for alternative TP1 order types, and can submit those take-profit orders through the guarded paper adapter under the same config-driven execution gates. `paper-break-even-stop-plan` now generates a break-even stop movement plan after TP1 fill evidence exists and can execute it as guarded cancel old stop plus submit new MIT stop when `allow_break_even_stop_move=true`.
 
 All exit actions must use the same paper-account, config gate, execute flag, idempotency, and audit-log gates as entry submission.
 
@@ -181,7 +181,7 @@ Current supported guarded write actions:
 - `entry_submit`: long buy `LO` entry, initial rollout action.
 - `cancel`: expired unfilled entry cancel, disabled by default.
 - `protective_stop`: sell `MIT` protective stop, dry-run-first.
-- `take_profit`: sell `LO` TP1 partial exit, dry-run-first.
+- `take_profit`: sell TP1 partial exit, default `LO` and shared Longbridge order types when complete shape fields are supplied, dry-run-first.
 
 Explicitly unsupported actions:
 

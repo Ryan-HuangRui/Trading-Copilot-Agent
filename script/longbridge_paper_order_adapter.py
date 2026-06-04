@@ -268,14 +268,9 @@ class LongbridgePaperOrderAdapter:
     def validate_take_profit_intent(self, intent: dict[str, Any]) -> None:
         if intent.get("side") != "sell":
             raise ValueError("only sell side is supported for take-profit orders")
-        if intent.get("order_type") != "LO":
-            raise ValueError("only LO limit orders are supported for take-profit orders")
-        if int(intent.get("quantity") or 0) <= 0:
-            raise ValueError("quantity must be > 0")
-        if not intent.get("longbridge_symbol"):
-            raise ValueError("longbridge_symbol is required")
-        if float(intent.get("limit_price") or 0) <= 0:
-            raise ValueError("limit_price must be > 0")
+        errors = validate_order_shape(intent)
+        if errors:
+            raise ValueError("; ".join(errors))
 
     def submit_take_profit_order(
         self,
@@ -286,26 +281,8 @@ class LongbridgePaperOrderAdapter:
         self.validate_take_profit_intent(intent)
         self.ensure_write_allowed(execute=execute, action="take_profit")
         account_channel = self.assert_paper_account()
-        quantity = str(int(intent["quantity"]))
-        limit_price = format_decimal(float(intent["limit_price"]))
         remark = str(intent.get("remark") or f"tca-tp1:{intent['intent_id']}")
-        command = [
-            "order",
-            "sell",
-            str(intent["longbridge_symbol"]),
-            quantity,
-            "--price",
-            limit_price,
-            "--order-type",
-            "LO",
-            "--tif",
-            str(intent.get("tif") or "gtc"),
-            "--remark",
-            remark,
-            "--format",
-            "json",
-            "-y",
-        ]
+        command = self.submit_order_command({**intent, "remark": remark})
         raw_response = self.run_json(command)
         broker_order_id = None
         if isinstance(raw_response, dict):

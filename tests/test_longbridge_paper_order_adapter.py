@@ -101,6 +101,25 @@ def take_profit_intent() -> dict:
     }
 
 
+def mit_take_profit_intent() -> dict:
+    payload = take_profit_intent()
+    payload.update({"order_type": "MIT", "limit_price": None, "trigger_price": 112})
+    return payload
+
+
+def trailing_take_profit_intent() -> dict:
+    payload = take_profit_intent()
+    payload.update(
+        {
+            "order_type": "TSLPPCT",
+            "limit_price": None,
+            "trailing_percent": 2.5,
+            "limit_offset": 0.3,
+        }
+    )
+    return payload
+
+
 class LongbridgePaperOrderAdapterTest(unittest.TestCase):
     def test_parse_json_output_accepts_cli_progress_prefix(self):
         payload = parse_json_output(
@@ -385,7 +404,7 @@ class LongbridgePaperOrderAdapterTest(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             adapter.submit_take_profit_order(
-                {**take_profit_intent(), "order_type": "MIT"},
+                {**take_profit_intent(), "order_type": "BOGUS"},
                 execute=True,
             )
 
@@ -416,10 +435,10 @@ class LongbridgePaperOrderAdapterTest(unittest.TestCase):
                 "sell",
                 "MU.US",
                 "100",
-                "--price",
-                "112",
                 "--order-type",
                 "LO",
+                "--price",
+                "112",
                 "--tif",
                 "gtc",
                 "--remark",
@@ -429,6 +448,45 @@ class LongbridgePaperOrderAdapterTest(unittest.TestCase):
                 "-y",
             ],
         )
+
+    def test_take_profit_builds_mit_command(self):
+        adapter = LongbridgePaperOrderAdapter(cli="/bin/longbridge", paper_execution_config=write_config())
+        calls = []
+
+        def fake_run(args):
+            calls.append(args)
+            if args[:2] == ["auth", "status"]:
+                return {"account": {"account_channel": "lb_papertrading"}, "token": {"status": "valid"}}
+            if args[:2] == ["order", "sell"]:
+                return {"order_id": "tp-o-1", "status": "submitted"}
+            raise AssertionError(args)
+
+        with patch.object(adapter, "run_json", side_effect=fake_run):
+            adapter.submit_take_profit_order(mit_take_profit_intent(), execute=True)
+
+        self.assertEqual(calls[1][calls[1].index("--order-type") + 1], "MIT")
+        self.assertEqual(calls[1][calls[1].index("--trigger-price") + 1], "112")
+        self.assertNotIn("--price", calls[1])
+
+    def test_take_profit_builds_trailing_percent_command(self):
+        adapter = LongbridgePaperOrderAdapter(cli="/bin/longbridge", paper_execution_config=write_config())
+        calls = []
+
+        def fake_run(args):
+            calls.append(args)
+            if args[:2] == ["auth", "status"]:
+                return {"account": {"account_channel": "lb_papertrading"}, "token": {"status": "valid"}}
+            if args[:2] == ["order", "sell"]:
+                return {"order_id": "tp-o-1", "status": "submitted"}
+            raise AssertionError(args)
+
+        with patch.object(adapter, "run_json", side_effect=fake_run):
+            adapter.submit_take_profit_order(trailing_take_profit_intent(), execute=True)
+
+        self.assertEqual(calls[1][calls[1].index("--order-type") + 1], "TSLPPCT")
+        self.assertEqual(calls[1][calls[1].index("--trailing-percent") + 1], "2.5")
+        self.assertEqual(calls[1][calls[1].index("--limit-offset") + 1], "0.3")
+        self.assertNotIn("--price", calls[1])
 
 
 if __name__ == "__main__":
