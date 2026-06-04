@@ -267,6 +267,7 @@ Full fixture smoke test:
 
 ```bash
 python3 script/workflow_smoke_test.py --date <DATE> --week <YYYY-Www> --account-input path/to/account-fixture.json
+python3 script/workflow_smoke_test.py --date <DATE> --week <YYYY-Www> --paper-input path/to/paper-fixture.json --paper-lifecycle-smoke
 ```
 
 ## cc connect Handling

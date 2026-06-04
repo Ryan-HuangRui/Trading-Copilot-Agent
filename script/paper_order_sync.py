@@ -22,6 +22,18 @@ ORDER_SHAPE_FIELDS = (
     "outside_rth",
 )
 
+ENTRY_PLAN_FIELDS = (
+    "entry_price",
+    "reference_price",
+    "stop_price",
+    "initial_stop",
+    "take_profit",
+    "risk_per_share",
+    "max_account_risk_pct",
+    "setup",
+    "setup_files",
+)
+
 
 def resolve_path(repo_root: Path, explicit_path: str | None, default_path: Path) -> Path:
     if explicit_path:
@@ -249,6 +261,8 @@ def synced_order(intent: dict[str, Any], broker_orders: list[dict[str, Any]], ex
         "executions": matched_executions,
     }
     for field in ORDER_SHAPE_FIELDS:
+        synced[field] = intent.get(field)
+    for field in ENTRY_PLAN_FIELDS:
         synced[field] = intent.get(field)
     return synced
 

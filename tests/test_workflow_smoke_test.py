@@ -161,6 +161,7 @@ class WorkflowSmokeTest(unittest.TestCase):
                     str(account_fixture),
                     "--paper-input",
                     str(paper_fixture),
+                    "--paper-lifecycle-smoke",
                 ],
                 check=False,
                 text=True,
@@ -178,9 +179,24 @@ class WorkflowSmokeTest(unittest.TestCase):
             self.assertIn("paper-trade-preview", payload["steps"])
             self.assertIn("paper-trade-submit", payload["steps"])
             self.assertIn("paper-trade-review", payload["steps"])
+            self.assertIn("paper-order-sync", payload["steps"])
+            self.assertIn("paper-protective-stop-plan", payload["steps"])
+            self.assertIn("paper-take-profit-plan", payload["steps"])
+            self.assertIn("paper-exit-plan", payload["steps"])
+            self.assertIn("paper-break-even-stop-plan", payload["steps"])
+            self.assertIn("paper-event-ledger", payload["steps"])
+            self.assertIn("paper-execution-review", payload["steps"])
+            self.assertIn("intraday-lifecycle-append", payload["steps"])
             self.assertEqual(payload["steps"]["paper-trade-preview"]["summary"]["ready"], 1)
             self.assertEqual(payload["steps"]["paper-trade-submit"]["summary"]["ready"], 1)
             self.assertEqual(payload["steps"]["paper-trade-review"]["summary"]["filled"], 1)
+            self.assertEqual(payload["steps"]["paper-order-sync"]["summary"]["filled"], 1)
+            self.assertEqual(payload["steps"]["paper-protective-stop-plan"]["summary"]["stop_candidates"], 1)
+            self.assertEqual(payload["steps"]["paper-take-profit-plan"]["summary"]["take_profit_candidates"], 1)
+            self.assertEqual(payload["steps"]["paper-exit-plan"]["summary"]["exit_candidates"], 1)
+            self.assertEqual(payload["steps"]["paper-break-even-stop-plan"]["summary"]["move_candidates"], 1)
+            self.assertGreaterEqual(payload["steps"]["paper-event-ledger"]["summary"]["events_written_for_date"], 1)
+            self.assertTrue(payload["steps"]["intraday-lifecycle-append"]["should_notify"])
             self.assertTrue((root / "report" / "2026-05-26" / "self-review.md").exists())
             self.assertTrue((root / "report" / "2026-05-26" / "plan-review.md").exists())
             self.assertTrue((root / "report" / "learning" / "pattern-review.md").exists())
@@ -190,6 +206,12 @@ class WorkflowSmokeTest(unittest.TestCase):
             self.assertTrue((root / "report" / "2026-05-26" / "paper-trade-preview.json").exists())
             self.assertTrue((root / "report" / "2026-05-26" / "paper-trade-submission.json").exists())
             self.assertTrue((root / "report" / "2026-05-26" / "paper-trade-review.json").exists())
+            self.assertTrue((root / "runtime" / "paper" / "2026-05-26" / "paper-execution-state.json").exists())
+            self.assertTrue((root / "report" / "2026-05-26" / "paper-protective-stop-plan.json").exists())
+            self.assertTrue((root / "report" / "2026-05-26" / "paper-take-profit-plan.json").exists())
+            self.assertTrue((root / "report" / "2026-05-26" / "paper-exit-plan.json").exists())
+            self.assertTrue((root / "report" / "2026-05-26" / "paper-break-even-stop-plan.json").exists())
+            self.assertTrue((root / "report" / "2026-05-26" / "intraday-lifecycle-summary.json").exists())
             self.assertTrue((root / "report" / "weekly" / "2026-W22.md").exists())
 
 

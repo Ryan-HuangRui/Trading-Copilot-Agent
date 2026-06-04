@@ -224,6 +224,7 @@ Use this only for Phase 3 after reviewed monitor dry-run evidence exists.
 - Wrapper smoke test without market-data access: `python3 script/trading_copilot.py trading-day-check --date 2026-05-06`.
 - Review smoke test without market-data access: `python3 script/trading_copilot.py weekly-review --week 2026-W22`.
 - Fixture workflow smoke test: `python3 script/workflow_smoke_test.py --date 2026-05-26 --week 2026-W22`.
+- Full paper lifecycle fixture smoke test: `python3 script/workflow_smoke_test.py --date 2026-05-26 --week 2026-W22 --paper-input <fixture.json> --paper-lifecycle-smoke`.
 - Data-quality smoke test after a snapshot exists: `python3 script/trading_copilot.py data-quality --date 2026-05-26`.
 - Data-fetch smoke tests use Longbridge CLI by default. Twelve Data fallback tests require `.env` with `TWELVE_DATA_API_KEY`.
 

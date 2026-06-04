@@ -1511,13 +1511,16 @@ Canonical command:
 
 ```bash
 python3 script/workflow_smoke_test.py --date <DATE> --week <YYYY-Www> --account-input path/to/account-fixture.json
+python3 script/workflow_smoke_test.py --date <DATE> --week <YYYY-Www> --paper-input path/to/paper-fixture.json --paper-lifecycle-smoke
 ```
 
 Required behavior:
 
 - Use existing fixture artifacts under `--repo-root`.
 - Exercise validation, signal extraction, outcome backfill, optional account snapshot and position review, daily review, weekly review, and monitor extraction.
+- When `--paper-lifecycle-smoke` is set with `--paper-input`, seed local paper order journals from the fixture preview and exercise paper order sync, protective stop, TP1, plan-invalidated exit, break-even stop planning, event ledger, execution review, and intraday lifecycle append.
 - Must not fetch market data or account data.
+- Must not call Longbridge or any broker API.
 
 ## research-note
 
