@@ -68,6 +68,63 @@ PY
   exit 0
 fi
 
+if [ "${TCA_INTRADAY_FORCE:-0}" != "1" ]; then
+  MARKET_SESSION="$(python3 - "$DATE" <<'PY'
+import datetime as dt
+import json
+import sys
+from zoneinfo import ZoneInfo
+
+date = sys.argv[1]
+now = dt.datetime.now(ZoneInfo("America/New_York"))
+start = dt.time(9, 30)
+end = dt.time(16, 0)
+is_regular = now.date().isoformat() == date and now.weekday() < 5 and start <= now.time() <= end
+print(json.dumps({
+    "is_regular_session": is_regular,
+    "market_time": now.isoformat(timespec="seconds"),
+    "session": "09:30-16:00 America/New_York",
+}, ensure_ascii=False))
+PY
+)"
+  IS_REGULAR_SESSION="$(python3 - "$MARKET_SESSION" <<'PY'
+import json
+import sys
+try:
+    payload = json.loads(sys.argv[1])
+except Exception:
+    print("0")
+else:
+    print("1" if payload.get("is_regular_session") else "0")
+PY
+)"
+  if [ "$IS_REGULAR_SESSION" != "1" ]; then
+    python3 - "$RESULT" "$DATE" "$MARKET_SESSION" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+result_path, date, session_text = sys.argv[1:4]
+try:
+    market_session = json.loads(session_text)
+except Exception:
+    market_session = {"is_regular_session": None}
+payload = {
+    "status": "skipped",
+    "date": date,
+    "should_send": False,
+    "reason": "outside_regular_session",
+    "market_session": market_session,
+    "summary": {"unsent_events": 0},
+}
+Path(result_path).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+PY
+    cat "$RESULT"
+    rm -f "$LOG" "$RESULT"
+    exit 0
+  fi
+fi
+
 if [ "${TCA_INTRADAY_SKIP_MONITOR:-0}" != "1" ]; then
   run_step python3 script/trading_copilot.py monitor-brief --state "$STATE" --interval "$INTERVAL"
 fi
