@@ -460,6 +460,9 @@ def run_post_market(args: argparse.Namespace) -> None:
             "agent/post_market_analysis_prompt.md",
             "knowledge/refined/",
             stdout.get("snapshot_path"),
+            f"report/{stdout.get('snapshot_date')}/intraday.md",
+            f"runtime/intraday/{stdout.get('snapshot_date')}/state.json",
+            f"runtime/intraday/{stdout.get('snapshot_date')}/events.jsonl",
         ]
         response["expected_agent_outputs"] = [
             f"report/{stdout.get('snapshot_date')}/post-market.md",

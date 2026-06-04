@@ -68,7 +68,7 @@ Every workflow run should return or report the same status fields:
 ### Post-Market Review
 
 1. Run `python3 script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day --include-journal-signals --include-position-symbols`.
-2. Read `agent/post_market_analysis_prompt.md`, `knowledge/refined/`, and `report/<DATE>/daily-snapshot.json`.
+2. Read `agent/post_market_analysis_prompt.md`, `knowledge/refined/`, `report/<DATE>/daily-snapshot.json`, and optional intraday artifacts `report/<DATE>/intraday.md`, `runtime/intraday/<DATE>/state.json`, and `runtime/intraday/<DATE>/events.jsonl`.
 3. Write `report/<DATE>/post-market.md` and `report/<DATE>/post-market-signals.json`.
 4. Validate the generated report:
    `python3 script/trading_copilot.py validate-report --session post-market --date <DATE>`.
@@ -85,7 +85,7 @@ Every workflow run should return or report the same status fields:
    `python3 script/trading_copilot.py plan-review --date <DATE> --append-lessons`.
 10. Generate the daily self-review:
    `python3 script/trading_copilot.py daily-self-review --date <DATE> --append`.
-11. Build the Feishu execution summary:
+11. Build the Feishu execution summary, including a deterministic intraday-monitor recap when artifacts exist:
    `python3 script/trading_copilot.py feishu-summary --session post-market --date <DATE>`.
 12. Fully replace Longbridge `今日关注` from the post-market focus list:
    `python3 script/trading_copilot.py sync-longbridge-watchlist --session post-market --date <DATE> --group-name 今日关注 --sync-mode replace --require-validation --execute --no-create`.

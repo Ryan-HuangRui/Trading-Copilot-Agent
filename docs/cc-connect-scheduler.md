@@ -253,6 +253,7 @@ Recommended cc connect instruction:
 ```text
 Run Trading-Copilot-Agent post-market close workflow for today:
 prepare the completed daily snapshot, generate post-market.md and post-market-signals.json,
+summarize same-day intraday monitor artifacts when present,
 validate artifacts and Trade Plan Cards, backfill signal outcomes, extract post-market observation signals,
 generate plan-review lessons, optionally run read-only account snapshot and position review, generate daily self-review,
 and return a Feishu-ready summary.
@@ -265,7 +266,7 @@ Repository workflow stages:
 python3 script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day --include-journal-signals --include-position-symbols
 # Or replace the previous line with this optional evidence-enhanced wrapper call:
 python3 script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day --include-journal-signals --include-position-symbols --include-agent-research
-# Codex generates report/<DATE>/post-market.md and report/<DATE>/post-market-signals.json
+# Codex reads optional report/<DATE>/intraday.md and runtime/intraday/<DATE>/{state.json,events.jsonl}, then generates report/<DATE>/post-market.md and report/<DATE>/post-market-signals.json
 python3 script/trading_copilot.py llm-generation-manifest --session post-market --date <DATE> --model <MODEL> --prompt agent/post_market_analysis_prompt.md --input report/<DATE>/daily-snapshot.json --generated-output report/<DATE>/post-market.md --generated-output report/<DATE>/post-market-signals.json
 python3 script/trading_copilot.py post-market-deliver --date <DATE> --sync-longbridge --execute-sync --append-outcomes --append-lessons --append-self-review
 ```

@@ -651,6 +651,7 @@ Inputs:
 - `report/<DATE>/pre-market-signals.json` or `report/<DATE>/post-market-signals.json`
 - Optional `report/<DATE>/position-review.json`
 - Optional `report/<DATE>/plan-review.json`
+- Optional post-market intraday artifacts: `report/<DATE>/intraday.md`, `runtime/intraday/<DATE>/state.json`, `runtime/intraday/<DATE>/events.jsonl`, and `runtime/intraday/<DATE>/sent-events.json`
 - Optional `runtime/learning/daily_lessons.jsonl`
 
 Output:
@@ -660,6 +661,7 @@ Output:
 Required behavior:
 
 - Show only a compact execution panel: conditional plans, watch candidates, `NO TRADE`, position review summary, plan review summary, and daily lessons.
+- For post-market summaries, include a compact intraday-monitor recap when artifacts exist: focus symbols, final state distribution, important event count, sent notification count, and artifact paths.
 - Keep the full analysis in the Markdown report artifacts; Feishu content should stay summary-first.
 - Do not present conditional plans as deterministic buy/sell instructions.
 

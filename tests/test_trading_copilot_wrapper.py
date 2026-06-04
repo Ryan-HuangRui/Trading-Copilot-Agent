@@ -773,6 +773,9 @@ class TradingCopilotWrapperTest(unittest.TestCase):
 
         payload = emit.call_args.args[0]
         self.assertIn("report/2026-05-26/post-market-signals.json", payload["expected_agent_outputs"])
+        self.assertIn("report/2026-05-26/intraday.md", payload["next_agent_inputs"])
+        self.assertIn("runtime/intraday/2026-05-26/state.json", payload["next_agent_inputs"])
+        self.assertIn("runtime/intraday/2026-05-26/events.jsonl", payload["next_agent_inputs"])
 
     def test_post_market_include_agent_research_injects_artifacts_at_wrapper_layer(self):
         proc = subprocess.CompletedProcess(

@@ -47,6 +47,12 @@
   - agent research / memory / sentiment 只能作为证据、风险限制或降级理由；不能单独作为升级为 `conditional_executable` 的理由
   - sidecar 的最终执行状态最终由报告生成 LLM 判断：若你基于 `knowledge/refined/`、当日价格行为、明日关键位和完整 Trade Plan Card 独立判断条件成立，可以在 sidecar 中标记为 `conditional_executable`
   - 如果缺少完整 Trade Plan Card，或只是因为 agent decision / 消息层 / sentiment 支持而缺少价格结构确认，必须维持 `watch_only/no_trade`
+- 若 wrapper 的 `next_agent_inputs` 包含盘中监控 artifacts，必须读取并在报告中单独总结：
+  - `report/<SNAPSHOT_DATE>/intraday.md`
+  - `runtime/intraday/<SNAPSHOT_DATE>/state.json`
+  - `runtime/intraday/<SNAPSHOT_DATE>/events.jsonl`
+  - 盘中监控只用于复盘“盘前计划是否被盘中验证、否定、错过或保持等待”，不能作为订单输入，不能单独提升任何标的 execution_status。
+  - 若盘中 artifacts 缺失，必须在「盘中监控回顾」中说明今日无盘中监控产物。
 
 【输出文件（必须生成）】
 - report/<SNAPSHOT_DATE>/post-market.md
@@ -64,6 +70,14 @@
 - 结构变化：
 - 风险偏好：
 - 明日全局放弃条件：
+
+## 盘中监控回顾
+- 盘中关注池：
+- 重要状态变化：
+- 已发送提醒：
+- 盘前计划验证/否定：
+- 未触发/继续等待：
+- 数据或流程问题：
 
 ## 重点标的复盘
 ### <SYMBOL>

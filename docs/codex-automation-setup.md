@@ -56,6 +56,9 @@ Run the post-market workflow for this repository.
    - agent/post_market_analysis_prompt.md
    - knowledge/refined/
    - report/<SNAPSHOT_DATE>/daily-snapshot.json
+   - optional report/<SNAPSHOT_DATE>/intraday.md
+   - optional runtime/intraday/<SNAPSHOT_DATE>/state.json
+   - optional runtime/intraday/<SNAPSHOT_DATE>/events.jsonl
    - optional report/<SNAPSHOT_DATE>/agents/<SYMBOL>/decision.json and role reports when `--include-agent-research` was used
 6. Generate:
    - report/<SNAPSHOT_DATE>/post-market.md

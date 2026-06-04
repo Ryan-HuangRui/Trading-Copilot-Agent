@@ -237,6 +237,107 @@ class FeishuSummaryTest(unittest.TestCase):
             content = Path(payload["output"]).read_text(encoding="utf-8")
             self.assertIn("【盘中候选状态】", content)
 
+    def test_post_market_feishu_summary_includes_intraday_recap(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            report_dir = root / "report" / "2026-05-26"
+            intraday_dir = root / "runtime" / "intraday" / "2026-05-26"
+            report_dir.mkdir(parents=True)
+            intraday_dir.mkdir(parents=True)
+            (report_dir / "post-market-signals.json").write_text(
+                json.dumps(
+                    {
+                        "date": "2026-05-26",
+                        "session": "post-market",
+                        "signals": [
+                            {
+                                "symbol": "MU",
+                                "setup": "NO VALID SETUP",
+                                "status": "planned",
+                                "plan_type": "watch_only",
+                                "execution_status": "watch_only",
+                                "notes": "继续观察",
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (report_dir / "data-quality.json").write_text(
+                json.dumps({"status": "pass", "stale_data": False, "focused_fallback_symbols": []}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            (report_dir / "post-market-run-manifest.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "workflow": "post-market-deliver",
+                        "session": "post-market",
+                        "date": "2026-05-26",
+                        "git_sha": "abc123",
+                        "dirty_files": [],
+                        "artifacts": ["report/2026-05-26/post-market-signals.json"],
+                        "steps": [{"name": "validate-report", "status": "success", "stdout": {"status": "pass"}}],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (report_dir / "intraday.md").write_text("# intraday\n", encoding="utf-8")
+            (intraday_dir / "state.json").write_text(
+                json.dumps(
+                    {
+                        "date": "2026-05-26",
+                        "generated_at": "2026-05-26T16:00:00+00:00",
+                        "focus_symbols": ["MU", "AMD"],
+                        "symbols": {
+                            "MU": {"state": "waiting"},
+                            "AMD": {"state": "near_trigger"},
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (intraday_dir / "events.jsonl").write_text(
+                json.dumps({"event_id": "e1", "symbol": "AMD", "state": "near_trigger", "notify": True}, ensure_ascii=False)
+                + "\n",
+                encoding="utf-8",
+            )
+            (intraday_dir / "sent-events.json").write_text(
+                json.dumps({"sent_event_ids": ["e1"]}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "script" / "feishu_summary.py"),
+                    "--repo-root",
+                    str(root),
+                    "--date",
+                    "2026-05-26",
+                    "--session",
+                    "post-market",
+                ],
+                cwd=ROOT,
+                check=False,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, msg=proc.stderr or proc.stdout)
+            payload = json.loads(proc.stdout)
+            self.assertTrue(payload["summary"]["intraday_available"])
+            self.assertEqual(payload["summary"]["intraday_events"], 1)
+            self.assertEqual(payload["summary"]["intraday_notify_events"], 1)
+            content = Path(payload["output"]).read_text(encoding="utf-8")
+            self.assertIn("【盘中监控回顾】", content)
+            self.assertIn("关注池：MU, AMD", content)
+            self.assertIn("near_trigger=1", content)
+            self.assertIn("已发送=1", content)
+
 
 if __name__ == "__main__":
     unittest.main()
