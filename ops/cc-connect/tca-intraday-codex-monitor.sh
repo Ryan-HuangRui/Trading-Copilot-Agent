@@ -101,12 +101,15 @@ PROMPT="你是 Trading-Copilot-Agent 的 cc-connect 盘中 Codex 盯盘定时任
 
 盘中模拟盘 dry-run 开关：TCA_INTRADAY_ENABLE_PAPER_DRY_RUN=$ENABLE_PAPER_DRY_RUN。
 - 只有该值为 1 时，才可以基于最新 monitor 数据、盘前计划、人工观察列表、knowledge/refined 生成或更新 report/$DATE/monitor-signals.json。
+- 先运行：
+  python3 script/trading_copilot.py intraday-opportunity-context --date $DATE
+- 读取 report/$DATE/intraday-opportunity-context.json。它提供候选扫描、盘前计划、盘中状态、paper 状态和 sidecar_template。
 - 如果没有高质量条件化机会，保持 watch_only，并运行 dry-run 或说明没有 ready 订单。
-- 如果生成 conditional_executable 计划，必须随后运行：
-  python3 script/trading_copilot.py validate-trade-plan --session monitor --date $DATE
+- 若要升级为 conditional_executable，必须由你基于 context、knowledge/refined 和完整 Trade Plan Card 主观判断；不得由 extract-monitor-signals 自动升级。
+- 写出 report/$DATE/monitor-signals.json 后，必须随后运行：
+  python3 script/trading_copilot.py validate-trade-plan --session monitor --date $DATE --signals report/$DATE/monitor-signals.json
   python3 script/trading_copilot.py paper-account-snapshot --date $DATE
-  python3 script/trading_copilot.py paper-trade-preview --date $DATE --session monitor --require-validation
-  python3 script/trading_copilot.py paper-trade-submit --date $DATE --session monitor --require-validation
+  python3 script/trading_copilot.py intraday-dry-run --date $DATE --signals report/$DATE/monitor-signals.json
 - dry-run 结果只写产物，不发送下单成功消息。
 
 盘中模拟盘入场执行开关：TCA_INTRADAY_PAPER_EXECUTE=$ENABLE_PAPER_EXECUTE。

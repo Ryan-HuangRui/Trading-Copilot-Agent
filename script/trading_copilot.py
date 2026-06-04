@@ -561,28 +561,33 @@ def run_intraday_tracker(args: argparse.Namespace) -> None:
 
 
 def run_intraday_dry_run(args: argparse.Namespace) -> None:
-    extract_command = [
-        "script/extract_monitor_signals.py",
-        "--monitor",
-        args.monitor,
-        "--date",
-        args.date,
-        "--max-signals",
-        str(args.max_signals),
-        "--timezone",
-        args.timezone,
-    ]
-    if args.signals_output:
-        extract_command.extend(["--signals-output", args.signals_output])
-    extract_proc = run_child(extract_command)
-    extract_stdout = parse_json_output(extract_proc.stdout)
-    if extract_proc.returncode != 0:
-        emit(failed_response("intraday-dry-run", extract_command, extract_proc), 1)
-    signals_path = (extract_stdout or {}).get("signals_path")
-    if not signals_path:
-        response = failed_response("intraday-dry-run", extract_command, extract_proc)
-        response["reason"] = "extract-monitor-signals did not return signals_path"
-        emit(response, 1)
+    extract_command: list[str] | None = None
+    extract_stdout: dict[str, Any] | None = None
+    if getattr(args, "signals", None):
+        signals_path = args.signals
+    else:
+        extract_command = [
+            "script/extract_monitor_signals.py",
+            "--monitor",
+            args.monitor,
+            "--date",
+            args.date,
+            "--max-signals",
+            str(args.max_signals),
+            "--timezone",
+            args.timezone,
+        ]
+        if args.signals_output:
+            extract_command.extend(["--signals-output", args.signals_output])
+        extract_proc = run_child(extract_command)
+        extract_stdout = parse_json_output(extract_proc.stdout)
+        if extract_proc.returncode != 0:
+            emit(failed_response("intraday-dry-run", extract_command, extract_proc), 1)
+        signals_path = (extract_stdout or {}).get("signals_path")
+        if not signals_path:
+            response = failed_response("intraday-dry-run", extract_command, extract_proc)
+            response["reason"] = "extract-monitor-signals did not return signals_path"
+            emit(response, 1)
 
     validate_command = [
         "script/validate_trade_plan.py",
@@ -671,10 +676,11 @@ def run_intraday_dry_run(args: argparse.Namespace) -> None:
         (submit_stdout or {}).get("output"),
         (summary_stdout or {}).get("output"),
     ]
-    response = base_response("intraday-dry-run", extract_command, extract_stdout)
+    response = base_response("intraday-dry-run", extract_command or validate_command, extract_stdout or {"status": "success"})
     response["date"] = args.date
     response["artifacts"] = [artifact for artifact in artifacts if artifact]
     response["dry_run"] = bool((submit_stdout or {}).get("dry_run", True))
+    response["signals_path"] = signals_path
     response["validation"] = validate_stdout
     response["signals"] = (extract_stdout or {}).get("signals", [])
     response["preview_summary"] = (preview_stdout or {}).get("summary", {})
@@ -687,6 +693,43 @@ def run_intraday_dry_run(args: argparse.Namespace) -> None:
         "submit": submit_command,
         "feishu": summary_command,
     }
+    emit(response)
+
+
+def run_intraday_opportunity_context(args: argparse.Namespace) -> None:
+    command = [
+        "script/intraday_opportunity_context.py",
+        "--date",
+        args.date,
+        "--monitor",
+        args.monitor,
+        "--max-candidates",
+        str(args.max_candidates),
+        "--markdown-chars",
+        str(args.markdown_chars),
+    ]
+    if args.pre_market_signals:
+        command.extend(["--pre-market-signals", args.pre_market_signals])
+    if args.intraday_state:
+        command.extend(["--intraday-state", args.intraday_state])
+    if args.intraday_markdown:
+        command.extend(["--intraday-markdown", args.intraday_markdown])
+    if args.paper_state:
+        command.extend(["--paper-state", args.paper_state])
+    if args.output:
+        command.extend(["--output", args.output])
+    if args.signals_output:
+        command.extend(["--signals-output", args.signals_output])
+
+    proc = run_child(command)
+    stdout = parse_json_output(proc.stdout)
+    if proc.returncode != 0:
+        emit(failed_response("intraday-opportunity-context", command, proc), 1)
+    response = base_response("intraday-opportunity-context", command, stdout)
+    response["date"] = (stdout or {}).get("date") or args.date
+    response["artifacts"] = [artifact for artifact in [(stdout or {}).get("output")] if artifact]
+    response["signals_output"] = (stdout or {}).get("signals_output")
+    response["summary"] = (stdout or {}).get("summary", {})
     emit(response)
 
 
@@ -2004,6 +2047,8 @@ def run_extract_monitor_signals(args: argparse.Namespace) -> None:
         command.extend(["--date", args.date])
     if args.append:
         command.append("--append")
+    if args.signals_output:
+        command.extend(["--signals-output", args.signals_output])
 
     proc = run_child(command)
     stdout = parse_json_output(proc.stdout)
@@ -2792,6 +2837,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     intraday_dry_run = sub.add_parser("intraday-dry-run", help="Run monitor candidates through dry-run paper checks")
     intraday_dry_run.add_argument("--date", required=True)
+    intraday_dry_run.add_argument("--signals")
     intraday_dry_run.add_argument("--monitor", default="report/latest-monitor.json")
     intraday_dry_run.add_argument("--max-signals", type=int, default=5)
     intraday_dry_run.add_argument("--timezone", default="America/New_York")
@@ -2806,6 +2852,19 @@ def build_parser() -> argparse.ArgumentParser:
     intraday_dry_run.add_argument("--max-daily-orders", type=int, default=3)
     intraday_dry_run.add_argument("--learning-dir", default="runtime/learning")
     intraday_dry_run.set_defaults(func=run_intraday_dry_run)
+
+    intraday_context = sub.add_parser("intraday-opportunity-context", help="Build Codex review context for intraday opportunities")
+    intraday_context.add_argument("--date", required=True)
+    intraday_context.add_argument("--monitor", default="report/latest-monitor.json")
+    intraday_context.add_argument("--pre-market-signals")
+    intraday_context.add_argument("--intraday-state")
+    intraday_context.add_argument("--intraday-markdown")
+    intraday_context.add_argument("--paper-state")
+    intraday_context.add_argument("--output")
+    intraday_context.add_argument("--signals-output")
+    intraday_context.add_argument("--max-candidates", type=int, default=3)
+    intraday_context.add_argument("--markdown-chars", type=int, default=6000)
+    intraday_context.set_defaults(func=run_intraday_opportunity_context)
 
     intraday_entry = sub.add_parser("intraday-paper-entry", help="Run standalone gated intraday paper entry")
     intraday_entry.add_argument("--date", required=True)

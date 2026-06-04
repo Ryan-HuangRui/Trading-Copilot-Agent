@@ -190,6 +190,7 @@ class TradingCopilotWrapperTest(unittest.TestCase):
 
         args = Namespace(
             date="2026-05-26",
+            signals=None,
             monitor="report/latest-monitor.json",
             max_signals=5,
             timezone="America/New_York",
@@ -228,6 +229,67 @@ class TradingCopilotWrapperTest(unittest.TestCase):
         payload = emit.call_args.args[0]
         self.assertEqual(payload["workflow"], "intraday-dry-run")
         self.assertTrue(payload["dry_run"])
+
+    def test_intraday_dry_run_accepts_codex_reviewed_signals_without_extracting(self):
+        calls = []
+
+        def fake_run_child(command):
+            calls.append(command)
+            if command[0] == "script/validate_trade_plan.py":
+                payload = {"status": "pass", "errors": [], "warnings": [], "checked_artifacts": ["report/2026-05-26/monitor-signals.json"]}
+            elif command[0] == "script/paper_trade_preview.py":
+                payload = {"status": "success", "date": "2026-05-26", "output": "report/2026-05-26/paper-trade-preview.json", "summary": {"ready": 1}}
+            elif command[0] == "script/paper_trade_submit.py":
+                payload = {
+                    "status": "success",
+                    "date": "2026-05-26",
+                    "output": "report/2026-05-26/paper-trade-submission.json",
+                    "dry_run": True,
+                    "summary": {"ready": 1},
+                }
+            elif command[0] == "script/feishu_summary.py":
+                payload = {"status": "success", "output": "report/2026-05-26/monitor-feishu-summary.md", "summary": {"conditional_executable": 1}}
+            else:
+                payload = {"status": "success"}
+            return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
+
+        args = Namespace(
+            date="2026-05-26",
+            signals="report/2026-05-26/monitor-signals.json",
+            monitor="report/latest-monitor.json",
+            max_signals=5,
+            timezone="America/New_York",
+            signals_output=None,
+            account_snapshot=None,
+            preview_output=None,
+            submit_output=None,
+            summary_output=None,
+            default_market="US",
+            tif="day",
+            max_daily_risk_pct=3.0,
+            max_daily_orders=3,
+            learning_dir="runtime/learning",
+        )
+
+        with patch.object(trading_copilot, "run_child", side_effect=fake_run_child), patch.object(
+            trading_copilot, "emit", side_effect=SystemExit
+        ) as emit:
+            with self.assertRaises(SystemExit):
+                trading_copilot.run_intraday_dry_run(args)
+
+        self.assertEqual(
+            [command[0] for command in calls],
+            [
+                "script/validate_trade_plan.py",
+                "script/paper_trade_preview.py",
+                "script/paper_trade_submit.py",
+                "script/feishu_summary.py",
+            ],
+        )
+        self.assertEqual(calls[0][calls[0].index("--signals") + 1], "report/2026-05-26/monitor-signals.json")
+        payload = emit.call_args.args[0]
+        self.assertEqual(payload["signals_path"], "report/2026-05-26/monitor-signals.json")
+        self.assertEqual(payload["submit_summary"], {"ready": 1})
         self.assertEqual(payload["artifacts"][-1], "report/2026-05-26/monitor-feishu-summary.md")
 
     def test_intraday_paper_entry_uses_dedicated_script_and_execute_gate(self):

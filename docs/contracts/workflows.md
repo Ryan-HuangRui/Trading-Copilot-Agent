@@ -190,28 +190,61 @@ Required behavior:
 
 ## intraday-dry-run
 
-Purpose: convert the latest monitor observations into validated watch-only monitor signals and run paper preview/submission dry-run checks.
+Purpose: run monitor-session paper preview/submission dry-run checks from either deterministic watch-only monitor extraction or a Codex-reviewed monitor sidecar.
 
 Canonical command:
 
 ```bash
 python3 script/trading_copilot.py intraday-dry-run --date <DATE>
+python3 script/trading_copilot.py intraday-dry-run --date <DATE> --signals report/<DATE>/monitor-signals.json
 ```
 
 Deterministic sequence:
 
-1. `extract_monitor_signals.py`
-2. `validate_trade_plan.py --session monitor`
-3. `paper_trade_preview.py --session monitor --require-validation`
-4. `paper_trade_submit.py --session monitor --require-validation`
-5. `feishu_summary.py --session monitor`
+1. If `--signals` is omitted, run `extract_monitor_signals.py` to create watch-only monitor signals.
+2. If `--signals` is provided, use that sidecar directly and do not overwrite it.
+3. `validate_trade_plan.py --session monitor`
+4. `paper_trade_preview.py --session monitor --require-validation`
+5. `paper_trade_submit.py --session monitor --require-validation`
+6. `feishu_summary.py --session monitor`
 
 Required behavior:
 
 - The wrapper must not pass `--execute` to any child command.
 - `paper_trade_submit.py` remains dry-run for monitor session.
+- A `conditional_executable` monitor sidecar must come from Codex/LLM review of `intraday-opportunity-context`; deterministic extraction must keep `watch_only`.
 - Output artifacts are review and notification inputs only.
 - This workflow must not submit broker orders.
+
+## intraday-opportunity-context
+
+Purpose: build the fixed Codex review context for deciding whether intraday monitor observations remain `watch_only` or become complete `conditional_executable` monitor Trade Plan Cards.
+
+Canonical command:
+
+```bash
+python3 script/trading_copilot.py intraday-opportunity-context --date <DATE>
+```
+
+Inputs:
+
+- `report/latest-monitor.json`
+- `report/<DATE>/pre-market-signals.json` when present
+- `runtime/intraday/<DATE>/state.json` when present
+- `report/<DATE>/intraday.md` when present
+- `runtime/paper/<DATE>/paper-execution-state.json` when present
+- `knowledge/refined/setups/*.md`
+
+Output:
+
+- `report/<DATE>/intraday-opportunity-context.json`
+
+Required behavior:
+
+- The artifact must include candidate monitor scans, matching pre-market plans, intraday state, paper state summary, refined setup file names, and a `sidecar_template`.
+- The template must default to `plan_type=watch_only` and `execution_status=watch_only`.
+- Only Codex/LLM review may raise a signal to `plan_type=trade_plan` and `execution_status=conditional_executable`; validation still requires the complete Trade Plan Card and RR >= 2.
+- This workflow must not submit, cancel, replace, or recover broker orders.
 
 ## intraday-paper-entry
 

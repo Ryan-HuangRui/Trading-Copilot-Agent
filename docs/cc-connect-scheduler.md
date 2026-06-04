@@ -423,12 +423,19 @@ TCA_INTRADAY_ENABLE_PAPER_DRY_RUN=1 \
 bash ops/cc-connect/tca-intraday-codex-monitor.sh <DATE>
 
 python3 script/trading_copilot.py monitor-brief --state config/monitor_state.json --interval 5min
+python3 script/trading_copilot.py intraday-opportunity-context --date <DATE>
 python3 script/trading_copilot.py extract-monitor-signals --date <DATE>
 python3 script/trading_copilot.py validate-trade-plan --session monitor --date <DATE>
 python3 script/trading_copilot.py paper-trade-preview --date <DATE> --session monitor --require-validation
 python3 script/trading_copilot.py paper-trade-submit --date <DATE> --session monitor --require-validation
 python3 script/trading_copilot.py feishu-summary --session monitor --date <DATE>
 python3 script/trading_copilot.py extract-monitor-signals --append
+```
+
+If Codex writes a reviewed `report/<DATE>/monitor-signals.json` from `intraday-opportunity-context`, use:
+
+```bash
+python3 script/trading_copilot.py intraday-dry-run --date <DATE> --signals report/<DATE>/monitor-signals.json
 ```
 
 Optional guarded intraday paper entry:

@@ -129,10 +129,12 @@ The tracker reads `report/<DATE>/pre-market-signals.json`, optional `config/intr
 
 Use this for Phase 2 monitor candidates before any paper execution.
 
-1. Run `python3 script/trading_copilot.py intraday-dry-run --date <DATE>`.
-2. Confirm the wrapper generated or used `report/<DATE>/monitor-signals.json`.
-3. Confirm `paper_trade_preview.py` and `paper_trade_submit.py` ran for `session=monitor` without `--execute`.
-4. Read the Feishu summary artifact for candidate, blocked, and skipped counts.
+1. For LLM-reviewed opportunities, first run `python3 script/trading_copilot.py intraday-opportunity-context --date <DATE>` and read `report/<DATE>/intraday-opportunity-context.json`.
+2. Codex may write `report/<DATE>/monitor-signals.json` from the context. Keep candidates `watch_only` unless a complete Trade Plan Card independently satisfies `knowledge/refined/`, risk, invalidation, and RR >= 2.
+3. Run `python3 script/trading_copilot.py intraday-dry-run --date <DATE> --signals report/<DATE>/monitor-signals.json`.
+4. If no LLM-reviewed sidecar is available, run `python3 script/trading_copilot.py intraday-dry-run --date <DATE>` to generate watch-only monitor candidates from deterministic extraction.
+5. Confirm `paper_trade_preview.py` and `paper_trade_submit.py` ran for `session=monitor` without `--execute`.
+6. Read the Feishu summary artifact for candidate, blocked, and skipped counts.
 
 This workflow must not submit broker orders.
 
