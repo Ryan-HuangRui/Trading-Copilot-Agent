@@ -68,6 +68,15 @@ python3 script/trading_copilot.py intraday-paper-entry --date <DATE> --require-v
 
 Only use `--execute` after reviewed dry-run evidence exists and `config/paper_execution.local.json` enables both `broker_writes_enabled=true` and `allow_intraday_entry_submit=true`.
 
+## Paper Lifecycle Audit
+
+```bash
+python3 script/trading_copilot.py paper-lifecycle --date <DATE>
+python3 script/trading_copilot.py intraday-lifecycle-append --date <DATE>
+```
+
+`intraday-lifecycle-append` reads existing paper lifecycle artifacts, appends a concise audit section to `report/<DATE>/intraday.md`, and writes `report/<DATE>/intraday-lifecycle-summary.json` with `should_notify` for Feishu filtering. It does not call broker APIs.
+
 ## Output Use
 
 - Treat `intraday.md` as the human-readable rolling log.

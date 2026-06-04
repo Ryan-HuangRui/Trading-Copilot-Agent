@@ -467,7 +467,10 @@ TCA_INTRADAY_ENABLE_PAPER_LIFECYCLE=1 \
 bash ops/cc-connect/tca-intraday-codex-monitor.sh <DATE>
 
 python3 script/trading_copilot.py paper-lifecycle --date <DATE> --paper-execution-config config/paper_execution.local.json --append-lessons --strategy-review
+python3 script/trading_copilot.py intraday-lifecycle-append --date <DATE>
 ```
+
+After lifecycle planning or execution, read `report/<DATE>/intraday-lifecycle-summary.json`; send a Feishu lifecycle status only when `should_notify=true` or the lifecycle wrapper reports executed/submitted/moved/errors/candidate lessons.
 
 Use monitor sidecar and journal entries as observation records unless Codex writes a validated monitor Trade Plan Card and the explicit paper gates are enabled.
 

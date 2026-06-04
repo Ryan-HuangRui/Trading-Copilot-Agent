@@ -177,9 +177,12 @@ For repeated lifecycle management, prefer the unified wrapper:
 
 ```bash
 python3 script/trading_copilot.py paper-lifecycle --date <DATE>
+python3 script/trading_copilot.py intraday-lifecycle-append --date <DATE>
 ```
 
 Use `--execute-cancel`, `--execute-protective-stop`, `--execute-take-profit`, `--execute-exit`, or `--execute-break-even-stop` only with the matching paper execution config gates enabled.
+
+After lifecycle runs, append the lifecycle audit section to `report/<DATE>/intraday.md` with `intraday-lifecycle-append`. It reads existing paper lifecycle artifacts only, writes `report/<DATE>/intraday-lifecycle-summary.json`, and can be used for Feishu filtering without calling broker APIs.
 
 For lifecycle-managed plan-invalidated exits, use the `--exit-*` shape flags when the exit order is not the default market order: `--exit-order-type`, `--exit-limit-price`, `--exit-trigger-price`, `--exit-trailing-amount`, `--exit-trailing-percent`, `--exit-limit-offset`, `--exit-expire-date`, and `--exit-outside-rth`.
 

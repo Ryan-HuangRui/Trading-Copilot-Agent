@@ -731,6 +731,42 @@ def run_intraday_review_append(args: argparse.Namespace) -> None:
     emit(response)
 
 
+def run_intraday_lifecycle_append(args: argparse.Namespace) -> None:
+    command = [
+        "script/intraday_lifecycle_append.py",
+        "--date",
+        args.date,
+        "--timezone",
+        args.timezone,
+    ]
+    if args.markdown:
+        command.extend(["--markdown", args.markdown])
+    if args.output:
+        command.extend(["--output", args.output])
+    if args.as_of:
+        command.extend(["--as-of", args.as_of])
+
+    proc = run_child(command)
+    stdout = parse_json_output(proc.stdout)
+    if proc.returncode != 0:
+        emit(failed_response("intraday-lifecycle-append", command, proc), 1)
+    response = base_response("intraday-lifecycle-append", command, stdout)
+    response["date"] = (stdout or {}).get("date") or args.date
+    response["artifacts"] = [
+        artifact
+        for artifact in [
+            (stdout or {}).get("markdown"),
+            (stdout or {}).get("output"),
+        ]
+        if artifact
+    ]
+    response["summary"] = (stdout or {}).get("summary", {})
+    response["should_notify"] = bool((stdout or {}).get("should_notify"))
+    response["skipped"] = (stdout or {}).get("status") == "skipped"
+    response["reason"] = (stdout or {}).get("reason")
+    emit(response)
+
+
 def run_intraday_opportunity_context(args: argparse.Namespace) -> None:
     command = [
         "script/intraday_opportunity_context.py",
@@ -3376,6 +3412,14 @@ def build_parser() -> argparse.ArgumentParser:
     intraday_review.add_argument("--as-of")
     intraday_review.add_argument("--max-notes-chars", type=int, default=160)
     intraday_review.set_defaults(func=run_intraday_review_append)
+
+    intraday_lifecycle = sub.add_parser("intraday-lifecycle-append", help="Append paper lifecycle status into intraday.md")
+    intraday_lifecycle.add_argument("--date", required=True)
+    intraday_lifecycle.add_argument("--markdown")
+    intraday_lifecycle.add_argument("--output")
+    intraday_lifecycle.add_argument("--timezone", default="America/New_York")
+    intraday_lifecycle.add_argument("--as-of")
+    intraday_lifecycle.set_defaults(func=run_intraday_lifecycle_append)
 
     intraday_context = sub.add_parser("intraday-opportunity-context", help="Build Codex review context for intraday opportunities")
     intraday_context.add_argument("--date", required=True)

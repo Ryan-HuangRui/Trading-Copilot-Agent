@@ -1290,6 +1290,39 @@ Required behavior:
 - The response must include child command payloads, artifacts, aggregate summaries, and an `execute_requested` object for each exit action.
 - It must not bypass the child workflows' paper account, execute, duplicate, and config-gate checks.
 
+## intraday-lifecycle-append
+
+Purpose: append paper lifecycle status into the same-day intraday Markdown log and produce a compact notification/filter artifact.
+
+Canonical command:
+
+```bash
+python3 script/trading_copilot.py intraday-lifecycle-append --date <DATE>
+```
+
+Inputs:
+
+- `runtime/paper/<DATE>/paper-execution-state.json`
+- `report/<DATE>/paper-order-cancel-plan.json`
+- `report/<DATE>/paper-protective-stop-plan.json`
+- `report/<DATE>/paper-take-profit-plan.json`
+- `report/<DATE>/paper-exit-plan.json`
+- `report/<DATE>/paper-break-even-stop-plan.json`
+- `report/<DATE>/paper-event-ledger.json`
+- `report/<DATE>/paper-execution-review.json`
+
+Outputs:
+
+- Appends a `模拟盘生命周期` section to `report/<DATE>/intraday.md`
+- Writes `report/<DATE>/intraday-lifecycle-summary.json`
+
+Required behavior:
+
+- It must only read existing paper lifecycle artifacts and must not call Longbridge or any broker API.
+- If no lifecycle artifacts exist, it must return `status=skipped` and avoid creating `intraday.md`.
+- The summary must include cancel, protective-stop, take-profit, full-exit, break-even stop, ledger, and execution-review counts when those artifacts exist.
+- `should_notify=true` should be set when there are lifecycle candidates, submitted/moved/cancelled actions, errors, or ledger events.
+
 Required behavior for outcome backfill:
 
 - Pre-market signals target the same date as the signal.

@@ -332,6 +332,48 @@ class TradingCopilotWrapperTest(unittest.TestCase):
         self.assertEqual(payload["artifacts"], ["report/2026-05-26/intraday.md"])
         self.assertEqual(payload["summary"]["conditional_executable"], 1)
 
+    def test_intraday_lifecycle_append_wraps_markdown_appender(self):
+        calls = []
+
+        def fake_run_child(command):
+            calls.append(command)
+            payload = {
+                "status": "success",
+                "workflow": "intraday-lifecycle-append",
+                "date": "2026-05-26",
+                "markdown": "report/2026-05-26/intraday.md",
+                "output": "report/2026-05-26/intraday-lifecycle-summary.json",
+                "summary": {"exit_candidates": 1},
+                "should_notify": True,
+            }
+            return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
+
+        args = Namespace(
+            date="2026-05-26",
+            markdown=None,
+            output=None,
+            timezone="America/New_York",
+            as_of="2026-05-26T15:05:00+00:00",
+        )
+
+        with patch.object(trading_copilot, "run_child", side_effect=fake_run_child), patch.object(
+            trading_copilot, "emit", side_effect=SystemExit
+        ) as emit:
+            with self.assertRaises(SystemExit):
+                trading_copilot.run_intraday_lifecycle_append(args)
+
+        self.assertEqual(calls[0][0], "script/intraday_lifecycle_append.py")
+        self.assertEqual(calls[0][calls[0].index("--date") + 1], "2026-05-26")
+        self.assertEqual(calls[0][calls[0].index("--as-of") + 1], "2026-05-26T15:05:00+00:00")
+        payload = emit.call_args.args[0]
+        self.assertEqual(payload["workflow"], "intraday-lifecycle-append")
+        self.assertEqual(
+            payload["artifacts"],
+            ["report/2026-05-26/intraday.md", "report/2026-05-26/intraday-lifecycle-summary.json"],
+        )
+        self.assertTrue(payload["should_notify"])
+        self.assertEqual(payload["summary"]["exit_candidates"], 1)
+
     def test_paper_lifecycle_chains_sync_exit_plans_and_review(self):
         calls = []
 

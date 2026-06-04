@@ -143,7 +143,9 @@ PROMPT="你是 Trading-Copilot-Agent 的 cc-connect 盘中 Codex 盯盘定时任
   - TCA_INTRADAY_PLAN_EXIT_EXECUTE=$ENABLE_PLAN_EXIT_EXECUTE；只有该值为 1 且 config 同时允许 exit_cancel_replace 和 exit_submit 时，盘中 invalidated 状态才可追加 --execute-exit。
   - TCA_INTRADAY_BREAK_EVEN_STOP_EXECUTE=$ENABLE_BREAK_EVEN_STOP_EXECUTE；只有该值为 1 且 config 允许时才追加 --execute-break-even-stop。
 - 该 wrapper 已包含 account-snapshot、paper-order-sync、exit 计划、再次同步、paper-event-ledger、paper-execution-review。
-- lifecycle dry-run 或执行后，如果有 executed/submitted/moved/errors/candidate lessons，使用 cc-connect send 发送一条简短飞书状态。
+- lifecycle dry-run 或执行后，必须追加生命周期摘要到当天盘中报告：
+  python3 script/trading_copilot.py intraday-lifecycle-append --date $DATE
+- 读取 report/$DATE/intraday-lifecycle-summary.json；如果 should_notify=true，或 lifecycle 有 executed/submitted/moved/errors/candidate lessons，使用 cc-connect send 发送一条简短飞书状态，包含 artifact 路径。
 
 失败处理：
 - 任一步失败时，使用 cc-connect send 发送简短失败状态，包含 date、失败命令、reason、关键 log tail。
