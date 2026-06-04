@@ -1,6 +1,6 @@
 ---
 name: trading-copilot
-description: Use this repo-local skill for Trading-Copilot-Agent market research workflows, including pre-market planning, post-market review, symbol analysis, monitor brief generation, research notes, rule validation, and paper-trading readiness review. The skill prepares or reviews trading research artifacts, and may run explicitly gated Longbridge paper-account workflows only when requested; it must not place real trades or output deterministic buy/sell instructions.
+description: Use this repo-local skill for Trading-Copilot-Agent market research workflows, including pre-market planning, post-market review, intraday tracking, monitor brief generation, symbol analysis, research notes, rule validation, and paper-trading readiness review. It must not place real trades or output deterministic buy/sell instructions.
 ---
 
 # Trading Copilot
@@ -109,6 +109,29 @@ Use `python3 script/trading_copilot.py learning-review --lookback-days 20` to ag
 4. If the user wants monitor observations in the journal, run:
    `python3 script/trading_copilot.py extract-monitor-signals --append`.
 
+### Intraday Tracker
+
+Use this for Phase 1 read-only pre-market plan tracking.
+
+1. Run `python3 script/trading_copilot.py intraday-tracker --date <DATE> --top-n 5`.
+2. Read `report/<DATE>/intraday.md`, `runtime/intraday/<DATE>/state.json`, and `runtime/intraday/<DATE>/events.jsonl` after the run.
+3. Treat `report/<DATE>/intraday.md` as the human-readable rolling log.
+4. Treat `runtime/intraday/<DATE>/state.json` as the machine-readable prior state.
+5. Treat `runtime/intraday/<DATE>/events.jsonl` as notification candidates only, not broker instructions.
+
+The tracker reads `report/<DATE>/pre-market-signals.json`, optional `config/intraday_watchlist.json`, and `report/latest-monitor.json`.
+
+### Intraday Dry-Run
+
+Use this for Phase 2 monitor candidates before any paper execution.
+
+1. Run `python3 script/trading_copilot.py intraday-dry-run --date <DATE>`.
+2. Confirm the wrapper generated or used `report/<DATE>/monitor-signals.json`.
+3. Confirm `paper_trade_preview.py` and `paper_trade_submit.py` ran for `session=monitor` without `--execute`.
+4. Read the Feishu summary artifact for candidate, blocked, and skipped counts.
+
+This workflow must not submit broker orders.
+
 ### Weekly Review
 
 1. Run `python3 script/trading_copilot.py weekly-review --week <YYYY-Www> --append`.
@@ -141,6 +164,17 @@ Use `python3 script/trading_copilot.py learning-review --lookback-days 20` to ag
 16. Run `python3 script/trading_copilot.py paper-break-even-stop-plan --date <DATE>` to prepare a dry-run break-even stop movement plan after TP1 fill evidence exists. This workflow is plan-only and must not cancel, replace, or submit broker orders.
 17. Run `python3 script/trading_copilot.py paper-trade-review --date <DATE> --session pre-market --append` only after paper executions exist and should be recorded.
 18. Treat paper results as execution feedback. Do not promote paper P/L directly into `knowledge/refined/`.
+
+### Intraday Paper Entry
+
+Use this only for Phase 3 after reviewed monitor dry-run evidence exists.
+
+1. Dry-run first:
+   `python3 script/trading_copilot.py intraday-paper-entry --date <DATE> --require-validation`.
+2. Only when the user explicitly wants simulated intraday paper entry submission and `config/paper_execution.local.json` enables `broker_writes_enabled=true` plus `allow_intraday_entry_submit=true`, run:
+   `python3 script/trading_copilot.py intraday-paper-entry --date <DATE> --require-validation --execute --paper-execution-config config/paper_execution.local.json`.
+3. Never use `paper-trade-submit --session monitor --execute`; that path must remain hard-rejected.
+4. Treat the output `report/<DATE>/intraday-paper-entry.json` as paper execution evidence for follow-up sync/review, not as investment advice.
 
 ### Symbol Analysis
 
