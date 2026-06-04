@@ -116,7 +116,7 @@ Run the pre-market workflow for this repository.
    - report/<PRE_MARKET_DATE>/exec-brief.md
    - report/<PRE_MARKET_DATE>/pre-market.md
    - report/<PRE_MARKET_DATE>/pre-market-signals.json
-   Both Markdown outputs must include `## 消息层汇总` with `### 特朗普持仓与交易变化`. Treat OGE/Open Cabinet/Quiver/InsiderCat disclosure data as news-layer background only; if no verified disclosure input is available, explicitly state the data gap. Do not use this section to upgrade any symbol's execution status.
+   Both Markdown outputs must include `## 消息层汇总` with `### 特朗普持仓与交易变化`. Treat OGE/Open Cabinet/Quiver/InsiderCat disclosure data as news-layer background only; if no verified disclosure input is available, explicitly state the data gap. Do not use this section to upgrade any symbol's execution status; the report-generation LLM may still mark `conditional_executable` only when price action, refined setup rules, risk framing, and a complete Trade Plan Card independently support the plan.
 6. Validate the generated reports. If validation fails, stop and do not sync Longbridge:
    python3 script/trading_copilot.py validate-report --session pre-market --date <PRE_MARKET_DATE>
 7. Validate the Trade Plan Cards. If validation fails, stop and do not sync Longbridge:

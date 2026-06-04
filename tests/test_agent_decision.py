@@ -93,6 +93,12 @@ class AgentDecisionTest(unittest.TestCase):
             self.assertIn("setup_match", decision)
             self.assertIn("why_not_executable", decision)
             self.assertIn("required_intraday_confirmation", decision)
+            self.assertTrue(
+                any(
+                    "Report-generation LLM remains responsible for final session sidecar status" in limitation
+                    for limitation in decision["limitations"]
+                )
+            )
             self.assertNotIn("broker_command", decision)
 
             validation = validate(

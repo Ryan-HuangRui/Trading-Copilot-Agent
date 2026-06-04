@@ -146,7 +146,7 @@ If output contains `skipped=true`, stop. Otherwise read `agent/daily_analysis_pr
 - `report/<PRE_MARKET_DATE>/pre-market.md`
 - `report/<PRE_MARKET_DATE>/pre-market-signals.json`
 
-The two Markdown reports must include a `## 消息层汇总` section with a dedicated `### 特朗普持仓与交易变化` subsection. This subsection may summarize OGE/Open Cabinet/Quiver/InsiderCat disclosure evidence when such input is available, but it must not invent missing holdings or trades. It is a news-layer background summary only and must not upgrade any symbol from `watch_only` or `no_trade` to `conditional_executable`.
+The two Markdown reports must include a `## 消息层汇总` section with a dedicated `### 特朗普持仓与交易变化` subsection. This subsection may summarize OGE/Open Cabinet/Quiver/InsiderCat disclosure evidence when such input is available, but it must not invent missing holdings or trades. 消息层本身不能升级 `watch_only` or `no_trade` symbols into `conditional_executable`; 报告生成 LLM may still mark a symbol `conditional_executable` only when price action, refined setup rules, risk framing, and a 完整 Trade Plan Card independently support the upgrade.
 
 After `exec-brief.md` and `pre-market.md` are generated, record the LLM generation manifest and hand the bundle to the deterministic delivery wrapper:
 ```bash

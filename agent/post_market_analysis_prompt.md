@@ -44,7 +44,9 @@
 - 若 wrapper 的 `next_agent_inputs` 包含 `report/<SNAPSHOT_DATE>/agents/` 下的 agent research artifacts，只能把它们作为证据增强输入：
   - 引用 `decision.json`、`bull_report.json`、`bear_report.json`、`risk_report.json` 的 evidence id、风险限制和 limitations
   - 不得把 agent decision 当成订单输入
-  - agent decision 可以降低明日计划等级或触发人工 review，不能把不完整计划升级为 `conditional_executable`
+  - agent research / memory / sentiment 只能作为证据、风险限制或降级理由；不能单独作为升级为 `conditional_executable` 的理由
+  - sidecar 的最终执行状态最终由报告生成 LLM 判断：若你基于 `knowledge/refined/`、当日价格行为、明日关键位和完整 Trade Plan Card 独立判断条件成立，可以在 sidecar 中标记为 `conditional_executable`
+  - 如果缺少完整 Trade Plan Card，或只是因为 agent decision / 消息层 / sentiment 支持而缺少价格结构确认，必须维持 `watch_only/no_trade`
 
 【输出文件（必须生成）】
 - report/<SNAPSHOT_DATE>/post-market.md
@@ -98,6 +100,7 @@
 
 【post-market-signals.json 模板】
 必须与 Markdown 中「明日最多3个重点观察标的」和「明日观察清单」一致；它表示明日计划，不是交易指令。`conditional_executable` 表示满足人工执行前置条件的交易计划；`watch_only` 只代表观察候选；`no_trade` 表示不允许执行。
+最终由报告生成 LLM 判断每个信号的 `execution_status`；agent research artifacts 是证据输入而非最终裁决。只有当完整 Trade Plan Card 与 refined rules 同时满足时，才可以在 sidecar 中标记为 `conditional_executable`。
 
 ```json
 {

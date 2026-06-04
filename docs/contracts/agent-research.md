@@ -11,7 +11,9 @@ This contract defines the TradingAgents-style research artifacts used by this re
 - Runtime outputs live under ignored paths: `report/<DATE>/agents/` or `runtime/memory/`.
 - Phase 0 placeholder artifacts must include `experimental=true` and `not_for_execution=true`.
 - Placeholder `decision.json` artifacts are invalid for report delivery, journal append, paper preview, and broker submission.
-- Agent research can downgrade confidence or execution readiness, but must not upgrade an existing `watch_only` or `no_trade` candidate into `conditional_executable`.
+- Agent research can downgrade confidence or execution readiness, but it is evidence input rather than the final session signal decision.
+- 报告生成 LLM 是 session sidecar 的最终决策者：当 refined rules、价格行为、关键位、risk framing 和完整 Trade Plan Card 同时成立时，可以产出 `trade_plan` / `conditional_executable`。
+- Agent research, memory, sentiment, and message-layer evidence cannot by themselves upgrade a symbol into `conditional_executable`; incomplete plans must remain `watch_only` or `no_trade`.
 
 ## Paths
 
@@ -155,8 +157,9 @@ Forbidden fields:
 Validation rules:
 
 - `experimental=true` or `not_for_execution=true` must fail `validate-agent-decision`.
-- `conditional_executable` requires a complete draft Trade Plan Card before conversion into session signal sidecars.
-- Missing trigger, invalidation, risk, TP1, or skip conditions must downgrade to `watch_only` or `no_trade`.
+- `conditional_executable` in `decision.json` requires a complete draft Trade Plan Card before it can be used as supporting evidence in session signal sidecars.
+- Missing trigger, invalidation, risk, TP1, or skip conditions must keep the agent decision at `watch_only` or `no_trade`.
+- A `watch_only` deterministic `decision.json` does not block the report-generation LLM from independently writing a complete `trade_plan` / `conditional_executable` sidecar signal.
 - Memory references can lower confidence or trigger review only; they cannot raise execution grade.
 
 ## Phase 3 Role Reasoning
@@ -190,6 +193,7 @@ Validation rules:
 - `decision.json` must use `plan_type=trade_plan/watch_only/no_trade` and `execution_status=conditional_executable/waiting_trigger/watch_only/no_trade`.
 - `experimental=true` or `not_for_execution=true` decisions fail validation.
 - `conditional_executable` decisions require complete Trade Plan Card fields before they can be converted downstream.
+- Deterministic Phase 3 decisions may remain `watch_only` as conservative evidence; the report-generation LLM still owns the final session sidecar upgrade decision when a complete Trade Plan Card is written and passes validation.
 - Broker/order command fields and command text are forbidden.
 
 ## Phase 5 Memory

@@ -48,7 +48,9 @@
 - 若 wrapper 的 `next_agent_inputs` 包含 `report/<PRE_MARKET_DATE>/agents/` 下的 agent research artifacts，只能把它们作为证据增强输入：
   - 优先引用 `decision.json`、`bull_report.json`、`bear_report.json`、`risk_report.json` 中的 evidence id 和 limitations
   - 不得把 agent decision 当成订单输入
-  - agent decision 只能帮助降级为 `watch_only/no_trade` 或补充风险限制，不能把不完整计划升级为 `conditional_executable`
+  - agent research / memory / sentiment 只能作为证据、风险限制或降级理由；不能单独作为升级为 `conditional_executable` 的理由
+  - sidecar 的最终执行状态最终由报告生成 LLM 判断：若你基于 `knowledge/refined/`、当前价格行为、结构关键位和完整 Trade Plan Card 独立判断条件成立，可以在 sidecar 中标记为 `conditional_executable`
+  - 如果缺少完整 Trade Plan Card，或只是因为 agent decision / 消息层 / sentiment 支持而缺少价格结构确认，必须维持 `watch_only/no_trade`
 - 若 `next_agent_inputs` 或 `report/<PRE_MARKET_DATE>/external-disclosures/` 中存在特朗普/OGE/Open Cabinet/Quiver/InsiderCat 相关持仓或交易披露 artifact，可作为消息层证据输入；若没有结构化 artifact 或最新联网核验，不得编造具体持仓、交易数量、金额、日期或影响，只能说明“未获取到可核验的最新披露”。
 - 特朗普持仓与交易披露只属于消息层背景：不得自动加入 watchlist，不得提升任何标的 `execution_status`，不得把披露解读为买卖指令；最多用于提示相关标的需要额外核验政策/舆情/流动性风险。
 
@@ -106,6 +108,7 @@
 
 【pre-market-signals.json 模板】
 必须与精简执行版里的「今日最多3个重点标的」一致。`conditional_executable` 表示满足人工执行前置条件的交易计划；`watch_only` 只代表观察候选；`no_trade` 表示不允许执行。
+最终由报告生成 LLM 判断每个信号的 `execution_status`；agent research artifacts 是证据输入而非最终裁决。只有当完整 Trade Plan Card 与 refined rules 同时满足时，才可以在 sidecar 中标记为 `conditional_executable`。
 
 ```json
 {

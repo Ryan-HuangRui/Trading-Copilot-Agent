@@ -265,7 +265,7 @@ Codex / automation
 - 开启参数后，wrapper 的 `next_agent_inputs` 能引用 agent research artifacts。
 - `prepare_daily_context.py` 和 `prepare_market_snapshot.py` 无行为变化，且不 import / 调用 agent research 模块。
 - journal append 或 Longbridge sync 前仍必须通过 `validate-report` 和 `validate-trade-plan`。
-- Agent decisions 可以把标的降级为 `watch_only` 或 `no_trade`，但不能强行升级为 `conditional_executable`。
+- Agent decisions 可以把标的降级为 `watch_only` 或 `no_trade`，但不能单独作为升级为 `conditional_executable` 的理由；报告生成 LLM 可以在 refined rules、价格行为和完整 Trade Plan Card 同时满足时决定升级 session sidecar。
 - fixture smoke tests 覆盖开启 agent research 的盘前和盘后流程。
 
 ### 阶段门禁

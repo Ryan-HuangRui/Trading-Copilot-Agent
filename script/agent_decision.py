@@ -80,7 +80,7 @@ def role_report(role: str, symbol: str, date: str, supporting: list[str], opposi
 
 
 def risk_report(symbol: str, date: str, ids: list[str], memory_path: str | None) -> dict[str, Any]:
-    limits = ["Agent decision cannot raise execution status without a complete Trade Plan Card."]
+    limits = ["Agent research cannot by itself raise execution status without a complete Trade Plan Card."]
     if memory_path:
         limits.append(f"Memory context reviewed from {memory_path}; memory can only lower confidence or trigger review.")
     return {
@@ -185,6 +185,7 @@ def decision_payload(symbol: str, date: str, ids: list[str], risk: dict[str, Any
         "risk_summary": risk.get("risk_summary", {}),
         "limitations": [
             "Phase 3 deterministic role synthesis does not create executable trade plans.",
+            "Report-generation LLM remains responsible for final session sidecar status when it can write a complete Trade Plan Card.",
             "Use existing validate-report and validate-trade-plan gates before downstream workflow use.",
         ],
     }
