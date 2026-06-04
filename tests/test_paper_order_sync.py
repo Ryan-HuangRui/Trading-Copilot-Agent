@@ -197,6 +197,7 @@ class PaperOrderSyncTest(unittest.TestCase):
             entry = state["orders"][0]
             self.assertEqual(entry["protective_stop_order_id"], "stop-o-1")
             self.assertEqual(entry["stop_status"], "accepted")
+            self.assertEqual(entry["protective_stop_quantity"], 200)
             self.assertEqual(entry["take_profit_order_id"], "tp-o-1")
             self.assertEqual(entry["tp1_status"], "filled")
             self.assertEqual(entry["tp1_filled_quantity"], 100)

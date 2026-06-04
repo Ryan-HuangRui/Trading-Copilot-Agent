@@ -1138,6 +1138,7 @@ Required behavior:
 - Broker TP1 submission must use only `script/longbridge_paper_order_adapter.py`.
 - Only fully filled long buy entries with positive `take_profit`, positive filled quantity, and no existing TP1/take-profit order may become TP1 candidates.
 - The first TP1 plan uses Longbridge `sell` `LO` with `--price <take_profit>`, `tif=gtc` by default, and a default `--exit-fraction 0.5`.
+- TP1 execution must block when an active protective stop quantity exceeds the post-TP1 remaining quantity. This prevents full-size stop plus partial TP orders from creating over-exit risk when no OCO link exists.
 - Duplicate `intent_id` values already present in `paper-take-profit-orders.jsonl` must be blocked.
 - The artifact must separate `take_profit_candidates`, `blocked`, `submitted`, and `errors`.
 - The artifact must include `execution_policy` and `broker_capabilities`.

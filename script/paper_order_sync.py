@@ -289,6 +289,7 @@ def enrich_entry_with_exits(
         enriched["stop_order_id"] = protective_stop.get("broker_order_id")
         enriched["stop_status"] = protective_stop.get("status")
         enriched["current_stop_price"] = protective_stop.get("trigger_price")
+        enriched["protective_stop_quantity"] = protective_stop.get("quantity")
         enriched["stop_filled_quantity"] = protective_stop.get("filled_quantity")
     if take_profit:
         filled_quantity = as_float(take_profit.get("filled_quantity")) or 0.0

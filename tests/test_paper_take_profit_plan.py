@@ -158,6 +158,62 @@ class PaperTakeProfitPlanTest(unittest.TestCase):
             self.assertEqual(record["intent_id"], "intent-1")
             self.assertEqual(record["broker_order_id"], "tp-o-1")
 
+    def test_execute_blocks_when_active_stop_would_over_exit_after_tp1(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.seed_state(
+                root,
+                [
+                    filled_entry(
+                        protective_stop_order_id="stop-o-1",
+                        stop_status="accepted",
+                        protective_stop_quantity=200,
+                    )
+                ],
+            )
+            adapter = unittest.mock.Mock()
+
+            with patch.object(paper_take_profit_plan, "LongbridgePaperOrderAdapter", return_value=adapter):
+                result = paper_take_profit_plan.run(
+                    paper_take_profit_plan.build_args(repo_root=str(root), date="2026-05-26", execute=True)
+                )
+
+            adapter.submit_take_profit_order.assert_not_called()
+            self.assertEqual(result["summary"]["submitted"], 0)
+            self.assertEqual(result["summary"]["blocked"], 1)
+            payload = json.loads(Path(result["output"]).read_text(encoding="utf-8"))
+            self.assertEqual(payload["blocked"][0]["reason"], "active protective stop quantity exceeds post-TP1 remaining quantity")
+
+    def test_execute_allows_tp1_when_active_stop_quantity_matches_remaining(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.seed_state(
+                root,
+                [
+                    filled_entry(
+                        protective_stop_order_id="stop-o-1",
+                        stop_status="accepted",
+                        protective_stop_quantity=100,
+                    )
+                ],
+            )
+            adapter = unittest.mock.Mock()
+            adapter.submit_take_profit_order.return_value = {
+                "broker": "longbridge",
+                "account_channel": "lb_papertrading",
+                "broker_order_id": "tp-o-1",
+                "raw_request": {"command": ["order", "sell", "MU.US"]},
+                "raw_response": {"order_id": "tp-o-1", "status": "submitted"},
+            }
+
+            with patch.object(paper_take_profit_plan, "LongbridgePaperOrderAdapter", return_value=adapter):
+                result = paper_take_profit_plan.run(
+                    paper_take_profit_plan.build_args(repo_root=str(root), date="2026-05-26", execute=True)
+                )
+
+            self.assertEqual(result["summary"]["submitted"], 1)
+            adapter.submit_take_profit_order.assert_called_once()
+
     def test_execute_skips_duplicate_take_profit_journal_without_calling_adapter(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

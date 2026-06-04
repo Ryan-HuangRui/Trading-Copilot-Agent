@@ -423,7 +423,7 @@ TCA_INTRADAY_BREAK_EVEN_STOP_EXECUTE=0 \
 bash ops/cc-connect/tca-intraday-codex-monitor.sh <DATE>
 ```
 
-This requires the ignored NAS-local `config/paper_execution.local.json` to set `broker_writes_enabled=true`, `allow_intraday_entry_submit=true`, `allow_cancel=true`, and `allow_protective_stop=true`. The wrapper still submits only when Codex writes a validated monitor sidecar and `intraday-dry-run` reports ready orders. TP1 and break-even stop movement stay disabled until the stop/TP interaction is made OCO-safe or otherwise verified against over-exit risk.
+This requires the ignored NAS-local `config/paper_execution.local.json` to set `broker_writes_enabled=true`, `allow_intraday_entry_submit=true`, `allow_cancel=true`, and `allow_protective_stop=true`. The wrapper still submits only when Codex writes a validated monitor sidecar and `intraday-dry-run` reports ready orders. TP1 and break-even stop movement stay disabled in NAS cron; additionally, TP1 execution is blocked in code when an active protective stop quantity exceeds the post-TP1 remaining quantity.
 
 Optional dry-run paper checks:
 

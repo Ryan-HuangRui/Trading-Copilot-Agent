@@ -72,6 +72,21 @@ def partial_quantity(filled_quantity: int, exit_fraction: float) -> int:
     return max(1, min(filled_quantity, int(filled_quantity * exit_fraction)))
 
 
+def active_status(value: Any) -> bool:
+    return str(value or "").lower() in {"submitted", "accepted", "partially_filled"}
+
+
+def active_stop_over_exit_risk(order: dict[str, Any], *, post_tp_remaining_quantity: int) -> bool:
+    if not active_status(order.get("stop_status") or order.get("protective_stop_status")):
+        return False
+    if not (order.get("protective_stop_order_id") or order.get("stop_order_id")):
+        return False
+    stop_quantity = as_quantity(order.get("protective_stop_quantity") or order.get("stop_quantity"))
+    if stop_quantity <= 0:
+        stop_quantity = as_quantity(order.get("filled_quantity") or order.get("quantity"))
+    return stop_quantity > post_tp_remaining_quantity
+
+
 def take_profit_candidate_or_block(
     order: dict[str, Any],
     *,
@@ -81,6 +96,7 @@ def take_profit_candidate_or_block(
     intent_id = str(order.get("intent_id") or "")
     filled_quantity = as_quantity(order.get("filled_quantity"))
     quantity = partial_quantity(filled_quantity, exit_fraction)
+    post_tp_remaining_quantity = max(0, filled_quantity - quantity)
     take_profit_price = as_float(order.get("take_profit"))
     longbridge_symbol = str(order.get("longbridge_symbol") or "")
     remark = f"tca-tp1:{intent_id}"
@@ -94,6 +110,10 @@ def take_profit_candidate_or_block(
         "entry_side": order.get("side"),
         "filled_quantity": filled_quantity,
         "quantity": quantity,
+        "post_tp_remaining_quantity": post_tp_remaining_quantity,
+        "protective_stop_order_id": order.get("protective_stop_order_id") or order.get("stop_order_id"),
+        "stop_status": order.get("stop_status") or order.get("protective_stop_status"),
+        "protective_stop_quantity": as_quantity(order.get("protective_stop_quantity") or order.get("stop_quantity")),
         "take_profit": take_profit_price,
         "avg_fill_price": order.get("avg_fill_price"),
         "exit_fraction": exit_fraction,
@@ -111,6 +131,8 @@ def take_profit_candidate_or_block(
         return "blocked", {**base, "reason": "take_profit is required"}
     if quantity <= 0:
         return "blocked", {**base, "reason": "quantity must be > 0"}
+    if active_stop_over_exit_risk(order, post_tp_remaining_quantity=post_tp_remaining_quantity):
+        return "blocked", {**base, "reason": "active protective stop quantity exceeds post-TP1 remaining quantity"}
     command = [
         "longbridge",
         "order",
