@@ -2567,6 +2567,8 @@ def run_paper_lifecycle(args: argparse.Namespace) -> None:
                 args.exit_order_type,
                 "--tif",
                 args.exit_tif,
+                "--decisions",
+                f"report/{args.date}/paper-exit-decisions.json",
             ],
         )
         break_even = exit_plan(
@@ -2818,6 +2820,8 @@ def run_paper_exit_plan(args: argparse.Namespace) -> None:
         command.extend(["--state", args.state])
     if args.intraday_state:
         command.extend(["--intraday-state", args.intraday_state])
+    if args.decisions:
+        command.extend(["--decisions", args.decisions])
     if args.output:
         command.extend(["--output", args.output])
     if args.exits_journal:
@@ -3569,6 +3573,7 @@ def build_parser() -> argparse.ArgumentParser:
     paper_exit.add_argument("--date", required=True)
     paper_exit.add_argument("--state")
     paper_exit.add_argument("--intraday-state")
+    paper_exit.add_argument("--decisions")
     paper_exit.add_argument("--output")
     paper_exit.add_argument("--exits-journal")
     paper_exit.add_argument("--order-type", default="MO")

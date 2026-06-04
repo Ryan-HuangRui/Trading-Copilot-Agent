@@ -60,6 +60,28 @@ def intraday_state(state: str = "invalidated") -> dict:
     }
 
 
+def exit_decisions(*, execution_status: str = "conditional_executable", action: str = "exit_remaining") -> dict:
+    return {
+        "date": "2026-05-26",
+        "workflow": "paper-exit-decision",
+        "decisions": [
+            {
+                "intent_id": "2026-05-26:pre-market:MU:abc123",
+                "symbol": "MU",
+                "action": action,
+                "execution_status": execution_status,
+                "reason": "5m lower-high breakdown with failed reclaim",
+                "risk_check": {
+                    "remaining_quantity": 200,
+                    "cancel_open_exits_first": True,
+                    "max_loss_if_exit_now_r": 1.1,
+                },
+                "evidence": ["runtime/intraday/2026-05-26/state.json", "report/latest-monitor.json"],
+            }
+        ],
+    }
+
+
 class PaperExitPlanTest(unittest.TestCase):
     def seed(self, root: Path, *, state: str = "invalidated", order_overrides: dict | None = None) -> None:
         write_json(
@@ -102,6 +124,47 @@ class PaperExitPlanTest(unittest.TestCase):
             self.seed(root, state="invalidated", order_overrides={"lifecycle": {"overall_status": "closed"}, "remaining_quantity": 0})
             closed = paper_exit_plan.run(paper_exit_plan.build_args(repo_root=str(root), date="2026-05-26"))
             self.assertEqual(closed["summary"]["exit_candidates"], 0)
+
+    def test_llm_exit_decision_can_trigger_exit_before_hard_invalidation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.seed(root, state="waiting")
+            decisions_path = root / "report" / "2026-05-26" / "paper-exit-decisions.json"
+            write_json(decisions_path, exit_decisions())
+
+            result = paper_exit_plan.run(
+                paper_exit_plan.build_args(
+                    repo_root=str(root),
+                    date="2026-05-26",
+                    decisions=str(decisions_path),
+                )
+            )
+
+            self.assertEqual(result["summary"]["exit_candidates"], 1)
+            payload = json.loads(Path(result["output"]).read_text(encoding="utf-8"))
+            candidate = payload["exit_candidates"][0]
+            self.assertEqual(candidate["exit_reason"], "llm_exit_decision")
+            self.assertEqual(candidate["decision_reason"], "5m lower-high breakdown with failed reclaim")
+            self.assertEqual(candidate["decision_execution_status"], "conditional_executable")
+
+    def test_llm_exit_decision_must_be_complete_and_executable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.seed(root, state="waiting")
+            decisions_path = root / "report" / "2026-05-26" / "paper-exit-decisions.json"
+            write_json(decisions_path, exit_decisions(execution_status="watch_only"))
+
+            result = paper_exit_plan.run(
+                paper_exit_plan.build_args(
+                    repo_root=str(root),
+                    date="2026-05-26",
+                    decisions=str(decisions_path),
+                )
+            )
+
+            self.assertEqual(result["summary"]["exit_candidates"], 0)
+            payload = json.loads(Path(result["output"]).read_text(encoding="utf-8"))
+            self.assertIn("exit decision is not conditional_executable", {row["reason"] for row in payload["blocked"]})
 
     def test_execute_cancels_open_exits_then_submits_exit_order(self):
         with tempfile.TemporaryDirectory() as tmp:

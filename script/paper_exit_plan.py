@@ -40,6 +40,10 @@ def default_intraday_state_path(repo_root: Path, date: str, explicit_path: str |
     return resolve_path(repo_root, explicit_path, repo_root / "runtime" / "intraday" / date / "state.json")
 
 
+def default_decisions_path(repo_root: Path, date: str, explicit_path: str | None) -> Path:
+    return resolve_path(repo_root, explicit_path, repo_root / "report" / date / "paper-exit-decisions.json")
+
+
 def default_exits_path(repo_root: Path, date: str, explicit_path: str | None) -> Path:
     return resolve_path(repo_root, explicit_path, repo_root / "runtime" / "paper" / date / "paper-exit-orders.jsonl")
 
@@ -116,6 +120,49 @@ def intraday_symbol_state(intraday_state: dict[str, Any], symbol: str) -> dict[s
         if normalize_symbol(key) == normalized and isinstance(value, dict):
             return value
     return {}
+
+
+def load_exit_decisions(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    payload = read_json(path)
+    raw_decisions = payload.get("decisions")
+    if not isinstance(raw_decisions, list):
+        raise ValueError(f"{path}: decisions must be an array")
+    return [item for item in raw_decisions if isinstance(item, dict)]
+
+
+def exit_decision_for_order(decisions: list[dict[str, Any]], order: dict[str, Any]) -> dict[str, Any] | None:
+    intent_id = str(order.get("intent_id") or "")
+    symbol = normalize_symbol(order.get("symbol"))
+    for decision in decisions:
+        if intent_id and str(decision.get("intent_id") or "") == intent_id:
+            return decision
+    for decision in decisions:
+        if symbol and normalize_symbol(decision.get("symbol")) == symbol:
+            return decision
+    return None
+
+
+def validate_exit_decision(decision: dict[str, Any] | None, *, quantity: int) -> tuple[bool, str | None]:
+    if not decision:
+        return False, None
+    if str(decision.get("action") or "") != "exit_remaining":
+        return False, "exit decision action is not exit_remaining"
+    if str(decision.get("execution_status") or "") != "conditional_executable":
+        return False, "exit decision is not conditional_executable"
+    reason = str(decision.get("reason") or "").strip()
+    if not reason:
+        return False, "exit decision reason is required"
+    risk_check = decision.get("risk_check")
+    if not isinstance(risk_check, dict):
+        return False, "exit decision risk_check is required"
+    if risk_check.get("cancel_open_exits_first") is not True:
+        return False, "exit decision must require cancel_open_exits_first"
+    decision_quantity = as_quantity(risk_check.get("remaining_quantity"))
+    if decision_quantity <= 0 or decision_quantity != quantity:
+        return False, "exit decision remaining_quantity must match open quantity"
+    return True, None
 
 
 def open_exit_orders(order: dict[str, Any]) -> list[dict[str, str]]:
@@ -207,6 +254,7 @@ def exit_candidate_or_block(
     order: dict[str, Any],
     *,
     intraday_state: dict[str, Any],
+    decisions: list[dict[str, Any]],
     submitted_exit_ids: set[str],
     args: argparse.Namespace,
 ) -> tuple[str, dict[str, Any]]:
@@ -217,6 +265,8 @@ def exit_candidate_or_block(
     lifecycle = order.get("lifecycle") if isinstance(order.get("lifecycle"), dict) else {}
     overall_status = str(lifecycle.get("overall_status") or "")
     quantity = remaining_quantity(order)
+    decision = exit_decision_for_order(decisions, order)
+    decision_valid, decision_block_reason = validate_exit_decision(decision, quantity=quantity)
     base = {
         "intent_id": intent_id,
         "source_signal_id": order.get("source_signal_id"),
@@ -230,6 +280,9 @@ def exit_candidate_or_block(
         "intraday_state": intraday_status or None,
         "intraday_reason": state.get("reason"),
         "bar_timestamp": state.get("bar_timestamp"),
+        "decision_action": decision.get("action") if decision else None,
+        "decision_execution_status": decision.get("execution_status") if decision else None,
+        "decision_reason": decision.get("reason") if decision else None,
     }
     if order.get("side") != "buy":
         return "blocked", {**base, "reason": "only long buy entries are supported"}
@@ -241,7 +294,14 @@ def exit_candidate_or_block(
         return "blocked", {**base, "reason": "remaining quantity must be > 0"}
     if intent_id in submitted_exit_ids:
         return "blocked", {**base, "reason": "exit already submitted"}
-    if intraday_status not in EXIT_TRIGGER_STATES:
+    trigger_source = None
+    if intraday_status in EXIT_TRIGGER_STATES:
+        trigger_source = "intraday_plan_invalidated"
+    elif decision_valid:
+        trigger_source = "llm_exit_decision"
+    elif decision_block_reason:
+        return "blocked", {**base, "reason": decision_block_reason}
+    if not trigger_source:
         return "blocked", {**base, "reason": "intraday state is not an exit trigger"}
     try:
         intent = build_exit_intent(order, args=args, quantity=quantity)
@@ -260,7 +320,7 @@ def exit_candidate_or_block(
         "candidate",
         {
             **base,
-            "exit_reason": "intraday_plan_invalidated",
+            "exit_reason": trigger_source,
             "side": intent["side"],
             "order_type": intent["order_type"],
             "quantity": intent["quantity"],
@@ -320,6 +380,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     repo_root = Path(args.repo_root).resolve()
     state_path = default_state_path(repo_root, args.date, args.state)
     intraday_state_path = default_intraday_state_path(repo_root, args.date, args.intraday_state)
+    decisions_path = default_decisions_path(repo_root, args.date, args.decisions)
     exits_path = default_exits_path(repo_root, args.date, args.exits_journal)
     output = default_output_path(repo_root, args.date, args.output)
     paper_execution_config, paper_execution_config_path = load_paper_execution_config(
@@ -328,6 +389,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     )
     state = read_json(state_path)
     intraday_state = read_json_if_exists(intraday_state_path)
+    decisions = load_exit_decisions(decisions_path)
     orders = state.get("orders")
     if not isinstance(orders, list):
         raise ValueError(f"{state_path}: orders must be an array")
@@ -343,6 +405,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         bucket, record = exit_candidate_or_block(
             order,
             intraday_state=intraday_state,
+            decisions=decisions,
             submitted_exit_ids=existing_exit_ids,
             args=args,
         )
@@ -385,6 +448,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "execute_requested": bool(args.execute),
         "source_execution_state": str(state_path),
         "source_intraday_state": str(intraday_state_path),
+        "source_decisions": str(decisions_path) if decisions_path.exists() else None,
         "exits_journal": str(exits_path),
         "paper_execution_config": str(paper_execution_config_path),
         "execution_policy": paper_execution_policy(paper_execution_config),
@@ -411,6 +475,7 @@ def build_args(**overrides: Any) -> argparse.Namespace:
         "date": None,
         "state": None,
         "intraday_state": None,
+        "decisions": None,
         "output": None,
         "exits_journal": None,
         "order_type": "MO",
@@ -436,6 +501,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--date", required=True)
     parser.add_argument("--state")
     parser.add_argument("--intraday-state")
+    parser.add_argument("--decisions")
     parser.add_argument("--output")
     parser.add_argument("--exits-journal")
     parser.add_argument("--order-type", default="MO")

@@ -1167,6 +1167,7 @@ Inputs:
 - `runtime/paper/<DATE>/paper-execution-state.json`.
 - `runtime/intraday/<DATE>/state.json`.
 - Optional `runtime/paper/<DATE>/paper-exit-orders.jsonl` for duplicate detection.
+- Optional `report/<DATE>/paper-exit-decisions.json` for LLM/Codex-reviewed exit decisions before hard invalidation.
 
 Output:
 
@@ -1179,10 +1180,35 @@ Required behavior:
 - Broker execution requires `--execute`, paper account validation, and config gates `allow_exit_cancel_replace=true` plus `allow_exit_submit=true`.
 - Only filled long entries with an open lifecycle state and positive remaining quantity may become exit candidates.
 - The first trigger source is `runtime/intraday/<DATE>/state.json` with symbol state `invalidated`.
+- A second trigger source is `report/<DATE>/paper-exit-decisions.json`. A decision can trigger an exit only when it matches the open `intent_id` or symbol and contains `action=exit_remaining`, `execution_status=conditional_executable`, a non-empty `reason`, `risk_check.cancel_open_exits_first=true`, and `risk_check.remaining_quantity` equal to the current remaining quantity.
 - Execution must cancel open protective stop and TP1 orders before submitting the exit order, so independent exit orders cannot over-exit the simulated position.
 - The default exit order type is Longbridge `sell` `MO`; `LO`, `MIT`, `LIT`, and trailing order types are available through the shared order model when their required price/trigger/trailing fields are supplied.
 - Duplicate `intent_id` values already present in `paper-exit-orders.jsonl` must be blocked.
 - The artifact must separate `exit_candidates`, `blocked`, `submitted`, and `errors`, and include `execution_policy` and `broker_capabilities`.
+
+Decision sidecar example:
+
+```json
+{
+  "date": "<DATE>",
+  "workflow": "paper-exit-decision",
+  "decisions": [
+    {
+      "intent_id": "<INTENT_ID>",
+      "symbol": "MU",
+      "action": "exit_remaining",
+      "execution_status": "conditional_executable",
+      "reason": "5m lower-high breakdown with failed reclaim",
+      "risk_check": {
+        "remaining_quantity": 100,
+        "cancel_open_exits_first": true,
+        "max_loss_if_exit_now_r": 1.1
+      },
+      "evidence": ["runtime/intraday/<DATE>/state.json", "report/latest-monitor.json"]
+    }
+  ]
+}
+```
 
 ## paper-break-even-stop-plan
 

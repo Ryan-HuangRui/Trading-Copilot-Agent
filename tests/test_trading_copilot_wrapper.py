@@ -492,6 +492,7 @@ class TradingCopilotWrapperTest(unittest.TestCase):
             repo_root=str(ROOT),
             state="runtime/paper/2026-05-26/paper-execution-state.json",
             intraday_state="runtime/intraday/2026-05-26/state.json",
+            decisions="report/2026-05-26/paper-exit-decisions.json",
             output="report/2026-05-26/paper-exit-plan.json",
             exits_journal="runtime/paper/2026-05-26/paper-exit-orders.jsonl",
             order_type="MIT",
@@ -517,6 +518,7 @@ class TradingCopilotWrapperTest(unittest.TestCase):
         command = calls[0]
         self.assertEqual(command[0], "script/paper_exit_plan.py")
         self.assertIn("--intraday-state", command)
+        self.assertIn("--decisions", command)
         self.assertIn("--exits-journal", command)
         self.assertIn("--order-type", command)
         self.assertEqual(command[command.index("--order-type") + 1], "MIT")

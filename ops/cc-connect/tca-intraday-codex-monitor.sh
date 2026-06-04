@@ -131,6 +131,8 @@ PROMPT="你是 Trading-Copilot-Agent 的 cc-connect 盘中 Codex 盯盘定时任
 盘中模拟盘生命周期开关：TCA_INTRADAY_ENABLE_PAPER_LIFECYCLE=$ENABLE_PAPER_LIFECYCLE。
 - 只有 ENABLE_PAPER_LIFECYCLE=1 且 runtime/paper/$DATE/paper-orders.jsonl 存在时，才运行同步与 exit 管理：
   python3 script/trading_copilot.py paper-lifecycle --date $DATE --paper-execution-config $PAPER_CONFIG --append-lessons --strategy-review
+- 运行 lifecycle 前，可以读取 runtime/paper/$DATE/paper-execution-state.json、runtime/intraday/$DATE/state.json、report/latest-monitor.json、report/$DATE/intraday.md 和 knowledge/refined，生成或更新 report/$DATE/paper-exit-decisions.json。
+- paper-exit-decisions.json 只能用于模拟盘退出 dry-run/执行候选。只有 action=exit_remaining、execution_status=conditional_executable、reason 非空、risk_check.cancel_open_exits_first=true 且 risk_check.remaining_quantity 匹配当前剩余仓位时，paper-exit-plan 才可把它作为 LLM exit decision 触发；否则保持 watch_only/blocked。
 - exit 执行必须逐项打开，不能因为 TCA_INTRADAY_EXIT_EXECUTE=$ENABLE_EXIT_EXECUTE 就一次性打开全部：
   - TCA_INTRADAY_CANCEL_EXECUTE=$ENABLE_CANCEL_EXECUTE；只有该值为 1 且 config 允许时才追加 --execute-cancel。
   - TCA_INTRADAY_PROTECTIVE_STOP_EXECUTE=$ENABLE_PROTECTIVE_STOP_EXECUTE；只有该值为 1 且 config 允许时才追加 --execute-protective-stop。
