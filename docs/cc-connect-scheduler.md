@@ -409,15 +409,17 @@ bash ops/cc-connect/tca-intraday-codex-monitor.sh <DATE>
 
 Default wrapper behavior is read-only: run `tca-intraday-notify.sh`, append `report/<DATE>/intraday.md`, update `runtime/intraday/<DATE>/state.json`, and send Feishu only when the notification filter has an unsent important event.
 
-Current NAS production cron enables opportunity-review dry-run and lifecycle dry-run while keeping all broker-write switches off:
+Current NAS production cron enables opportunity-review dry-run, guarded intraday paper entry execution, and lifecycle dry-run. Exit broker-write switches remain off:
 
 ```bash
 TCA_INTRADAY_ENABLE_PAPER_DRY_RUN=1 \
 TCA_INTRADAY_ENABLE_PAPER_LIFECYCLE=1 \
-TCA_INTRADAY_PAPER_EXECUTE=0 \
+TCA_INTRADAY_PAPER_EXECUTE=1 \
 TCA_INTRADAY_EXIT_EXECUTE=0 \
 bash ops/cc-connect/tca-intraday-codex-monitor.sh <DATE>
 ```
+
+This requires the ignored NAS-local `config/paper_execution.local.json` to set `broker_writes_enabled=true` and `allow_intraday_entry_submit=true`. The wrapper still submits only when Codex writes a validated monitor sidecar and `intraday-dry-run` reports ready orders.
 
 Optional dry-run paper checks:
 
