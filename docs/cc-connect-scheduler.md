@@ -377,17 +377,10 @@ Run cancel/protective-stop/TP1 workflows in dry-run mode only.
 Repository workflow stages:
 
 ```bash
-python3 script/trading_copilot.py paper-account-snapshot --date <DATE>
-python3 script/trading_copilot.py paper-order-sync --date <DATE>
-python3 script/trading_copilot.py paper-order-cancel --date <DATE>
-python3 script/trading_copilot.py paper-protective-stop-plan --date <DATE>
-python3 script/trading_copilot.py paper-take-profit-plan --date <DATE>
-python3 script/trading_copilot.py paper-break-even-stop-plan --date <DATE>
-python3 script/trading_copilot.py paper-event-ledger --date <DATE>
-python3 script/trading_copilot.py paper-execution-review --date <DATE>
-python3 script/trading_copilot.py paper-learning-lessons --date <DATE> --append
-python3 script/trading_copilot.py paper-strategy-review
+python3 script/trading_copilot.py paper-lifecycle --date <DATE> --append-lessons --strategy-review
 ```
+
+The wrapper expands to account snapshot, order sync, cancel/protective-stop/TP1/break-even planning, a post-plan resync, event ledger, execution review, optional learning append, and optional strategy review.
 
 Keep these execution switches disabled in the initial rollout:
 
@@ -404,7 +397,7 @@ Keep these execution switches disabled in the initial rollout:
 
 Do not add `--execute` to `paper-order-cancel`, `paper-protective-stop-plan`, `paper-take-profit-plan`, or `paper-break-even-stop-plan` while those config gates are false. Current exit-management execution is intentionally dry-run because protective stops use the full filled quantity while TP1 uses a partial exit quantity; automatic execution needs OCO or stop resize/cancel-then-submit safety before rollout.
 
-The provided `ops/cc-connect/tca-paper-sync-review.sh` keeps `paper-order-cancel` dry-run unless `TCA_PAPER_CANCEL_EXECUTE=1` is set for that task. Even with that environment switch, cancellation still requires the selected `config/paper_execution.local.json` to enable both `paper_execution.broker_writes_enabled=true` and `paper_execution.allow_cancel=true`.
+The provided `ops/cc-connect/tca-paper-sync-review.sh` calls `paper-lifecycle`. It keeps each exit action dry-run unless the matching environment switch is set (`TCA_PAPER_CANCEL_EXECUTE=1`, `TCA_PAPER_PROTECTIVE_STOP_EXECUTE=1`, `TCA_PAPER_TAKE_PROFIT_EXECUTE=1`, or `TCA_PAPER_BREAK_EVEN_STOP_EXECUTE=1`). Even with those switches, the selected `config/paper_execution.local.json` must enable `broker_writes_enabled=true` and the matching action gate.
 
 ## Optional Monitor Journal Task
 

@@ -1173,6 +1173,37 @@ Required behavior:
 - Execution must cancel the old stop first and submit a new `sell MIT` stop for the remaining quantity. Longbridge `order replace` must not be used for this movement because it cannot update MIT trigger prices.
 - Successful movement records must be appended to `runtime/paper/<DATE>/paper-stop-orders.jsonl` and preserve the replaced stop id, new stop id, raw cancel request/response, raw submit request/response, and `intent_id`.
 
+## paper-lifecycle
+
+Purpose: orchestrate paper order lifecycle management for a date: refresh paper account state, sync order lifecycle, prepare or execute exit-management actions, rebuild event ledger, and generate execution review.
+
+Canonical command:
+
+```bash
+python3 script/trading_copilot.py paper-lifecycle --date <DATE>
+```
+
+Optional execution flags:
+
+```bash
+python3 script/trading_copilot.py paper-lifecycle --date <DATE> \
+  --paper-execution-config config/paper_execution.local.json \
+  --execute-cancel \
+  --execute-protective-stop \
+  --execute-take-profit \
+  --execute-break-even-stop
+```
+
+Required behavior:
+
+- The wrapper must run paper account snapshot and paper order sync before exit planning.
+- It must run cancel, protective-stop, TP1, and break-even workflows, passing `--execute` only for the explicitly requested action flags.
+- It must refresh paper account snapshot and order sync after exit planning, then run paper event ledger and paper execution review.
+- It may append paper learning lessons only with `--append-lessons`.
+- It may refresh strategy-level paper review only with `--strategy-review`.
+- The response must include child command payloads, artifacts, aggregate summaries, and an `execute_requested` object for each exit action.
+- It must not bypass the child workflows' paper account, execute, duplicate, and config-gate checks.
+
 Required behavior for outcome backfill:
 
 - Pre-market signals target the same date as the signal.

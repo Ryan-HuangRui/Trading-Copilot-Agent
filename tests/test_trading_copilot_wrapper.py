@@ -292,6 +292,245 @@ class TradingCopilotWrapperTest(unittest.TestCase):
         self.assertEqual(payload["submit_summary"], {"ready": 1})
         self.assertEqual(payload["artifacts"][-1], "report/2026-05-26/monitor-feishu-summary.md")
 
+    def test_paper_lifecycle_chains_sync_exit_plans_and_review(self):
+        calls = []
+
+        def fake_run_child(command):
+            calls.append(command)
+            workflow = Path(command[0]).stem
+            outputs = {
+                "paper_account_snapshot": {"status": "success", "date": "2026-05-26", "output": "runtime/paper/2026-05-26/paper-account-snapshot.json"},
+                "paper_order_sync": {"status": "success", "date": "2026-05-26", "output": "runtime/paper/2026-05-26/paper-execution-state.json", "summary": {"filled": 1}},
+                "paper_order_cancel": {"status": "success", "date": "2026-05-26", "output": "report/2026-05-26/paper-order-cancel-plan.json", "dry_run": True, "summary": {"cancel_candidates": 0}},
+                "paper_protective_stop_plan": {"status": "success", "date": "2026-05-26", "output": "report/2026-05-26/paper-protective-stop-plan.json", "dry_run": True, "summary": {"stop_candidates": 1}},
+                "paper_take_profit_plan": {"status": "success", "date": "2026-05-26", "output": "report/2026-05-26/paper-take-profit-plan.json", "dry_run": True, "summary": {"take_profit_candidates": 1}},
+                "paper_break_even_stop_plan": {"status": "success", "date": "2026-05-26", "output": "report/2026-05-26/paper-break-even-stop-plan.json", "dry_run": True, "summary": {"move_candidates": 0}},
+                "paper_event_ledger": {"status": "success", "date": "2026-05-26", "output": "report/2026-05-26/paper-event-ledger.json", "events_journal": "runtime/journal/events.jsonl", "summary": {"events": 3}},
+                "paper_execution_review": {"status": "success", "date": "2026-05-26", "output": "report/2026-05-26/paper-execution-review.json", "markdown": "report/2026-05-26/paper-execution-review.md", "summary": {"orders": 1}},
+            }
+            return subprocess.CompletedProcess(command, 0, json.dumps(outputs[workflow]), "")
+
+        args = Namespace(
+            date="2026-05-26",
+            repo_root=str(ROOT),
+            paper_account_input=None,
+            paper_execution_config="config/paper_execution.local.json",
+            longbridge_cli=None,
+            execute_cancel=False,
+            execute_protective_stop=False,
+            execute_take_profit=False,
+            execute_break_even_stop=False,
+            append_lessons=False,
+            strategy_review=False,
+            expire_after_minutes=90,
+            stop_tif="gtc",
+            take_profit_tif="gtc",
+            break_even_tif="gtc",
+            exit_fraction=0.5,
+            learning_dir="runtime/learning",
+        )
+
+        with patch.object(trading_copilot, "run_child", side_effect=fake_run_child), patch.object(
+            trading_copilot, "emit", side_effect=SystemExit
+        ) as emit:
+            with self.assertRaises(SystemExit):
+                trading_copilot.run_paper_lifecycle(args)
+
+        self.assertEqual(
+            [Path(command[0]).stem for command in calls],
+            [
+                "paper_account_snapshot",
+                "paper_order_sync",
+                "paper_order_cancel",
+                "paper_account_snapshot",
+                "paper_order_sync",
+                "paper_protective_stop_plan",
+                "paper_take_profit_plan",
+                "paper_break_even_stop_plan",
+                "paper_account_snapshot",
+                "paper_order_sync",
+                "paper_event_ledger",
+                "paper_execution_review",
+            ],
+        )
+        self.assertNotIn("--execute", [part for command in calls for part in command])
+        payload = emit.call_args.args[0]
+        self.assertEqual(payload["workflow"], "paper-lifecycle")
+        self.assertEqual(payload["summary"]["paper_order_sync"]["filled"], 1)
+        self.assertIn("report/2026-05-26/paper-execution-review.json", payload["artifacts"])
+
+    def test_paper_lifecycle_applies_independent_execute_flags(self):
+        calls = []
+
+        def fake_run_child(command):
+            calls.append(command)
+            workflow = Path(command[0]).stem
+            payload = {"status": "success", "date": "2026-05-26", "summary": {}, "output": f"artifact/{workflow}.json"}
+            if workflow in {"paper_order_cancel", "paper_protective_stop_plan", "paper_take_profit_plan", "paper_break_even_stop_plan"}:
+                payload["dry_run"] = "--execute" not in command
+            return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
+
+        args = Namespace(
+            date="2026-05-26",
+            repo_root=str(ROOT),
+            paper_account_input=None,
+            paper_execution_config="config/paper_execution.local.json",
+            longbridge_cli="/usr/local/bin/longbridge",
+            execute_cancel=True,
+            execute_protective_stop=True,
+            execute_take_profit=False,
+            execute_break_even_stop=True,
+            append_lessons=True,
+            strategy_review=True,
+            expire_after_minutes=90,
+            stop_tif="gtc",
+            take_profit_tif="gtc",
+            break_even_tif="gtc",
+            exit_fraction=0.5,
+            learning_dir="runtime/learning",
+        )
+
+        with patch.object(trading_copilot, "run_child", side_effect=fake_run_child), patch.object(
+            trading_copilot, "emit", side_effect=SystemExit
+        ) as emit:
+            with self.assertRaises(SystemExit):
+                trading_copilot.run_paper_lifecycle(args)
+
+        by_workflow = {Path(command[0]).stem: command for command in calls}
+        self.assertIn("--execute", by_workflow["paper_order_cancel"])
+        self.assertIn("--execute", by_workflow["paper_protective_stop_plan"])
+        self.assertNotIn("--execute", by_workflow["paper_take_profit_plan"])
+        self.assertIn("--execute", by_workflow["paper_break_even_stop_plan"])
+        self.assertIn("--paper-execution-config", by_workflow["paper_order_cancel"])
+        self.assertIn("/usr/local/bin/longbridge", by_workflow["paper_order_cancel"])
+        self.assertIn("paper_learning_lessons", [Path(command[0]).stem for command in calls])
+        self.assertIn("paper_strategy_review", [Path(command[0]).stem for command in calls])
+        payload = emit.call_args.args[0]
+        self.assertTrue(payload["execute_requested"]["cancel"])
+        self.assertFalse(payload["execute_requested"]["take_profit"])
+
+    def test_paper_lifecycle_wrapper_smoke_with_fixture_account(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            date = "2026-05-26"
+            paper_dir = root / "runtime" / "paper" / date
+            report_dir = root / "report" / date
+            setup_dir = root / "knowledge" / "refined" / "setups"
+            paper_dir.mkdir(parents=True)
+            report_dir.mkdir(parents=True)
+            setup_dir.mkdir(parents=True)
+            (setup_dir / "breakout_pullback_continuation.md").write_text(
+                "# Breakout Pullback Continuation\n", encoding="utf-8"
+            )
+            intent_id = f"{date}:pre-market:MU:abc123"
+            order = {
+                "kind": "paper_order",
+                "intent_id": intent_id,
+                "source_signal_id": "sig-1",
+                "date": date,
+                "session": "pre-market",
+                "symbol": "MU",
+                "longbridge_symbol": "MU.US",
+                "side": "buy",
+                "order_type": "LO",
+                "quantity": 200,
+                "limit_price": 100,
+                "trigger_price": 100,
+                "initial_stop": 95,
+                "take_profit": 112,
+                "setup": "Breakout Pullback Continuation",
+                "setup_files": ["breakout_pullback_continuation.md"],
+                "remark": f"tca:{intent_id}",
+                "broker_order_id": "paper-o-1",
+                "submit_status": "submitted",
+                "submitted_at": "2026-05-26T13:30:00+00:00",
+            }
+            (paper_dir / "paper-orders.jsonl").write_text(json.dumps(order, ensure_ascii=False) + "\n", encoding="utf-8")
+            preview = {
+                "date": date,
+                "session": "pre-market",
+                "dry_run": True,
+                "orders": [
+                    {
+                        "signal_id": "sig-1",
+                        "symbol": "MU",
+                        "longbridge_symbol": "MU.US",
+                        "setup": "Breakout Pullback Continuation",
+                        "side": "buy",
+                        "order_type": "LO",
+                        "quantity": 200,
+                        "entry_price": 100,
+                        "limit_price": 100,
+                        "stop_price": 95,
+                        "take_profit": 112,
+                        "status": "ready",
+                    }
+                ],
+                "summary": {"ready": 1, "blocked": 0},
+            }
+            (report_dir / "paper-trade-preview.json").write_text(json.dumps(preview, ensure_ascii=False), encoding="utf-8")
+            fixture = {
+                "auth": {"account": {"account_channel": "lb_papertrading"}, "token": {"status": "valid"}},
+                "account": {"net_liquidation": 100000, "cash": 25000},
+                "positions": [{"symbol": "MU.US", "quantity": 200, "cost_price": 100.2, "market_value": 20400}],
+                "orders": [
+                    {
+                        "order_id": "paper-o-1",
+                        "symbol": "MU.US",
+                        "market": "US",
+                        "side": "buy",
+                        "quantity": 200,
+                        "price": 100,
+                        "status": "filled",
+                        "raw": {"remark": f"tca:{intent_id}"},
+                    }
+                ],
+                "executions": [
+                    {
+                        "order_id": "paper-o-1",
+                        "symbol": "MU.US",
+                        "market": "US",
+                        "side": "buy",
+                        "quantity": 200,
+                        "price": 100.2,
+                        "raw": {"order_id": "paper-o-1"},
+                    }
+                ],
+            }
+            fixture_path = root / "paper-fixture.json"
+            fixture_path.write_text(json.dumps(fixture, ensure_ascii=False), encoding="utf-8")
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "script" / "trading_copilot.py"),
+                    "paper-lifecycle",
+                    "--repo-root",
+                    str(root),
+                    "--date",
+                    date,
+                    "--paper-account-input",
+                    str(fixture_path),
+                ],
+                cwd=ROOT,
+                check=False,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, msg=proc.stderr or proc.stdout)
+            payload = json.loads(proc.stdout)
+            self.assertEqual(payload["workflow"], "paper-lifecycle")
+            self.assertTrue(payload["dry_run"])
+            self.assertEqual(payload["summary"]["paper_order_sync"]["filled"], 1)
+            self.assertEqual(payload["summary"]["paper_execution_review"]["filled"], 1)
+            self.assertTrue((paper_dir / "paper-account-snapshot.json").exists())
+            self.assertTrue((paper_dir / "paper-execution-state.json").exists())
+            self.assertTrue((report_dir / "paper-protective-stop-plan.json").exists())
+            self.assertTrue((report_dir / "paper-take-profit-plan.json").exists())
+            self.assertTrue((report_dir / "paper-break-even-stop-plan.json").exists())
+            self.assertTrue((report_dir / "paper-execution-review.json").exists())
+
     def test_intraday_paper_entry_uses_dedicated_script_and_execute_gate(self):
         calls = []
 

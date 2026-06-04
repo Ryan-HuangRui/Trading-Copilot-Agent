@@ -2446,6 +2446,224 @@ def run_paper_learning_lessons(args: argparse.Namespace) -> None:
     emit(response)
 
 
+def run_lifecycle_child(
+    command: list[str],
+    *,
+    workflow: str,
+    steps: dict[str, Any],
+    artifacts: list[str],
+    commands: dict[str, list[str]],
+) -> dict[str, Any]:
+    proc = run_child(command)
+    stdout = parse_json_output(proc.stdout)
+    commands[workflow] = command
+    if proc.returncode != 0:
+        raise RuntimeError(json.dumps(failed_response(workflow, command, proc), ensure_ascii=False))
+    payload = stdout or {}
+    steps[workflow] = payload
+    for key in ("output", "markdown", "events_journal"):
+        value = payload.get(key)
+        if value and value not in artifacts:
+            artifacts.append(value)
+    return payload
+
+
+def run_paper_lifecycle(args: argparse.Namespace) -> None:
+    steps: dict[str, Any] = {}
+    artifacts: list[str] = []
+    commands: dict[str, list[str]] = {}
+
+    def account_snapshot() -> dict[str, Any]:
+        command = [
+            "script/paper_account_snapshot.py",
+            "--date",
+            args.date,
+            "--repo-root",
+            args.repo_root,
+        ]
+        if args.paper_account_input:
+            command.extend(["--input", args.paper_account_input])
+        if args.longbridge_cli:
+            command.extend(["--longbridge-cli", args.longbridge_cli])
+        return run_lifecycle_child(command, workflow="paper_account_snapshot", steps=steps, artifacts=artifacts, commands=commands)
+
+    def order_sync() -> dict[str, Any]:
+        return run_lifecycle_child(
+            [
+                "script/paper_order_sync.py",
+                "--date",
+                args.date,
+                "--repo-root",
+                args.repo_root,
+            ],
+            workflow="paper_order_sync",
+            steps=steps,
+            artifacts=artifacts,
+            commands=commands,
+        )
+
+    def exit_plan(
+        *,
+        workflow: str,
+        script: str,
+        execute: bool,
+        extra: list[str],
+    ) -> dict[str, Any]:
+        command = [
+            script,
+            "--date",
+            args.date,
+            "--repo-root",
+            args.repo_root,
+            *extra,
+        ]
+        if args.longbridge_cli:
+            command.extend(["--longbridge-cli", args.longbridge_cli])
+        if args.paper_execution_config:
+            command.extend(["--paper-execution-config", args.paper_execution_config])
+        if execute:
+            command.append("--execute")
+        return run_lifecycle_child(command, workflow=workflow, steps=steps, artifacts=artifacts, commands=commands)
+
+    try:
+        account_snapshot()
+        first_sync = order_sync()
+        cancel = exit_plan(
+            workflow="paper_order_cancel",
+            script="script/paper_order_cancel.py",
+            execute=bool(args.execute_cancel),
+            extra=["--expire-after-minutes", str(args.expire_after_minutes)],
+        )
+        account_snapshot()
+        second_sync = order_sync()
+        stop = exit_plan(
+            workflow="paper_protective_stop_plan",
+            script="script/paper_protective_stop_plan.py",
+            execute=bool(args.execute_protective_stop),
+            extra=["--tif", args.stop_tif],
+        )
+        take_profit = exit_plan(
+            workflow="paper_take_profit_plan",
+            script="script/paper_take_profit_plan.py",
+            execute=bool(args.execute_take_profit),
+            extra=["--exit-fraction", str(args.exit_fraction), "--tif", args.take_profit_tif],
+        )
+        break_even = exit_plan(
+            workflow="paper_break_even_stop_plan",
+            script="script/paper_break_even_stop_plan.py",
+            execute=bool(args.execute_break_even_stop),
+            extra=["--tif", args.break_even_tif],
+        )
+        account_snapshot()
+        final_sync = order_sync()
+        ledger = run_lifecycle_child(
+            [
+                "script/paper_event_ledger.py",
+                "--date",
+                args.date,
+                "--repo-root",
+                args.repo_root,
+            ],
+            workflow="paper_event_ledger",
+            steps=steps,
+            artifacts=artifacts,
+            commands=commands,
+        )
+        review = run_lifecycle_child(
+            [
+                "script/paper_execution_review.py",
+                "--date",
+                args.date,
+                "--repo-root",
+                args.repo_root,
+            ],
+            workflow="paper_execution_review",
+            steps=steps,
+            artifacts=artifacts,
+            commands=commands,
+        )
+        lessons = None
+        if args.append_lessons:
+            lessons_command = [
+                "script/paper_learning_lessons.py",
+                "--date",
+                args.date,
+                "--repo-root",
+                args.repo_root,
+                "--learning-dir",
+                args.learning_dir,
+                "--append",
+            ]
+            lessons = run_lifecycle_child(
+                lessons_command,
+                workflow="paper_learning_lessons",
+                steps=steps,
+                artifacts=artifacts,
+                commands=commands,
+            )
+        strategy = None
+        if args.strategy_review:
+            strategy = run_lifecycle_child(
+                [
+                    "script/paper_strategy_review.py",
+                    "--repo-root",
+                    args.repo_root,
+                ],
+                workflow="paper_strategy_review",
+                steps=steps,
+                artifacts=artifacts,
+                commands=commands,
+            )
+    except RuntimeError as exc:
+        try:
+            payload = json.loads(str(exc))
+        except json.JSONDecodeError:
+            payload = {"status": "failed", "workflow": "paper-lifecycle", "reason": str(exc)}
+        emit(payload, 1)
+
+    summary = {
+        "paper_order_sync": (final_sync or second_sync or first_sync or {}).get("summary", {}),
+        "paper_order_cancel": (cancel or {}).get("summary", {}),
+        "paper_protective_stop_plan": (stop or {}).get("summary", {}),
+        "paper_take_profit_plan": (take_profit or {}).get("summary", {}),
+        "paper_break_even_stop_plan": (break_even or {}).get("summary", {}),
+        "paper_event_ledger": (ledger or {}).get("summary", {}),
+        "paper_execution_review": (review or {}).get("summary", {}),
+    }
+    if lessons:
+        summary["paper_learning_lessons"] = lessons.get("summary", {})
+    if strategy:
+        summary["paper_strategy_review"] = strategy.get("summary", {})
+
+    response = {
+        "status": "success",
+        "workflow": "paper-lifecycle",
+        "date": args.date,
+        "artifacts": artifacts,
+        "skipped": False,
+        "reason": None,
+        "dry_run": not any(
+            [
+                args.execute_cancel,
+                args.execute_protective_stop,
+                args.execute_take_profit,
+                args.execute_break_even_stop,
+            ]
+        ),
+        "execute_requested": {
+            "cancel": bool(args.execute_cancel),
+            "protective_stop": bool(args.execute_protective_stop),
+            "take_profit": bool(args.execute_take_profit),
+            "break_even_stop": bool(args.execute_break_even_stop),
+        },
+        "steps": steps,
+        "summary": summary,
+        "commands": commands,
+        "safety_note": "Paper lifecycle orchestration only; broker writes require per-action --execute flags and matching config gates.",
+    }
+    emit(response)
+
+
 def run_paper_order_cancel(args: argparse.Namespace) -> None:
     command = [
         "script/paper_order_cancel.py",
@@ -3199,6 +3417,26 @@ def build_parser() -> argparse.ArgumentParser:
     paper_lessons.add_argument("--append", action="store_true")
     paper_lessons.add_argument("--repo-root", default=str(ROOT))
     paper_lessons.set_defaults(func=run_paper_learning_lessons)
+
+    paper_lifecycle = sub.add_parser("paper-lifecycle", help="Run paper order lifecycle sync, exit planning, ledger, and review")
+    paper_lifecycle.add_argument("--date", required=True)
+    paper_lifecycle.add_argument("--paper-account-input")
+    paper_lifecycle.add_argument("--paper-execution-config")
+    paper_lifecycle.add_argument("--longbridge-cli")
+    paper_lifecycle.add_argument("--execute-cancel", action="store_true")
+    paper_lifecycle.add_argument("--execute-protective-stop", action="store_true")
+    paper_lifecycle.add_argument("--execute-take-profit", action="store_true")
+    paper_lifecycle.add_argument("--execute-break-even-stop", action="store_true")
+    paper_lifecycle.add_argument("--expire-after-minutes", type=int, default=90)
+    paper_lifecycle.add_argument("--stop-tif", default="gtc")
+    paper_lifecycle.add_argument("--take-profit-tif", default="gtc")
+    paper_lifecycle.add_argument("--break-even-tif", default="gtc")
+    paper_lifecycle.add_argument("--exit-fraction", type=float, default=0.5)
+    paper_lifecycle.add_argument("--append-lessons", action="store_true")
+    paper_lifecycle.add_argument("--strategy-review", action="store_true")
+    paper_lifecycle.add_argument("--learning-dir", default="runtime/learning")
+    paper_lifecycle.add_argument("--repo-root", default=str(ROOT))
+    paper_lifecycle.set_defaults(func=run_paper_lifecycle)
 
     paper_cancel = sub.add_parser("paper-order-cancel", help="Build a dry-run cancel plan for expired paper entry orders")
     paper_cancel.add_argument("--date", required=True)

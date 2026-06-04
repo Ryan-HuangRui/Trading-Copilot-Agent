@@ -171,6 +171,14 @@ This workflow must not submit broker orders.
 17. Run `python3 script/trading_copilot.py paper-trade-review --date <DATE> --session pre-market --append` only after paper executions exist and should be recorded.
 18. Treat paper results as execution feedback. Do not promote paper P/L directly into `knowledge/refined/`.
 
+For repeated lifecycle management, prefer the unified wrapper:
+
+```bash
+python3 script/trading_copilot.py paper-lifecycle --date <DATE>
+```
+
+Use `--execute-cancel`, `--execute-protective-stop`, `--execute-take-profit`, or `--execute-break-even-stop` only with the matching paper execution config gates enabled.
+
 ### Intraday Paper Entry
 
 Use this only for Phase 3 after reviewed monitor dry-run evidence exists.

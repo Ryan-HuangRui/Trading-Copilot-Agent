@@ -9,6 +9,11 @@ DATE_ARG="${1:-}"
 DATE="${DATE_ARG:-$(TZ=Asia/Shanghai date -d yesterday +%F)}"
 CONFIG="${TCA_PAPER_EXECUTION_CONFIG:-config/paper_execution.local.json}"
 CANCEL_EXECUTE="${TCA_PAPER_CANCEL_EXECUTE:-0}"
+STOP_EXECUTE="${TCA_PAPER_PROTECTIVE_STOP_EXECUTE:-0}"
+TP_EXECUTE="${TCA_PAPER_TAKE_PROFIT_EXECUTE:-0}"
+BE_EXECUTE="${TCA_PAPER_BREAK_EVEN_STOP_EXECUTE:-0}"
+APPEND_LESSONS="${TCA_PAPER_APPEND_LESSONS:-1}"
+STRATEGY_REVIEW="${TCA_PAPER_STRATEGY_REVIEW:-1}"
 LOG="$(mktemp)"
 MSG="$(mktemp)"
 STATUS="success"
@@ -35,33 +40,34 @@ run_step() {
   return "$rc"
 }
 
-run_cancel_step() {
-  if [ "$CANCEL_EXECUTE" = "1" ]; then
-    run_step python3 script/trading_copilot.py paper-order-cancel --date "$DATE" --paper-execution-config "$CONFIG" --execute
-  else
-    run_step python3 script/trading_copilot.py paper-order-cancel --date "$DATE" --paper-execution-config "$CONFIG"
-  fi
-}
+LIFECYCLE_CMD=(python3 script/trading_copilot.py paper-lifecycle --date "$DATE" --paper-execution-config "$CONFIG")
+if [ "$CANCEL_EXECUTE" = "1" ]; then
+  LIFECYCLE_CMD+=(--execute-cancel)
+fi
+if [ "$STOP_EXECUTE" = "1" ]; then
+  LIFECYCLE_CMD+=(--execute-protective-stop)
+fi
+if [ "$TP_EXECUTE" = "1" ]; then
+  LIFECYCLE_CMD+=(--execute-take-profit)
+fi
+if [ "$BE_EXECUTE" = "1" ]; then
+  LIFECYCLE_CMD+=(--execute-break-even-stop)
+fi
+if [ "$APPEND_LESSONS" = "1" ]; then
+  LIFECYCLE_CMD+=(--append-lessons)
+fi
+if [ "$STRATEGY_REVIEW" = "1" ]; then
+  LIFECYCLE_CMD+=(--strategy-review)
+fi
 
-run_step python3 script/trading_copilot.py paper-account-snapshot --date "$DATE" && \
-run_step python3 script/trading_copilot.py paper-order-sync --date "$DATE" && \
-run_cancel_step && \
-run_step python3 script/trading_copilot.py paper-account-snapshot --date "$DATE" && \
-run_step python3 script/trading_copilot.py paper-order-sync --date "$DATE" && \
-run_step python3 script/trading_copilot.py paper-protective-stop-plan --date "$DATE" && \
-run_step python3 script/trading_copilot.py paper-take-profit-plan --date "$DATE" && \
-run_step python3 script/trading_copilot.py paper-break-even-stop-plan --date "$DATE" && \
-run_step python3 script/trading_copilot.py paper-event-ledger --date "$DATE" && \
-run_step python3 script/trading_copilot.py paper-execution-review --date "$DATE" && \
-run_step python3 script/trading_copilot.py paper-learning-lessons --date "$DATE" --append && \
-run_step python3 script/trading_copilot.py paper-strategy-review
+run_step "${LIFECYCLE_CMD[@]}"
 
-python3 - "$DATE" "$STATUS" "$LOG" "$REPO" "$CANCEL_EXECUTE" >"$MSG" <<'PYMSG'
+python3 - "$DATE" "$STATUS" "$LOG" "$REPO" "$CANCEL_EXECUTE" "$STOP_EXECUTE" "$TP_EXECUTE" "$BE_EXECUTE" >"$MSG" <<'PYMSG'
 import json
 import sys
 from pathlib import Path
 
-date, status, log_path, repo_root, cancel_execute = sys.argv[1:6]
+date, status, log_path, repo_root, cancel_execute, stop_execute, tp_execute, be_execute = sys.argv[1:9]
 root = Path(repo_root)
 
 def load(path):
@@ -95,6 +101,9 @@ strategy = load(strategy_path) or {}
 print(f"模拟盘订单同步与复盘: {status}")
 print(f"date: {date}")
 print(f"cancel_execute_policy: {'enabled' if cancel_execute == '1' else 'dry_run'}")
+print(f"protective_stop_execute_policy: {'enabled' if stop_execute == '1' else 'dry_run'}")
+print(f"take_profit_execute_policy: {'enabled' if tp_execute == '1' else 'dry_run'}")
+print(f"break_even_stop_execute_policy: {'enabled' if be_execute == '1' else 'dry_run'}")
 for path in [state_path, cancel_path, stop_path, tp_path, be_path, ledger_path, review_path, lessons_path, strategy_path]:
     print(f"artifact: {path if path.exists() else 'missing'}")
 if state:
