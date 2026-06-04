@@ -58,8 +58,11 @@ def validation_result(repo_root: Path, date: str, session: str, signals: str | N
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
-    if args.session == "monitor" and args.execute:
+    broker_action = str(getattr(args, "broker_action", "entry_submit") or "entry_submit")
+    if args.session == "monitor" and args.execute and broker_action != "intraday_entry_submit":
         raise PermissionError("paper-trade-submit --session monitor is dry-run only; --execute is hard disabled")
+    if broker_action == "intraday_entry_submit" and args.session != "monitor":
+        raise PermissionError("intraday_entry_submit is only valid for monitor session")
     repo_root = Path(args.repo_root).resolve()
     preview_path = default_preview_path(repo_root, args.date, args.preview)
     account_path = default_account_snapshot_path(repo_root, args.date, args.account_snapshot)
@@ -112,7 +115,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     paper_execution_config=paper_execution_config,
                 )
             try:
-                submit_result = adapter.submit_limit_order(intent, execute=True)
+                submit_result = adapter.submit_limit_order(intent, execute=True, action=broker_action)
                 record = paper_order_record(
                     intent=intent,
                     submit_status="submitted",
@@ -141,6 +144,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "source_account_snapshot": str(account_path),
         "orders_journal": str(orders_path),
         "paper_execution_config": str(paper_execution_config_path),
+        "broker_action": broker_action,
         "execution_policy": paper_execution_policy(paper_execution_config),
         "broker_capabilities": broker_capability_matrix(paper_execution_config),
         "validation": validation,

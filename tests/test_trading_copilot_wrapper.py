@@ -230,6 +230,48 @@ class TradingCopilotWrapperTest(unittest.TestCase):
         self.assertTrue(payload["dry_run"])
         self.assertEqual(payload["artifacts"][-1], "report/2026-05-26/monitor-feishu-summary.md")
 
+    def test_intraday_paper_entry_uses_dedicated_script_and_execute_gate(self):
+        calls = []
+
+        def fake_run_child(command):
+            calls.append(command)
+            payload = {
+                "status": "success",
+                "date": "2026-05-26",
+                "output": "report/2026-05-26/intraday-paper-entry.json",
+                "dry_run": False,
+                "summary": {"submitted": 1},
+            }
+            return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
+
+        args = Namespace(
+            date="2026-05-26",
+            preview=None,
+            account_snapshot=None,
+            orders_journal=None,
+            signals=None,
+            output=None,
+            longbridge_cli=None,
+            require_validation=True,
+            execute=True,
+            max_daily_risk_pct=3.0,
+            max_daily_orders=1,
+            paper_execution_config=None,
+        )
+
+        with patch.object(trading_copilot, "run_child", side_effect=fake_run_child), patch.object(
+            trading_copilot, "emit", side_effect=SystemExit
+        ) as emit:
+            with self.assertRaises(SystemExit):
+                trading_copilot.run_intraday_paper_entry(args)
+
+        self.assertEqual(calls[0][0], "script/intraday_paper_entry.py")
+        self.assertIn("--execute", calls[0])
+        payload = emit.call_args.args[0]
+        self.assertEqual(payload["workflow"], "intraday-paper-entry")
+        self.assertFalse(payload["dry_run"])
+        self.assertEqual(payload["summary"]["submitted"], 1)
+
     def test_sync_longbridge_can_require_report_validation(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

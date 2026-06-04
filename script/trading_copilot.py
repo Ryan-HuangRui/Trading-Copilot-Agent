@@ -687,6 +687,49 @@ def run_intraday_dry_run(args: argparse.Namespace) -> None:
     emit(response)
 
 
+def run_intraday_paper_entry(args: argparse.Namespace) -> None:
+    command = [
+        "script/intraday_paper_entry.py",
+        "--date",
+        args.date,
+        "--max-daily-risk-pct",
+        str(args.max_daily_risk_pct),
+        "--max-daily-orders",
+        str(args.max_daily_orders),
+    ]
+    if args.preview:
+        command.extend(["--preview", args.preview])
+    if args.account_snapshot:
+        command.extend(["--account-snapshot", args.account_snapshot])
+    if args.orders_journal:
+        command.extend(["--orders-journal", args.orders_journal])
+    if args.signals:
+        command.extend(["--signals", args.signals])
+    if args.output:
+        command.extend(["--output", args.output])
+    if args.longbridge_cli:
+        command.extend(["--longbridge-cli", args.longbridge_cli])
+    if args.require_validation:
+        command.append("--require-validation")
+    if args.execute:
+        command.append("--execute")
+    if args.paper_execution_config:
+        command.extend(["--paper-execution-config", args.paper_execution_config])
+
+    proc = run_child(command)
+    stdout = parse_json_output(proc.stdout)
+    if proc.returncode != 0:
+        emit(failed_response("intraday-paper-entry", command, proc), 1)
+
+    response = base_response("intraday-paper-entry", command, stdout)
+    response["date"] = (stdout or {}).get("date") or args.date
+    response["artifacts"] = [(stdout or {}).get("output")] if (stdout or {}).get("output") else []
+    response["dry_run"] = bool((stdout or {}).get("dry_run", not args.execute))
+    response["summary"] = (stdout or {}).get("summary", {})
+    response["safety_note"] = (stdout or {}).get("safety_note")
+    emit(response)
+
+
 def run_agent_research_context(args: argparse.Namespace) -> None:
     symbols = normalize_symbols(args.symbol)
     output = resolve_repo_path(args.output) if args.output else ROOT / "report" / args.date / "agents" / "research-context.json"
@@ -2760,6 +2803,21 @@ def build_parser() -> argparse.ArgumentParser:
     intraday_dry_run.add_argument("--max-daily-orders", type=int, default=3)
     intraday_dry_run.add_argument("--learning-dir", default="runtime/learning")
     intraday_dry_run.set_defaults(func=run_intraday_dry_run)
+
+    intraday_entry = sub.add_parser("intraday-paper-entry", help="Run standalone gated intraday paper entry")
+    intraday_entry.add_argument("--date", required=True)
+    intraday_entry.add_argument("--preview")
+    intraday_entry.add_argument("--account-snapshot")
+    intraday_entry.add_argument("--orders-journal")
+    intraday_entry.add_argument("--signals")
+    intraday_entry.add_argument("--output")
+    intraday_entry.add_argument("--longbridge-cli")
+    intraday_entry.add_argument("--require-validation", action="store_true")
+    intraday_entry.add_argument("--execute", action="store_true")
+    intraday_entry.add_argument("--max-daily-risk-pct", type=float, default=3.0)
+    intraday_entry.add_argument("--max-daily-orders", type=int, default=1)
+    intraday_entry.add_argument("--paper-execution-config")
+    intraday_entry.set_defaults(func=run_intraday_paper_entry)
 
     agent_context = sub.add_parser("agent-research-context", help="Write a Phase 0 agent research context skeleton")
     agent_context.add_argument("--date", required=True)

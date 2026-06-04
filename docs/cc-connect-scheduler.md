@@ -64,7 +64,7 @@ Update the configured cc connect prompts so they require the new artifacts and g
 - `promote-lesson --apply` must not be scheduled automatically; run it only after human approval of a specific `pattern_id`.
 - Paper execution must be scheduled as separate execution tasks. Do not add broker write operations to the pre-market or post-market report-generation tasks.
 - Initial paper rollout should execute entries only. Keep paper cancel, protective-stop, and TP1 workflows in dry-run mode until exit-management safety is explicitly upgraded.
-- Monitor paper flow is dry-run only. `paper-trade-submit --session monitor --execute` is hard-disabled even if local config contains `allow_intraday_entry_submit=true`.
+- Monitor paper flow is dry-run only in cc connect. `paper-trade-submit --session monitor --execute` is hard-disabled even if local config contains `allow_intraday_entry_submit=true`; any Phase 3 intraday paper entry must be a separate reviewed Codex task using `intraday-paper-entry`.
 
 ### 3. Update Failure Policy
 
@@ -119,7 +119,7 @@ Confirm paper execution config stays explicit and defaults to no broker writes. 
 
 Only enable the specific action gate on the deployment host after the dry-run workflow is accepted. Do not use environment variables as the paper execution gate.
 
-`allow_intraday_entry_submit` is reserved for a future intraday execution contract. The current monitor session supports sidecar generation, validation, preview, submit dry-run, and Feishu summary only.
+`allow_intraday_entry_submit` belongs to the standalone `intraday-paper-entry` contract. The monitor session itself supports sidecar generation, validation, preview, submit dry-run, and Feishu summary only.
 
 ### 5. Server Acceptance Check
 

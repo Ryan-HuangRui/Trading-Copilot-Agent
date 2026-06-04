@@ -209,7 +209,8 @@ Use a config file as the paper broker-write policy. The tracked `config/paper_ex
 Interpretation:
 
 - If `broker_writes_enabled=true` and `allow_entry_submit=true`, the scheduler may run `paper-trade-submit --execute` after the dry-run artifact has no blocking errors.
-- `allow_intraday_entry_submit` is reserved for a future contract. `paper-trade-submit --session monitor --execute` is hard-disabled even if a local config sets this key to true.
+- If `broker_writes_enabled=true` and `allow_intraday_entry_submit=true`, a reviewed Codex intraday task may run `intraday-paper-entry --execute` after the monitor dry-run artifact has no blocking errors.
+- `paper-trade-submit --session monitor --execute` is still hard-disabled even if a local config sets `allow_intraday_entry_submit=true`; use `intraday-paper-entry` for the dedicated Phase 3 path.
 - If `allow_protective_stop=false` and `allow_take_profit=false`, the scheduler must run protective-stop and TP1 workflows without `--execute`.
 - If `allow_cancel=false`, the scheduler must run cancel planning without `--execute`.
 - If `TCA_PAPER_CANCEL_EXECUTE` is unset or not `1`, the provided cc-connect sync script keeps `paper-order-cancel` dry-run even when the local config enables cancellation.

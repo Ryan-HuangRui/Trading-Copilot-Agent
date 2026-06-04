@@ -213,6 +213,30 @@ Required behavior:
 - Output artifacts are review and notification inputs only.
 - This workflow must not submit broker orders.
 
+## intraday-paper-entry
+
+Purpose: standalone gated paper-entry workflow for monitor-session candidates after the dry-run loop has been reviewed.
+
+Canonical dry-run command:
+
+```bash
+python3 script/trading_copilot.py intraday-paper-entry --date <DATE> --require-validation
+```
+
+Canonical execute command:
+
+```bash
+python3 script/trading_copilot.py intraday-paper-entry --date <DATE> --require-validation --execute --paper-execution-config config/paper_execution.local.json
+```
+
+Required behavior:
+
+- This is the only supported Phase 3 intraday paper-entry execute wrapper.
+- It fixes the submission session to `monitor` and broker action to `intraday_entry_submit`.
+- Execute requires `broker_writes_enabled=true`, `allow_intraday_entry_submit=true`, `--execute`, and the Longbridge paper account channel `lb_papertrading`.
+- Plain `paper-trade-submit --session monitor --execute` remains hard-rejected.
+- The workflow must write `report/<DATE>/intraday-paper-entry.json` by default.
+
 ## agent-research-context
 
 Purpose: create the TradingAgents-style research context envelope used by later deterministic data tools and role prompts.

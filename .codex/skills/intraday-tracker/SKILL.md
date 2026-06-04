@@ -14,6 +14,7 @@ Use this skill when the user asks for intraday monitoring, pre-market plan follo
 - Do not output deterministic buy/sell instructions.
 - Use scenarios, trigger state, invalidation state, blocked reasons, and `NO TRADE` when quality is insufficient.
 - Paper dry-run and paper execution workflows remain separate `trading_copilot.py` commands.
+- Plain `paper-trade-submit --session monitor --execute` remains forbidden.
 
 ## Phase 1 Command
 
@@ -35,6 +36,23 @@ It writes:
 - `report/<DATE>/intraday.md`
 - `runtime/intraday/<DATE>/state.json`
 - `runtime/intraday/<DATE>/events.jsonl`
+
+## Phase 2 Dry-Run Command
+
+```bash
+python3 script/trading_copilot.py intraday-dry-run --date <DATE>
+```
+
+This extracts monitor signals, validates monitor plans, builds paper previews, prepares a paper submit dry-run, and writes a Feishu-ready monitor summary. It must not pass `--execute`.
+
+## Phase 3 Dedicated Paper Entry
+
+```bash
+python3 script/trading_copilot.py intraday-paper-entry --date <DATE> --require-validation
+python3 script/trading_copilot.py intraday-paper-entry --date <DATE> --require-validation --execute --paper-execution-config config/paper_execution.local.json
+```
+
+Only use `--execute` after reviewed dry-run evidence exists and `config/paper_execution.local.json` enables both `broker_writes_enabled=true` and `allow_intraday_entry_submit=true`.
 
 ## Output Use
 

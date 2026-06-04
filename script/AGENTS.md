@@ -19,6 +19,7 @@
 - `paper_risk_guard.py`: deterministic execution-safety checks for paper order intents.
 - `paper_trade_preview.py`: converts validated Trade Plan Cards into dry-run paper order previews.
 - `paper_trade_submit.py`: prepares controlled paper submissions from previews and risk guard output; defaults to dry-run and only submits through the gated paper order adapter when execution gates are explicitly enabled.
+- `intraday_paper_entry.py`: standalone monitor-session paper entry path using the separate `intraday_entry_submit` gate; keep plain `paper-trade-submit --session monitor --execute` hard-disabled.
 - `paper_order_recover.py`: recovers a broker-submitted paper entry order into `paper-orders.jsonl` from Longbridge order detail without submitting, cancelling, or replacing broker orders.
 - `paper_order_sync.py`: read-only paper order state sync from entry/stop/TP1 journals and paper account snapshots.
 - `paper_event_ledger.py`: read-only projection from paper journals/execution state into `runtime/journal/events.jsonl`.
@@ -60,6 +61,8 @@
 - Build paper order previews: `python3 script/trading_copilot.py paper-trade-preview --date 2026-05-06 --session pre-market --require-validation`.
 - Prepare dry-run paper submissions: `python3 script/trading_copilot.py paper-trade-submit --date 2026-05-06 --session pre-market --require-validation`.
 - Submit guarded paper entry orders after enabling `paper_execution.broker_writes_enabled=true` and `paper_execution.allow_entry_submit=true` in `config/paper_execution.json`: `python3 script/trading_copilot.py paper-trade-submit --date 2026-05-06 --session pre-market --require-validation --execute`.
+- Run intraday paper entry dry-run: `python3 script/trading_copilot.py intraday-paper-entry --date 2026-05-06 --require-validation`.
+- Submit guarded intraday paper entry orders only after enabling `paper_execution.allow_intraday_entry_submit=true`: `python3 script/trading_copilot.py intraday-paper-entry --date 2026-05-06 --require-validation --execute`.
 - Recover an already-submitted paper entry order into the local journal: `python3 script/trading_copilot.py paper-order-recover --date 2026-05-06 --session pre-market --broker-order-id <ORDER_ID> --append`.
 - Sync paper order state: `python3 script/trading_copilot.py paper-order-sync --date 2026-05-06`.
 - Project paper events: `python3 script/trading_copilot.py paper-event-ledger --date 2026-05-06`.
@@ -97,6 +100,7 @@
 - Preserve provider rate limits unless the data provider contract is intentionally changed. Longbridge uses `config/longbridge_rate_limit_state.json`; Twelve Data fallback uses `config/rate_limit_state.json`.
 - Keep output writes under ignored runtime paths (`raw_data/`, `report/`, `config/rate_limit_state.json`, `config/longbridge_rate_limit_state.json`) unless the task is metadata import.
 - Intraday tracker events are notification candidates only. Do not treat `runtime/intraday/<DATE>/events.jsonl` as execution instructions.
+- Do not enable `paper-trade-submit --session monitor --execute`; use the dedicated `intraday-paper-entry` wrapper for the Phase 3 paper-only path.
 - Longbridge account workflows are read-only. Paper-trading workflows may inspect paper orders/executions and produce dry-run previews/submissions. Broker writes are allowed only through `longbridge_paper_order_adapter.py`, only for paper accounts, and only when the explicit execution gates are enabled.
 - If adding a script that fetches market data, reuse `build_market_data_client()` so Longbridge remains primary and Twelve Data remains fallback.
 - S&P 500 universe fetches may use standard-library HTTP, but per-symbol market-data screening must still use the shared market-data provider stack.

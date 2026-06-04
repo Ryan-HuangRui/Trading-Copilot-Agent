@@ -19,6 +19,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
 
 ACTION_CONFIG_KEYS = {
     "entry_submit": "allow_entry_submit",
+    "intraday_entry_submit": "allow_intraday_entry_submit",
     "cancel": "allow_cancel",
     "protective_stop": "allow_protective_stop",
     "take_profit": "allow_take_profit",
@@ -33,6 +34,15 @@ SUPPORTED_BROKER_ACTIONS: tuple[dict[str, Any], ...] = (
         "side": "buy",
         "workflow": "paper-trade-submit",
         "maturity": "initial_rollout",
+    },
+    {
+        "action": "intraday_entry_submit",
+        "label": "Intraday monitor entry limit buy",
+        "config_key": "allow_intraday_entry_submit",
+        "order_type": "LO",
+        "side": "buy",
+        "workflow": "intraday-paper-entry",
+        "maturity": "guarded_phase3",
     },
     {
         "action": "cancel",
@@ -83,12 +93,6 @@ UNSUPPORTED_BROKER_ACTIONS: tuple[dict[str, Any], ...] = (
         "action": "short_entry",
         "label": "Short entry",
         "reason": "risk model and order lifecycle only support long paper entries",
-    },
-    {
-        "action": "intraday_entry_submit",
-        "label": "Intraday monitor entry submit",
-        "reason": "monitor session is dry-run only; --execute is hard disabled regardless of config",
-        "execution_status": "hard_disabled",
     },
 )
 

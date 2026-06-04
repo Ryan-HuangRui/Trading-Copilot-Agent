@@ -87,9 +87,12 @@ class LongbridgePaperOrderAdapter:
         intent: dict[str, Any],
         *,
         execute: bool,
+        action: str = "entry_submit",
     ) -> dict[str, Any]:
+        if action not in {"entry_submit", "intraday_entry_submit"}:
+            raise ValueError(f"unsupported limit order action: {action}")
         self.validate_limit_buy_intent(intent)
-        self.ensure_write_allowed(execute=execute, action="entry_submit")
+        self.ensure_write_allowed(execute=execute, action=action)
         account_channel = self.assert_paper_account()
         quantity = str(int(intent["quantity"]))
         price = format_decimal(float(intent["limit_price"]))
