@@ -13,8 +13,16 @@ STATE="${TCA_INTRADAY_MONITOR_STATE:-config/monitor_state.json}"
 STATUS="success"
 LOG="$(mktemp)"
 RESULT="$(mktemp)"
+TEMP_STATE=""
 
 cd "$REPO" || exit 1
+
+cleanup() {
+  rm -f "$LOG" "$RESULT"
+  if [ -n "$TEMP_STATE" ]; then
+    rm -f "$TEMP_STATE"
+  fi
+}
 
 run_step() {
   echo >>"$LOG"
@@ -64,7 +72,7 @@ payload = {
 Path(result_path).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 PY
   cat "$RESULT"
-  rm -f "$LOG" "$RESULT"
+  cleanup
   exit 0
 fi
 
@@ -120,13 +128,83 @@ payload = {
 Path(result_path).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 PY
     cat "$RESULT"
-    rm -f "$LOG" "$RESULT"
+    cleanup
     exit 0
   fi
 fi
 
 if [ "${TCA_INTRADAY_SKIP_MONITOR:-0}" != "1" ]; then
-  run_step python3 script/trading_copilot.py monitor-brief --state "$STATE" --interval "$INTERVAL"
+  EFFECTIVE_STATE="$STATE"
+  if [ "${TCA_INTRADAY_AUTO_UNIVERSE:-1}" != "0" ]; then
+    TEMP_STATE="$(mktemp)"
+    if python3 - "$REPO" "$DATE" "$TOP_N" "$STATE" "$TEMP_STATE" >>"$LOG" 2>&1 <<'PY'
+import json
+import sys
+from pathlib import Path
+
+
+def read_json(path: Path, default: dict) -> dict:
+    if not path.exists():
+        return dict(default)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"{path}: expected JSON object")
+    return payload
+
+
+def normalize(value: object) -> str:
+    symbol = str(value or "").strip().upper()
+    if "." in symbol:
+        symbol = symbol.split(".", 1)[0]
+    return symbol
+
+
+def add_symbol(symbols: list[str], value: object) -> None:
+    symbol = normalize(value)
+    if symbol and symbol not in symbols:
+        symbols.append(symbol)
+
+
+repo = Path(sys.argv[1])
+date = sys.argv[2]
+top_n = int(sys.argv[3])
+state_path = Path(sys.argv[4])
+if not state_path.is_absolute():
+    state_path = repo / state_path
+output_path = Path(sys.argv[5])
+
+base = read_json(state_path, {"symbols": []})
+symbols: list[str] = []
+
+pre_market = read_json(repo / "report" / date / "pre-market-signals.json", {"signals": []})
+for signal in pre_market.get("signals") or []:
+    if isinstance(signal, dict):
+        add_symbol(symbols, signal.get("symbol"))
+    if len(symbols) >= top_n:
+        break
+
+manual = read_json(repo / "config" / "intraday_watchlist.json", {"symbols": []})
+for item in manual.get("symbols") or manual.get("watchlist") or []:
+    add_symbol(symbols, item.get("symbol") if isinstance(item, dict) else item)
+
+for item in base.get("symbols") or []:
+    add_symbol(symbols, item.get("symbol") if isinstance(item, dict) else item)
+
+payload = dict(base)
+payload["symbols"] = symbols
+output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+print("effective monitor symbols:", ", ".join(symbols) if symbols else "none")
+PY
+    then
+      EFFECTIVE_STATE="$TEMP_STATE"
+    else
+      STATUS="failed"
+      echo "step failed building effective monitor state" >>"$LOG"
+    fi
+  fi
+  if [ "$STATUS" = "success" ]; then
+    run_step python3 script/trading_copilot.py monitor-brief --state "$EFFECTIVE_STATE" --interval "$INTERVAL"
+  fi
 fi
 
 if [ "$STATUS" = "success" ]; then
@@ -180,5 +258,5 @@ if [ "$STATUS" != "success" ]; then
   tail -120 "$LOG"
 fi
 
-rm -f "$LOG" "$RESULT"
+cleanup
 [ "$STATUS" = "success" ]

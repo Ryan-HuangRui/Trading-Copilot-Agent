@@ -46,7 +46,7 @@ bash ops/cc-connect/tca-intraday-notify.sh <DATE>
 
 `intraday_event_notify.py` builds `report/<DATE>/intraday-notification.md` only when unsent `notify=true` events exist. It records sent ids in `runtime/intraday/<DATE>/sent-events.json`.
 
-`tca-intraday-notify.sh` can be called by a Codex scheduled task. It runs monitor/tracker first unless `TCA_INTRADAY_SKIP_MONITOR=1`, then sends the generated notification through cc-connect.
+`tca-intraday-notify.sh` can be called by a Codex scheduled task. It builds a temporary monitor state from pre-market topN, `config/intraday_watchlist.json`, and `config/monitor_state.json`, then runs monitor/tracker first unless `TCA_INTRADAY_SKIP_MONITOR=1`, and sends the generated notification through cc-connect only when unsent notify events exist.
 
 ## Phase 2 Dry-Run Command
 
