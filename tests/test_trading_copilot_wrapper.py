@@ -292,6 +292,46 @@ class TradingCopilotWrapperTest(unittest.TestCase):
         self.assertEqual(payload["submit_summary"], {"ready": 1})
         self.assertEqual(payload["artifacts"][-1], "report/2026-05-26/monitor-feishu-summary.md")
 
+    def test_intraday_review_append_wraps_markdown_appender(self):
+        calls = []
+
+        def fake_run_child(command):
+            calls.append(command)
+            payload = {
+                "status": "success",
+                "workflow": "intraday-review-append",
+                "date": "2026-05-26",
+                "markdown": "report/2026-05-26/intraday.md",
+                "signals": "report/2026-05-26/monitor-signals.json",
+                "summary": {"signals": 2, "conditional_executable": 1},
+            }
+            return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
+
+        args = Namespace(
+            date="2026-05-26",
+            signals="report/2026-05-26/monitor-signals.json",
+            submission="report/2026-05-26/paper-trade-submission.json",
+            context="report/2026-05-26/intraday-opportunity-context.json",
+            markdown=None,
+            timezone="America/New_York",
+            as_of=None,
+            max_notes_chars=120,
+        )
+
+        with patch.object(trading_copilot, "run_child", side_effect=fake_run_child), patch.object(
+            trading_copilot, "emit", side_effect=SystemExit
+        ) as emit:
+            with self.assertRaises(SystemExit):
+                trading_copilot.run_intraday_review_append(args)
+
+        self.assertEqual(calls[0][0], "script/intraday_review_append.py")
+        self.assertEqual(calls[0][calls[0].index("--signals") + 1], "report/2026-05-26/monitor-signals.json")
+        self.assertEqual(calls[0][calls[0].index("--submission") + 1], "report/2026-05-26/paper-trade-submission.json")
+        payload = emit.call_args.args[0]
+        self.assertEqual(payload["workflow"], "intraday-review-append")
+        self.assertEqual(payload["artifacts"], ["report/2026-05-26/intraday.md"])
+        self.assertEqual(payload["summary"]["conditional_executable"], 1)
+
     def test_paper_lifecycle_chains_sync_exit_plans_and_review(self):
         calls = []
 

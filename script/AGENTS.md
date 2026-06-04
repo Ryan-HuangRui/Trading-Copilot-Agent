@@ -11,6 +11,7 @@
 - `monitor_scan.py`: 5m watchlist/position scan and `report/latest-monitor.json` writer.
 - `intraday_tracker.py`: read-only pre-market plan tracker that appends `report/<DATE>/intraday.md` and updates `runtime/intraday/<DATE>/state.json` / `events.jsonl`.
 - `intraday_event_notify.py`: builds a Feishu-ready message from unsent intraday tracker events and records sent event ids.
+- `intraday_review_append.py`: appends Codex-reviewed monitor sidecar decisions and dry-run counts into `report/<DATE>/intraday.md`; it must not call broker APIs.
 - `longbridge_cli_adapter.py`: read-only Longbridge CLI guard. Do not add order/write commands.
 - `longbridge_account_snapshot.py`: read-only account/position snapshot writer under `runtime/account/`.
 - `longbridge_paper_trade_adapter.py`: Longbridge paper-account guard and read-only paper order/execution fetcher.
@@ -57,6 +58,7 @@
 - Run unified post-market workflow: `python3 script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day --include-journal-signals --include-position-symbols`.
 - Run unified monitor workflow: `python3 script/trading_copilot.py monitor-brief --state config/monitor_state.json --interval 5min`.
 - Run read-only intraday tracker: `python3 script/trading_copilot.py intraday-tracker --date 2026-05-06 --top-n 5`.
+- Append Codex intraday review into the daily Markdown log: `python3 script/trading_copilot.py intraday-review-append --date 2026-05-06`.
 - Run read-only account snapshot: `python3 script/trading_copilot.py account-snapshot --date 2026-05-06`.
 - Run read-only paper account snapshot: `python3 script/trading_copilot.py paper-account-snapshot --date 2026-05-06`.
 - Build paper order previews: `python3 script/trading_copilot.py paper-trade-preview --date 2026-05-06 --session pre-market --require-validation`.

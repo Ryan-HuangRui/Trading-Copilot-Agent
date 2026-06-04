@@ -439,12 +439,14 @@ python3 script/trading_copilot.py intraday-opportunity-context --date <DATE>
 python3 script/trading_copilot.py validate-trade-plan --session monitor --date <DATE> --signals report/<DATE>/monitor-signals.json
 python3 script/trading_copilot.py paper-account-snapshot --date <DATE>
 python3 script/trading_copilot.py intraday-dry-run --date <DATE> --signals report/<DATE>/monitor-signals.json
+python3 script/trading_copilot.py intraday-review-append --date <DATE> --signals report/<DATE>/monitor-signals.json --submission report/<DATE>/paper-trade-submission.json --context report/<DATE>/intraday-opportunity-context.json
 ```
 
 If Codex writes a reviewed `report/<DATE>/monitor-signals.json` from `intraday-opportunity-context`, use:
 
 ```bash
 python3 script/trading_copilot.py intraday-dry-run --date <DATE> --signals report/<DATE>/monitor-signals.json
+python3 script/trading_copilot.py intraday-review-append --date <DATE> --signals report/<DATE>/monitor-signals.json --submission report/<DATE>/paper-trade-submission.json --context report/<DATE>/intraday-opportunity-context.json
 ```
 
 Optional guarded intraday paper entry:

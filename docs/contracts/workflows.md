@@ -197,6 +197,7 @@ Canonical command:
 ```bash
 python3 script/trading_copilot.py intraday-dry-run --date <DATE>
 python3 script/trading_copilot.py intraday-dry-run --date <DATE> --signals report/<DATE>/monitor-signals.json
+python3 script/trading_copilot.py intraday-review-append --date <DATE> --signals report/<DATE>/monitor-signals.json --submission report/<DATE>/paper-trade-submission.json --context report/<DATE>/intraday-opportunity-context.json
 ```
 
 Deterministic sequence:
@@ -207,12 +208,14 @@ Deterministic sequence:
 4. `paper_trade_preview.py --session monitor --require-validation`
 5. `paper_trade_submit.py --session monitor --require-validation`
 6. `feishu_summary.py --session monitor`
+7. `intraday_review_append.py` appends the Codex sidecar decision summary and dry-run counts to `report/<DATE>/intraday.md`
 
 Required behavior:
 
 - The wrapper must not pass `--execute` to any child command.
 - `paper_trade_submit.py` remains dry-run for monitor session.
 - A `conditional_executable` monitor sidecar must come from Codex/LLM review of `intraday-opportunity-context`; deterministic extraction must keep `watch_only`.
+- After a Codex-reviewed sidecar exists, the daily intraday Markdown should include the review summary so each poll preserves why candidates stayed `watch_only`, became `no_trade`, or became `conditional_executable`.
 - Output artifacts are review and notification inputs only.
 - This workflow must not submit broker orders.
 

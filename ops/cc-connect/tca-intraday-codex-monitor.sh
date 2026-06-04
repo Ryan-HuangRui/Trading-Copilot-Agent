@@ -116,7 +116,9 @@ PROMPT="你是 Trading-Copilot-Agent 的 cc-connect 盘中 Codex 盯盘定时任
   python3 script/trading_copilot.py validate-trade-plan --session monitor --date $DATE --signals report/$DATE/monitor-signals.json
   python3 script/trading_copilot.py paper-account-snapshot --date $DATE
   python3 script/trading_copilot.py intraday-dry-run --date $DATE --signals report/$DATE/monitor-signals.json
-- dry-run 结果只写产物，不发送下单成功消息。
+- dry-run 后必须追加本轮 Codex 评审到当天盘中报告：
+  python3 script/trading_copilot.py intraday-review-append --date $DATE --signals report/$DATE/monitor-signals.json --submission report/$DATE/paper-trade-submission.json --context report/$DATE/intraday-opportunity-context.json
+- dry-run 结果只写产物和 intraday.md 评审段落，不发送下单成功消息。
 
 盘中模拟盘入场执行开关：TCA_INTRADAY_PAPER_EXECUTE=$ENABLE_PAPER_EXECUTE。
 - 只有 dry-run summary.ready > 0 且该值为 1 时，才运行：

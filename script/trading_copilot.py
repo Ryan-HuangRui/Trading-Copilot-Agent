@@ -696,6 +696,41 @@ def run_intraday_dry_run(args: argparse.Namespace) -> None:
     emit(response)
 
 
+def run_intraday_review_append(args: argparse.Namespace) -> None:
+    command = [
+        "script/intraday_review_append.py",
+        "--date",
+        args.date,
+        "--timezone",
+        args.timezone,
+        "--max-notes-chars",
+        str(args.max_notes_chars),
+    ]
+    if args.signals:
+        command.extend(["--signals", args.signals])
+    if args.submission:
+        command.extend(["--submission", args.submission])
+    if args.context:
+        command.extend(["--context", args.context])
+    if args.markdown:
+        command.extend(["--markdown", args.markdown])
+    if args.as_of:
+        command.extend(["--as-of", args.as_of])
+
+    proc = run_child(command)
+    stdout = parse_json_output(proc.stdout)
+    if proc.returncode != 0:
+        emit(failed_response("intraday-review-append", command, proc), 1)
+    response = base_response("intraday-review-append", command, stdout)
+    response["date"] = (stdout or {}).get("date") or args.date
+    response["artifacts"] = [(stdout or {}).get("markdown")] if (stdout or {}).get("markdown") else []
+    response["signals"] = (stdout or {}).get("signals")
+    response["summary"] = (stdout or {}).get("summary", {})
+    response["skipped"] = (stdout or {}).get("status") == "skipped"
+    response["reason"] = (stdout or {}).get("reason")
+    emit(response)
+
+
 def run_intraday_opportunity_context(args: argparse.Namespace) -> None:
     command = [
         "script/intraday_opportunity_context.py",
@@ -3249,6 +3284,17 @@ def build_parser() -> argparse.ArgumentParser:
     intraday_dry_run.add_argument("--max-daily-orders", type=int, default=3)
     intraday_dry_run.add_argument("--learning-dir", default="runtime/learning")
     intraday_dry_run.set_defaults(func=run_intraday_dry_run)
+
+    intraday_review = sub.add_parser("intraday-review-append", help="Append Codex intraday opportunity review into intraday.md")
+    intraday_review.add_argument("--date", required=True)
+    intraday_review.add_argument("--signals")
+    intraday_review.add_argument("--submission")
+    intraday_review.add_argument("--context")
+    intraday_review.add_argument("--markdown")
+    intraday_review.add_argument("--timezone", default="America/New_York")
+    intraday_review.add_argument("--as-of")
+    intraday_review.add_argument("--max-notes-chars", type=int, default=160)
+    intraday_review.set_defaults(func=run_intraday_review_append)
 
     intraday_context = sub.add_parser("intraday-opportunity-context", help="Build Codex review context for intraday opportunities")
     intraday_context.add_argument("--date", required=True)

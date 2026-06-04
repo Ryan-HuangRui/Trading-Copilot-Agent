@@ -52,9 +52,12 @@ bash ops/cc-connect/tca-intraday-notify.sh <DATE>
 
 ```bash
 python3 script/trading_copilot.py intraday-dry-run --date <DATE>
+python3 script/trading_copilot.py intraday-review-append --date <DATE>
 ```
 
 This extracts monitor signals, validates monitor plans, builds paper previews, prepares a paper submit dry-run, and writes a Feishu-ready monitor summary. It must not pass `--execute`.
+
+After Codex writes or reviews `report/<DATE>/monitor-signals.json`, append the review summary into `report/<DATE>/intraday.md` with `intraday-review-append` so the daily intraday report includes both state tracking and the reason candidates stayed `watch_only` or became `conditional_executable`.
 
 ## Phase 3 Dedicated Paper Entry
 
