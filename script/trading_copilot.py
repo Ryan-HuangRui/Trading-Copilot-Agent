@@ -2407,6 +2407,8 @@ def run_paper_event_ledger(args: argparse.Namespace) -> None:
         command.extend(["--take-profit-journal", args.take_profit_journal])
     if args.exits_journal:
         command.extend(["--exits-journal", args.exits_journal])
+    if args.replace_journal:
+        command.extend(["--replace-journal", args.replace_journal])
     if args.execution_state:
         command.extend(["--execution-state", args.execution_state])
     if args.events_journal:
@@ -3792,6 +3794,7 @@ def build_parser() -> argparse.ArgumentParser:
     paper_events.add_argument("--stops-journal")
     paper_events.add_argument("--take-profit-journal")
     paper_events.add_argument("--exits-journal")
+    paper_events.add_argument("--replace-journal")
     paper_events.add_argument("--execution-state")
     paper_events.add_argument("--events-journal")
     paper_events.add_argument("--output")

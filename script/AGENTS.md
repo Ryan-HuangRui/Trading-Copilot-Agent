@@ -24,7 +24,7 @@
 - `intraday_paper_entry.py`: standalone monitor-session paper entry path using the separate `intraday_entry_submit` gate; keep plain `paper-trade-submit --session monitor --execute` hard-disabled.
 - `paper_order_recover.py`: recovers a broker-submitted paper entry order into `paper-orders.jsonl` from Longbridge order detail without submitting, cancelling, or replacing broker orders.
 - `paper_order_sync.py`: read-only paper order state sync from entry/stop/TP1 journals and paper account snapshots.
-- `paper_event_ledger.py`: read-only projection from paper journals/execution state into `runtime/journal/events.jsonl`.
+- `paper_event_ledger.py`: read-only projection from paper entry, replace, stop, TP1, exit journals and execution state into `runtime/journal/events.jsonl`.
 - `paper_execution_review.py`: deterministic paper execution quality review that writes JSON/Markdown and candidate lessons without editing refined rules.
 - `paper_execution_config.py`: paper broker-write policy loader plus Longbridge paper capability matrix. Keep this as the source of truth for enabled, dry-run-only, and unsupported paper actions.
 - `paper_learning_lessons.py`: extracts paper execution candidate lessons into `runtime/learning/daily_lessons.jsonl` without promoting rules.

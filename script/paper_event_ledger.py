@@ -48,6 +48,10 @@ def default_exits_path(repo_root: Path, date: str, explicit_path: str | None) ->
     return resolve_path(repo_root, explicit_path, repo_root / "runtime" / "paper" / date / "paper-exit-orders.jsonl")
 
 
+def default_replace_path(repo_root: Path, date: str, explicit_path: str | None) -> Path:
+    return resolve_path(repo_root, explicit_path, repo_root / "runtime" / "paper" / date / "paper-replace-orders.jsonl")
+
+
 def default_state_path(repo_root: Path, date: str, explicit_path: str | None) -> Path:
     return resolve_path(repo_root, explicit_path, repo_root / "runtime" / "paper" / date / "paper-execution-state.json")
 
@@ -170,6 +174,40 @@ def submitted_events(date: str, records: list[dict[str, Any]], *, event_type: st
     return events
 
 
+def replace_events(date: str, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    for record in records:
+        current_intent_id = intent_id(record)
+        if not current_intent_id:
+            continue
+        payload = {
+            "intent_id": current_intent_id,
+            "source_signal_id": record.get("source_signal_id"),
+            "broker_order_id": broker_id(record) or None,
+            "symbol": record.get("symbol"),
+            "longbridge_symbol": record.get("longbridge_symbol"),
+            "previous_quantity": record.get("previous_quantity"),
+            "new_quantity": record.get("new_quantity"),
+            "previous_limit_price": record.get("previous_limit_price"),
+            "new_limit_price": record.get("new_limit_price"),
+            "decision_reason": record.get("decision_reason"),
+            "raw_request": record.get("raw_request") if isinstance(record.get("raw_request"), dict) else {},
+            "raw_response": record.get("raw_response") if isinstance(record.get("raw_response"), dict) else {},
+        }
+        events.append(
+            event(
+                date=date,
+                event_type="order_replaced",
+                entity_type="paper_entry_order",
+                entity_id=current_intent_id,
+                status="replaced",
+                occurred_at=record.get("submitted_at"),
+                payload=payload,
+            )
+        )
+    return events
+
+
 def status_event_type(entity_type: str, status: str) -> str:
     if entity_type == "paper_entry_order":
         if status == "filled":
@@ -238,6 +276,7 @@ def collect_events(
     stops: list[dict[str, Any]],
     take_profits: list[dict[str, Any]],
     exits: list[dict[str, Any]],
+    replaces: list[dict[str, Any]],
     state: dict[str, Any] | None,
 ) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
@@ -252,6 +291,7 @@ def collect_events(
         )
     )
     events.extend(submitted_events(date, exits, event_type="exit_submitted", entity_type="paper_exit_order"))
+    events.extend(replace_events(date, replaces))
     if state:
         state_orders = state.get("orders") if isinstance(state.get("orders"), list) else []
         state_stops = state.get("protective_stops") if isinstance(state.get("protective_stops"), list) else []
@@ -284,6 +324,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     stops_path = default_stops_path(repo_root, args.date, args.stops_journal)
     take_profit_path = default_take_profit_path(repo_root, args.date, args.take_profit_journal)
     exits_path = default_exits_path(repo_root, args.date, args.exits_journal)
+    replace_path = default_replace_path(repo_root, args.date, args.replace_journal)
     state_path = default_state_path(repo_root, args.date, args.execution_state)
     events_path = default_events_path(repo_root, args.events_journal)
     output = default_output_path(repo_root, args.date, args.output)
@@ -292,8 +333,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     stops = load_order_records(stops_path)
     take_profits = load_order_records(take_profit_path)
     exits = load_order_records(exits_path)
+    replaces = load_order_records(replace_path)
     state = load_json_if_exists(state_path)
-    new_events = collect_events(date=args.date, orders=orders, stops=stops, take_profits=take_profits, exits=exits, state=state)
+    new_events = collect_events(date=args.date, orders=orders, stops=stops, take_profits=take_profits, exits=exits, replaces=replaces, state=state)
     existing_events = load_existing_events(events_path)
     combined_events = replace_date_events(existing_events, date=args.date, new_events=new_events)
     write_jsonl(events_path, combined_events)
@@ -310,6 +352,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "source_stops_journal": str(stops_path),
         "source_take_profit_journal": str(take_profit_path),
         "source_exits_journal": str(exits_path),
+        "source_replace_journal": str(replace_path),
         "source_execution_state": str(state_path) if state_path.exists() else None,
         "events_journal": str(events_path),
         "summary": {
@@ -332,6 +375,7 @@ def build_args(**overrides: Any) -> argparse.Namespace:
         "stops_journal": None,
         "take_profit_journal": None,
         "exits_journal": None,
+        "replace_journal": None,
         "execution_state": None,
         "events_journal": None,
         "output": None,
@@ -348,6 +392,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--stops-journal")
     parser.add_argument("--take-profit-journal")
     parser.add_argument("--exits-journal")
+    parser.add_argument("--replace-journal")
     parser.add_argument("--execution-state")
     parser.add_argument("--events-journal")
     parser.add_argument("--output")

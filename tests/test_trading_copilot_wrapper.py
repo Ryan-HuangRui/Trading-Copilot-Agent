@@ -639,6 +639,46 @@ class TradingCopilotWrapperTest(unittest.TestCase):
         self.assertFalse(payload["dry_run"])
         self.assertEqual(payload["summary"]["replaced"], 1)
 
+    def test_paper_event_ledger_wrapper_passes_replace_journal(self):
+        calls = []
+
+        def fake_run_child(command):
+            calls.append(command)
+            payload = {
+                "status": "success",
+                "date": "2026-05-26",
+                "output": "report/2026-05-26/paper-event-ledger.json",
+                "events_journal": "runtime/journal/events.jsonl",
+                "summary": {"events_written_for_date": 1},
+            }
+            return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
+
+        args = Namespace(
+            date="2026-05-26",
+            repo_root=str(ROOT),
+            orders_journal=None,
+            stops_journal=None,
+            take_profit_journal=None,
+            exits_journal=None,
+            replace_journal="runtime/paper/2026-05-26/custom-replace.jsonl",
+            execution_state=None,
+            events_journal=None,
+            output=None,
+        )
+
+        with patch.object(trading_copilot, "run_child", side_effect=fake_run_child), patch.object(
+            trading_copilot, "emit", side_effect=SystemExit
+        ) as emit:
+            with self.assertRaises(SystemExit):
+                trading_copilot.run_paper_event_ledger(args)
+
+        command = calls[0]
+        self.assertIn("--replace-journal", command)
+        self.assertEqual(command[command.index("--replace-journal") + 1], "runtime/paper/2026-05-26/custom-replace.jsonl")
+        payload = emit.call_args.args[0]
+        self.assertEqual(payload["workflow"], "paper-event-ledger")
+        self.assertEqual(payload["summary"]["events_written_for_date"], 1)
+
     def test_paper_take_profit_wrapper_passes_stop_resize_options(self):
         calls = []
 

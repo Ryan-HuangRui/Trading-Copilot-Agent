@@ -158,7 +158,7 @@ This workflow must not submit broker orders.
 3. Run `python3 script/trading_copilot.py paper-trade-submit --date <DATE> --session pre-market --require-validation` to prepare a dry-run controlled submission artifact.
 4. Only when the user explicitly wants simulated order submission and `config/paper_execution.json` enables `paper_execution.broker_writes_enabled=true` plus `paper_execution.allow_entry_submit=true`, run `python3 script/trading_copilot.py paper-trade-submit --date <DATE> --session pre-market --require-validation --execute`.
 5. Run `python3 script/trading_copilot.py paper-order-sync --date <DATE>` after refreshing the paper account snapshot to sync submitted entry, stop, TP1, and plan-invalidated exit order state.
-6. Run `python3 script/trading_copilot.py paper-event-ledger --date <DATE>` to project submitted and observed paper execution facts into `runtime/journal/events.jsonl`.
+6. Run `python3 script/trading_copilot.py paper-event-ledger --date <DATE>` to project submitted, replaced, and observed paper execution facts into `runtime/journal/events.jsonl`.
 7. Run `python3 script/trading_copilot.py paper-execution-review --date <DATE>` to generate paper execution quality JSON/Markdown without promoting lessons.
 8. Run `python3 script/trading_copilot.py paper-learning-lessons --date <DATE> --append` to append paper execution candidate lessons into the runtime learning queue.
 9. Run `python3 script/trading_copilot.py paper-strategy-review` to aggregate paper execution reviews by setup and symbol.

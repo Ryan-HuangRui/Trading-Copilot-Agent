@@ -105,6 +105,27 @@ def exit_record(**overrides) -> dict:
     return record
 
 
+def replace_record(**overrides) -> dict:
+    record = {
+        "kind": "paper_replace_order",
+        "intent_id": "intent-1",
+        "source_signal_id": "sig-1",
+        "symbol": "MU",
+        "longbridge_symbol": "MU.US",
+        "broker_order_id": "entry-o-1",
+        "previous_quantity": 200,
+        "new_quantity": 100,
+        "previous_limit_price": 100,
+        "new_limit_price": 99.5,
+        "decision_reason": "tighten pending entry after failed reclaim",
+        "submitted_at": "2026-05-26T13:45:00+00:00",
+        "raw_request": {"command": ["order", "replace", "entry-o-1", "--qty", "100", "--price", "99.5"]},
+        "raw_response": {"order_id": "entry-o-1", "status": "replaced"},
+    }
+    record.update(overrides)
+    return record
+
+
 def execution_state() -> dict:
     return {
         "date": "2026-05-26",
@@ -247,6 +268,28 @@ class PaperEventLedgerTest(unittest.TestCase):
             self.assertEqual(filled_payload["order_type"], "TSLPPCT")
             self.assertEqual(filled_payload["trailing_percent"], 2.5)
             self.assertEqual(filled_payload["limit_offset"], 0.3)
+
+    def test_event_ledger_projects_order_replace_events(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            base = root / "runtime" / "paper" / "2026-05-26"
+            append_jsonl(base / "paper-replace-orders.jsonl", replace_record())
+
+            result = paper_event_ledger.run(paper_event_ledger.build_args(repo_root=str(root), date="2026-05-26"))
+
+            output = json.loads(Path(result["output"]).read_text(encoding="utf-8"))
+            replaced = [event for event in output["events"] if event["event_type"] == "order_replaced"]
+            self.assertEqual(len(replaced), 1)
+            payload = replaced[0]["payload"]
+            self.assertEqual(replaced[0]["entity_type"], "paper_entry_order")
+            self.assertEqual(payload["broker_order_id"], "entry-o-1")
+            self.assertEqual(payload["previous_quantity"], 200)
+            self.assertEqual(payload["new_quantity"], 100)
+            self.assertEqual(payload["previous_limit_price"], 100)
+            self.assertEqual(payload["new_limit_price"], 99.5)
+            self.assertEqual(payload["decision_reason"], "tighten pending entry after failed reclaim")
+            self.assertEqual(payload["raw_request"]["command"][1], "replace")
+            self.assertEqual(output["summary"]["event_types"]["order_replaced"], 1)
 
     def test_wrapper_exposes_event_ledger(self):
         with tempfile.TemporaryDirectory() as tmp:

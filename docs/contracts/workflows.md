@@ -1006,6 +1006,8 @@ Inputs:
 - `runtime/paper/<DATE>/paper-orders.jsonl`.
 - Optional `runtime/paper/<DATE>/paper-stop-orders.jsonl`.
 - Optional `runtime/paper/<DATE>/paper-take-profit-orders.jsonl`.
+- Optional `runtime/paper/<DATE>/paper-exit-orders.jsonl`.
+- Optional `runtime/paper/<DATE>/paper-replace-orders.jsonl`.
 - Optional `runtime/paper/<DATE>/paper-execution-state.json`.
 
 Output:
@@ -1019,6 +1021,7 @@ Required behavior:
 - Must emit deterministic event ids so repeated runs for the same date replace the same workflow/date projection without duplicate events.
 - Must preserve existing events from other workflows or dates.
 - Must include order shape fields in submitted and state-derived event payloads so non-LO TP1, trigger, and trailing orders remain auditable.
+- Must emit `order_replaced` events from `paper-replace-orders.jsonl`, preserving previous/new quantity, previous/new limit price, decision reason, and raw request/response.
 - Must emit at least submitted events from paper journals and observed status events from `paper-execution-state.json` when available.
 - Event payloads must preserve `intent_id`, `source_signal_id`, `broker_order_id`, `symbol`, `side`, `quantity`, `remark`, and raw request/response fields when present.
 

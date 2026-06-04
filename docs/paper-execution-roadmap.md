@@ -273,7 +273,7 @@ Example event types:
 
 Existing files such as `signals.jsonl`, `trades.jsonl`, and `reviews.jsonl` can remain as projections or compatibility views.
 
-Implementation status: `paper-event-ledger` projects paper entry, stop, and TP1 submit/status facts into `runtime/journal/events.jsonl` with deterministic event ids, while preserving existing events from other dates/workflows.
+Implementation status: `paper-event-ledger` projects paper entry, pending-order replace, protective stop, TP1, and full-exit submit/status facts into `runtime/journal/events.jsonl` with deterministic event ids, while preserving existing events from other dates/workflows.
 
 Milestone 1 should already preserve fields needed for future replay: `intent_id`, `source_signal_id`, `broker_order_id`, `remark`, `submitted_at`, `raw_request`, `raw_response`, and `idempotency_key`.
 
