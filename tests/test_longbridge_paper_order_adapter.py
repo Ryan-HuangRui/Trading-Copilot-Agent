@@ -169,6 +169,28 @@ class LongbridgePaperOrderAdapterTest(unittest.TestCase):
                     execute=True,
                 )
 
+    def test_submit_allows_explicit_unknown_channel_fallback(self):
+        adapter = LongbridgePaperOrderAdapter(
+            cli="/bin/longbridge",
+            paper_execution_config={**write_config(), "allow_auth_status_unknown_paper_channel": True},
+        )
+
+        def fake_run(args):
+            if args[:2] == ["auth", "status"]:
+                return {"account": {"account_channel": None}, "token": {"status": "valid"}}
+            if args[:2] == ["order", "buy"]:
+                return {"order_id": "order-1", "status": "submitted"}
+            raise AssertionError(args)
+
+        with patch.object(adapter, "run_json", side_effect=fake_run):
+            result = adapter.submit_limit_order(
+                order_intent(),
+                execute=True,
+            )
+
+        self.assertEqual(result["account_channel"], "lb_papertrading")
+        self.assertEqual(result["broker_order_id"], "order-1")
+
     def test_submit_limit_order_builds_safe_command_and_records_raw_response(self):
         adapter = LongbridgePaperOrderAdapter(cli="/bin/longbridge", paper_execution_config=write_config())
         calls = []

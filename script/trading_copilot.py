@@ -2560,6 +2560,8 @@ def run_paper_lifecycle(args: argparse.Namespace) -> None:
             command.extend(["--input", args.paper_account_input])
         if args.longbridge_cli:
             command.extend(["--longbridge-cli", args.longbridge_cli])
+        if args.paper_execution_config:
+            command.extend(["--paper-execution-config", args.paper_execution_config])
         return run_lifecycle_child(command, workflow="paper_account_snapshot", steps=steps, artifacts=artifacts, commands=commands)
 
     def order_sync() -> dict[str, Any]:
@@ -3662,6 +3664,7 @@ def build_parser() -> argparse.ArgumentParser:
     paper_account.add_argument("--input")
     paper_account.add_argument("--output")
     paper_account.add_argument("--longbridge-cli")
+    paper_account.add_argument("--paper-execution-config")
     paper_account.add_argument("--repo-root", default=str(ROOT))
     paper_account.set_defaults(func=run_paper_account_snapshot)
 

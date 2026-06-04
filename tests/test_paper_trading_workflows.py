@@ -71,6 +71,22 @@ class PaperTradingWorkflowTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             ensure_paper_account({"account": {"account_channel": "lb_live"}, "token": {"status": "valid"}})
 
+    def test_ensure_paper_account_allows_explicit_unknown_channel_fallback(self):
+        auth = {"account": {"account_channel": None}, "token": {"status": "valid"}}
+
+        with self.assertRaises(ValueError):
+            ensure_paper_account(auth)
+        self.assertEqual(
+            ensure_paper_account(auth, {"allow_auth_status_unknown_paper_channel": True}),
+            "lb_papertrading",
+        )
+
+    def test_ensure_paper_account_fallback_still_rejects_explicit_live_channel(self):
+        auth = {"account": {"account_channel": "lb_live"}, "token": {"status": "valid"}}
+
+        with self.assertRaises(ValueError):
+            ensure_paper_account(auth, {"allow_auth_status_unknown_paper_channel": True})
+
     def test_paper_adapter_rejects_write_commands(self):
         self.assertEqual(ensure_paper_read_command(["order", "--format", "json"]), None)
         self.assertEqual(ensure_paper_read_command(["order", "executions", "--format", "json"]), None)

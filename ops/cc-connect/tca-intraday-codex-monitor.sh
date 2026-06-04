@@ -114,7 +114,7 @@ PROMPT="你是 Trading-Copilot-Agent 的 cc-connect 盘中 Codex 盯盘定时任
 - 若要升级为 conditional_executable，必须由你基于 context、knowledge/refined 和完整 Trade Plan Card 主观判断；不得由 extract-monitor-signals 自动升级。
 - 写出 report/$DATE/monitor-signals.json 后，必须随后运行：
   python3 script/trading_copilot.py validate-trade-plan --session monitor --date $DATE --signals report/$DATE/monitor-signals.json
-  python3 script/trading_copilot.py paper-account-snapshot --date $DATE
+  python3 script/trading_copilot.py paper-account-snapshot --date $DATE --paper-execution-config $PAPER_CONFIG
   python3 script/trading_copilot.py intraday-dry-run --date $DATE --signals report/$DATE/monitor-signals.json
 - dry-run 后必须追加本轮 Codex 评审到当天盘中报告：
   python3 script/trading_copilot.py intraday-review-append --date $DATE --signals report/$DATE/monitor-signals.json --submission report/$DATE/paper-trade-submission.json --context report/$DATE/intraday-opportunity-context.json
@@ -124,7 +124,7 @@ PROMPT="你是 Trading-Copilot-Agent 的 cc-connect 盘中 Codex 盯盘定时任
 - 只有 dry-run summary.ready > 0 且该值为 1 时，才运行：
   python3 script/trading_copilot.py intraday-paper-entry --date $DATE --require-validation --paper-execution-config $PAPER_CONFIG --execute
 - 执行后必须刷新：
-  python3 script/trading_copilot.py paper-account-snapshot --date $DATE
+  python3 script/trading_copilot.py paper-account-snapshot --date $DATE --paper-execution-config $PAPER_CONFIG
   python3 script/trading_copilot.py paper-order-sync --date $DATE
   python3 script/trading_copilot.py paper-event-ledger --date $DATE
   python3 script/trading_copilot.py paper-execution-review --date $DATE

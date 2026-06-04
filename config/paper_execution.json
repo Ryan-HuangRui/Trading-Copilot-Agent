@@ -6,6 +6,7 @@
     "allow_cancel": false,
     "allow_protective_stop": false,
     "allow_take_profit": false,
-    "allow_break_even_stop_move": false
+    "allow_break_even_stop_move": false,
+    "allow_auth_status_unknown_paper_channel": false
   }
 }

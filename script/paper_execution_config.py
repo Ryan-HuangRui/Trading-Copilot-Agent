@@ -19,6 +19,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "allow_exit_cancel_replace": False,
     "allow_exit_submit": False,
     "allow_break_even_stop_move": False,
+    "allow_auth_status_unknown_paper_channel": False,
 }
 
 ACTION_CONFIG_KEYS = {

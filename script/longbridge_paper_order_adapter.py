@@ -81,7 +81,7 @@ class LongbridgePaperOrderAdapter:
         payload = self.run_json(["auth", "status", "--format", "json"])
         if not isinstance(payload, dict):
             raise RuntimeError("Longbridge auth status did not return an object")
-        return ensure_paper_account(payload)
+        return ensure_paper_account(payload, self.paper_execution_config)
 
     def ensure_write_allowed(self, *, execute: bool, action: str) -> None:
         ensure_paper_write_allowed(self.paper_execution_config, execute=execute, action=action)

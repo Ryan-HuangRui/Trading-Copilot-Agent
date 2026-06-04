@@ -140,7 +140,7 @@ Do not add `--append` or `--execute` during the acceptance check unless you inte
 For paper execution acceptance, run the dry-run checks only:
 
 ```bash
-python3 script/trading_copilot.py paper-account-snapshot --date <DATE>
+python3 script/trading_copilot.py paper-account-snapshot --date <DATE> --paper-execution-config config/paper_execution.local.json
 python3 script/trading_copilot.py paper-trade-preview --date <DATE> --session pre-market --require-validation
 python3 script/trading_copilot.py paper-trade-submit --date <DATE> --session pre-market --require-validation
 ```
@@ -305,7 +305,7 @@ Repository workflow stages:
 ```bash
 python3 script/trading_copilot.py validate-report --session pre-market --date <DATE>
 python3 script/trading_copilot.py validate-trade-plan --session pre-market --date <DATE>
-python3 script/trading_copilot.py paper-account-snapshot --date <DATE>
+python3 script/trading_copilot.py paper-account-snapshot --date <DATE> --paper-execution-config config/paper_execution.local.json
 python3 script/trading_copilot.py paper-trade-preview --date <DATE> --session pre-market --require-validation
 python3 script/trading_copilot.py paper-trade-submit --date <DATE> --session pre-market --require-validation
 ```
@@ -390,12 +390,13 @@ Keep these execution switches disabled in the initial rollout:
     "allow_cancel": false,
     "allow_protective_stop": false,
     "allow_take_profit": false,
-    "allow_break_even_stop_move": false
+    "allow_break_even_stop_move": false,
+    "allow_auth_status_unknown_paper_channel": false
   }
 }
 ```
 
-Do not add `--execute` to `paper-order-cancel`, `paper-protective-stop-plan`, `paper-take-profit-plan`, or `paper-break-even-stop-plan` while those config gates are false. Current exit-management execution is intentionally dry-run because protective stops use the full filled quantity while TP1 uses a partial exit quantity; automatic execution needs OCO or stop resize/cancel-then-submit safety before rollout.
+Do not add `--execute` to `paper-order-cancel`, `paper-protective-stop-plan`, `paper-take-profit-plan`, or `paper-break-even-stop-plan` while those config gates are false. Current exit-management execution is intentionally dry-run because protective stops use the full filled quantity while TP1 uses a partial exit quantity; automatic execution needs OCO or stop resize/cancel-then-submit safety before rollout. If the Longbridge CLI omits `account_channel` from `auth status`, `allow_auth_status_unknown_paper_channel=true` may be used only in ignored host-local config after the host token has been separately verified as paper trading; explicit non-paper channels still fail.
 
 The provided `ops/cc-connect/tca-paper-sync-review.sh` calls `paper-lifecycle`. It keeps each exit action dry-run unless the matching environment switch is set (`TCA_PAPER_CANCEL_EXECUTE=1`, `TCA_PAPER_PROTECTIVE_STOP_EXECUTE=1`, `TCA_PAPER_TAKE_PROFIT_EXECUTE=1`, or `TCA_PAPER_BREAK_EVEN_STOP_EXECUTE=1`). Even with those switches, the selected `config/paper_execution.local.json` must enable `broker_writes_enabled=true` and the matching action gate.
 
@@ -437,7 +438,7 @@ python3 script/trading_copilot.py monitor-brief --state config/monitor_state.jso
 python3 script/trading_copilot.py intraday-opportunity-context --date <DATE>
 # Codex writes reviewed report/<DATE>/monitor-signals.json from the opportunity context.
 python3 script/trading_copilot.py validate-trade-plan --session monitor --date <DATE> --signals report/<DATE>/monitor-signals.json
-python3 script/trading_copilot.py paper-account-snapshot --date <DATE>
+python3 script/trading_copilot.py paper-account-snapshot --date <DATE> --paper-execution-config config/paper_execution.local.json
 python3 script/trading_copilot.py intraday-dry-run --date <DATE> --signals report/<DATE>/monitor-signals.json
 python3 script/trading_copilot.py intraday-review-append --date <DATE> --signals report/<DATE>/monitor-signals.json --submission report/<DATE>/paper-trade-submission.json --context report/<DATE>/intraday-opportunity-context.json
 ```

@@ -52,12 +52,13 @@ Review the paper execution config before enabling broker writes:
     "allow_intraday_entry_submit": false,
     "allow_cancel": false,
     "allow_protective_stop": false,
-    "allow_take_profit": false
+    "allow_take_profit": false,
+    "allow_auth_status_unknown_paper_channel": false
   }
 }
 ```
 
-The tracked default is intentionally all false. To enable a paper entry rollout on a deployment host, create an ignored host-local config such as `config/paper_execution.local.json`, set `broker_writes_enabled=true` and `allow_entry_submit=true`, and pass it with `--paper-execution-config`. Keep `allow_intraday_entry_submit`, cancel, protective-stop, and take-profit gates false during the initial rollout.
+The tracked default is intentionally all false. To enable a paper entry rollout on a deployment host, create an ignored host-local config such as `config/paper_execution.local.json`, set `broker_writes_enabled=true` and `allow_entry_submit=true`, and pass it with `--paper-execution-config`. Keep `allow_intraday_entry_submit`, cancel, protective-stop, and take-profit gates false during the initial rollout. If the Longbridge CLI `auth status` response omits `account_channel`, only set `allow_auth_status_unknown_paper_channel=true` on a host separately verified to use the paper account token; explicit non-paper channels still fail.
 
 Execution artifacts include `execution_policy` and `broker_capabilities` so operators can see which paper writes are enabled, disabled, or unsupported in the generated JSON without reading the local config file.
 
@@ -202,7 +203,8 @@ Use a config file as the paper broker-write policy. The tracked `config/paper_ex
     "allow_cancel": false,
     "allow_protective_stop": false,
     "allow_take_profit": false,
-    "allow_break_even_stop_move": false
+    "allow_break_even_stop_move": false,
+    "allow_auth_status_unknown_paper_channel": false
   }
 }
 ```

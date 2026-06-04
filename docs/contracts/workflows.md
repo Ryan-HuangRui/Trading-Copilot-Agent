@@ -737,12 +737,14 @@ Canonical command:
 
 ```bash
 python3 script/trading_copilot.py paper-account-snapshot --date <DATE>
+python3 script/trading_copilot.py paper-account-snapshot --date <DATE> --paper-execution-config config/paper_execution.local.json
 ```
 
 Inputs:
 
 - Longbridge CLI `auth status`, `assets`, `positions`, today's `order` list, and `order executions`.
 - The workflow must verify `account_channel=lb_papertrading` before reading paper orders/executions.
+- Optional `--paper-execution-config` may enable `allow_auth_status_unknown_paper_channel=true` only for hosts separately verified to use the paper account token. Explicit non-paper channels must still fail.
 - Optional `--input` JSON fixture for tests.
 
 Output:

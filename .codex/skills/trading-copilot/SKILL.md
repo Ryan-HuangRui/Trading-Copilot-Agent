@@ -153,7 +153,7 @@ This workflow must not submit broker orders.
 
 ### Paper Trading Readiness
 
-1. Run `python3 script/trading_copilot.py paper-account-snapshot --date <DATE>` to write a read-only paper account, order, and execution snapshot.
+1. Run `python3 script/trading_copilot.py paper-account-snapshot --date <DATE> --paper-execution-config config/paper_execution.local.json` to write a read-only paper account, order, and execution snapshot on deployment hosts that use a local paper execution config.
 2. Run `python3 script/trading_copilot.py paper-trade-preview --date <DATE> --session pre-market --require-validation` to convert complete Trade Plan Cards into dry-run order previews.
 3. Run `python3 script/trading_copilot.py paper-trade-submit --date <DATE> --session pre-market --require-validation` to prepare a dry-run controlled submission artifact.
 4. Only when the user explicitly wants simulated order submission and `config/paper_execution.json` enables `paper_execution.broker_writes_enabled=true` plus `paper_execution.allow_entry_submit=true`, run `python3 script/trading_copilot.py paper-trade-submit --date <DATE> --session pre-market --require-validation --execute`.

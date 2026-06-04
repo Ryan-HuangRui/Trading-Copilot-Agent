@@ -109,6 +109,7 @@ def run(args: argparse.Namespace) -> dict:
             input=args.paper_input,
             output=args.paper_output,
             longbridge_cli=None,
+            paper_execution_config=None,
         )
         steps["paper-account-snapshot"] = paper_account_snapshot.run(paper_account_args)
         paper_preview_args = argparse.Namespace(
