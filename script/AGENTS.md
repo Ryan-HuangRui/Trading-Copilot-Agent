@@ -9,6 +9,7 @@
 - `prepare_daily_context.py`: pre-market context builder that reads the previous trading day's snapshot and writes `report/<DATE>/pre-market-context.json`.
 - `pre_market_report.py`: scripted pre-market report generator.
 - `monitor_scan.py`: 5m watchlist/position scan and `report/latest-monitor.json` writer.
+- `intraday_tracker.py`: read-only pre-market plan tracker that appends `report/<DATE>/intraday.md` and updates `runtime/intraday/<DATE>/state.json` / `events.jsonl`.
 - `longbridge_cli_adapter.py`: read-only Longbridge CLI guard. Do not add order/write commands.
 - `longbridge_account_snapshot.py`: read-only account/position snapshot writer under `runtime/account/`.
 - `longbridge_paper_trade_adapter.py`: Longbridge paper-account guard and read-only paper order/execution fetcher.
@@ -53,6 +54,7 @@
 - Run unified pre-market workflow: `python3 script/trading_copilot.py pre-market-plan --watchlist config/watchlist.json --skip-non-trading-day`.
 - Run unified post-market workflow: `python3 script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day --include-journal-signals --include-position-symbols`.
 - Run unified monitor workflow: `python3 script/trading_copilot.py monitor-brief --state config/monitor_state.json --interval 5min`.
+- Run read-only intraday tracker: `python3 script/trading_copilot.py intraday-tracker --date 2026-05-06 --top-n 5`.
 - Run read-only account snapshot: `python3 script/trading_copilot.py account-snapshot --date 2026-05-06`.
 - Run read-only paper account snapshot: `python3 script/trading_copilot.py paper-account-snapshot --date 2026-05-06`.
 - Build paper order previews: `python3 script/trading_copilot.py paper-trade-preview --date 2026-05-06 --session pre-market --require-validation`.
@@ -85,6 +87,7 @@
 - Generate scripted report: `python3 script/pre_market_report.py --watchlist config/watchlist.json`.
 - Generate scripted report with guard: `python3 script/pre_market_report.py --watchlist config/watchlist.json --skip-non-trading-day`.
 - Monitor scan: `python3 script/monitor_scan.py --state config/monitor_state.json --interval 5min`.
+- Intraday tracker: `python3 script/intraday_tracker.py --date 2026-05-06 --top-n 5`.
 - Refresh source metadata: `python3 script/import_priceactions_knowledge.py`.
 
 ## Conventions
@@ -93,6 +96,7 @@
 - Load `TWELVE_DATA_API_KEY` from `.env` or the process environment only for Twelve Data fallback; never hardcode or print secrets.
 - Preserve provider rate limits unless the data provider contract is intentionally changed. Longbridge uses `config/longbridge_rate_limit_state.json`; Twelve Data fallback uses `config/rate_limit_state.json`.
 - Keep output writes under ignored runtime paths (`raw_data/`, `report/`, `config/rate_limit_state.json`, `config/longbridge_rate_limit_state.json`) unless the task is metadata import.
+- Intraday tracker events are notification candidates only. Do not treat `runtime/intraday/<DATE>/events.jsonl` as execution instructions.
 - Longbridge account workflows are read-only. Paper-trading workflows may inspect paper orders/executions and produce dry-run previews/submissions. Broker writes are allowed only through `longbridge_paper_order_adapter.py`, only for paper accounts, and only when the explicit execution gates are enabled.
 - If adding a script that fetches market data, reuse `build_market_data_client()` so Longbridge remains primary and Twelve Data remains fallback.
 - S&P 500 universe fetches may use standard-library HTTP, but per-symbol market-data screening must still use the shared market-data provider stack.

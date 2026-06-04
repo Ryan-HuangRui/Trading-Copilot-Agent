@@ -12,6 +12,7 @@
 - `docs/`：Codex App automation 与人工操作 runbook
 - `config/`：watchlist 与策略参数
 - `.codex/skills/trading-copilot/`：repo-local skill 入口，供 Codex/Claude/OpenClaw 类 agent 识别本仓库能力
+- `.codex/skills/intraday-tracker/`：盘中只读追踪 skill，供 Codex 定时任务记录盘前计划状态变化
 
 ## 快速开始
 
@@ -55,6 +56,7 @@ python3 script/trading_copilot.py pre-market-plan --watchlist config/watchlist.j
 python3 script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day --include-journal-signals --include-position-symbols
 python3 script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day --include-journal-signals --include-position-symbols --include-agent-research
 python3 script/trading_copilot.py monitor-brief --state config/monitor_state.json --interval 5min
+python3 script/trading_copilot.py intraday-tracker --date <DATE> --top-n 5
 python3 script/trading_copilot.py agent-research-context --date <DATE> --symbol <SYMBOL>
 python3 script/trading_copilot.py agent-research-reports --date <DATE> --symbol <SYMBOL>
 python3 script/trading_copilot.py validate-agent-reports --date <DATE> --symbol <SYMBOL>
@@ -265,6 +267,13 @@ Memory 只能降低置信度、增加限制或触发人工 review，不能提高
 - 持仓：输出 R 值与风险动作（减仓/止损上移/退出）
 - 执行脚本：`python3 script/monitor_scan.py --state config/monitor_state.json --interval 5min`
 - 输出文件：`report/latest-monitor.json`
+- Phase 1 盘中计划追踪：
+  ```bash
+  python3 script/trading_copilot.py intraday-tracker --date YYYY-MM-DD --top-n 5
+  ```
+- `intraday-tracker` 读取盘前 `pre-market-signals.json` 的 topN、可选 `config/intraday_watchlist.json` 人工观察列表、上一轮 `report/<DATE>/intraday.md` 和结构化 state。
+- `intraday-tracker` 追加 `report/<DATE>/intraday.md`，更新 `runtime/intraday/<DATE>/state.json`，仅在重要状态变化时追加 `runtime/intraday/<DATE>/events.jsonl`。
+- `events.jsonl` 是 cc connect 或其他通知层的候选输入，不是执行指令。
 - 可选生成 monitor sidecar：`python3 script/trading_copilot.py extract-monitor-signals --date YYYY-MM-DD`
 - 可选写入 journal：`python3 script/trading_copilot.py extract-monitor-signals --append`
 - monitor scan 原生输出 setup/risk_quality/journal_appendable；journal 记录仍只是观察，不是执行指令

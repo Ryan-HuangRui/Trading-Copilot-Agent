@@ -301,6 +301,66 @@ Consumer rules:
 - Include `NO TRADE` if data is insufficient or a setup lacks rule confirmation.
 - Setup-backed scans may include `setup`, `setup_files`, `trigger_detail`, `invalidation_detail`, `risk_quality`, `journal_appendable`, and `bar_timestamp`.
 
+## `report/<DATE>/intraday.md`
+
+Producer:
+
+```bash
+python3 script/trading_copilot.py intraday-tracker --date <DATE> --top-n 5
+```
+
+Expected shape:
+
+- Markdown rolling log for the current market date.
+- Each run appends a timestamped section.
+- Sections summarize the focus pool, important state changes, per-symbol intraday state, and notification posture.
+
+Consumer rules:
+
+- Use this file for human-readable context and Codex continuity.
+- Do not parse it as the only source of machine state.
+- Do not treat any line as an execution instruction.
+
+## `runtime/intraday/<DATE>/state.json`
+
+Producer:
+
+```bash
+python3 script/trading_copilot.py intraday-tracker --date <DATE> --top-n 5
+```
+
+Expected top-level fields:
+
+- `date`: market date.
+- `workflow`: `intraday-tracker`.
+- `focus_symbols`: merged pre-market topN and manual watchlist symbols.
+- `symbols`: per-symbol state map.
+- `inputs`: source artifact paths.
+
+Known states:
+
+- `waiting`
+- `near_trigger`
+- `triggered`
+- `triggered_but_blocked`
+- `invalidated`
+- `data_insufficient`
+- `no_data`
+
+## `runtime/intraday/<DATE>/events.jsonl`
+
+Producer:
+
+```bash
+python3 script/trading_copilot.py intraday-tracker --date <DATE> --top-n 5
+```
+
+Consumer rules:
+
+- Each line is one important state-change event.
+- Events are notification candidates for cc connect or another delivery layer.
+- Events are not broker instructions.
+
 ## `runtime/account/<DATE>/account-snapshot.json`
 
 Producer:

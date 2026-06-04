@@ -157,6 +157,37 @@ Required behavior:
 - Monitor paper submission is dry-run only.
 - `paper-trade-submit --session monitor --execute` must be hard-rejected before broker credentials or adapters are used.
 
+## intraday-tracker
+
+Purpose: track pre-market focus plans and manually watched symbols against the latest intraday monitor artifact.
+
+Canonical command:
+
+```bash
+python3 script/trading_copilot.py intraday-tracker --date <DATE> --top-n 5
+```
+
+Inputs:
+
+- `report/<DATE>/pre-market-signals.json`
+- Optional `config/intraday_watchlist.json`
+- `report/latest-monitor.json`
+- Existing `report/<DATE>/intraday.md` when present
+- Existing `runtime/intraday/<DATE>/state.json` and `events.jsonl` when present
+
+Deterministic output:
+
+- Appends `report/<DATE>/intraday.md`
+- Writes `runtime/intraday/<DATE>/state.json`
+- Appends important state changes to `runtime/intraday/<DATE>/events.jsonl`
+
+Required behavior:
+
+- Treat the Markdown file as a human-readable rolling log.
+- Treat `state.json` as the machine-readable prior state source.
+- Treat `events.jsonl` as notification candidates only.
+- Do not submit, cancel, or replace broker orders from this workflow.
+
 ## agent-research-context
 
 Purpose: create the TradingAgents-style research context envelope used by later deterministic data tools and role prompts.

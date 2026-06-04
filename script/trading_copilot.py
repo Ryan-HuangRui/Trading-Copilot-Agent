@@ -515,6 +515,48 @@ def run_monitor(args: argparse.Namespace) -> None:
     emit(response)
 
 
+def run_intraday_tracker(args: argparse.Namespace) -> None:
+    command = [
+        "script/intraday_tracker.py",
+        "--manual-watchlist",
+        args.manual_watchlist,
+        "--monitor",
+        args.monitor,
+        "--top-n",
+        str(args.top_n),
+        "--timezone",
+        args.timezone,
+    ]
+    if args.date:
+        command.extend(["--date", args.date])
+    if args.pre_market_signals:
+        command.extend(["--pre-market-signals", args.pre_market_signals])
+    if args.state:
+        command.extend(["--state", args.state])
+    if args.events:
+        command.extend(["--events", args.events])
+    if args.markdown:
+        command.extend(["--markdown", args.markdown])
+    if args.as_of:
+        command.extend(["--as-of", args.as_of])
+
+    proc = run_child(command)
+    stdout = parse_json_output(proc.stdout)
+    if proc.returncode != 0:
+        emit(failed_response("intraday-tracker", command, proc), 1)
+
+    response = base_response("intraday-tracker", command, stdout)
+    response["date"] = (stdout or {}).get("date") or args.date
+    response["artifacts"] = (stdout or {}).get("artifacts", [])
+    response["summary"] = (stdout or {}).get("summary", {})
+    response["events"] = (stdout or {}).get("events", [])
+    response["next_agent_inputs"] = [
+        f"report/{response['date']}/intraday.md" if response.get("date") else "report/<DATE>/intraday.md",
+        "knowledge/refined/",
+    ]
+    emit(response)
+
+
 def run_agent_research_context(args: argparse.Namespace) -> None:
     symbols = normalize_symbols(args.symbol)
     output = resolve_repo_path(args.output) if args.output else ROOT / "report" / args.date / "agents" / "research-context.json"
@@ -2558,6 +2600,19 @@ def build_parser() -> argparse.ArgumentParser:
     monitor.add_argument("--longbridge-cli")
     monitor.add_argument("--longbridge-default-market", default="US")
     monitor.set_defaults(func=run_monitor)
+
+    intraday_tracker = sub.add_parser("intraday-tracker", help="Track pre-market plans against intraday monitor state")
+    intraday_tracker.add_argument("--date")
+    intraday_tracker.add_argument("--pre-market-signals")
+    intraday_tracker.add_argument("--manual-watchlist", default="config/intraday_watchlist.json")
+    intraday_tracker.add_argument("--monitor", default="report/latest-monitor.json")
+    intraday_tracker.add_argument("--top-n", type=int, default=5)
+    intraday_tracker.add_argument("--state")
+    intraday_tracker.add_argument("--events")
+    intraday_tracker.add_argument("--markdown")
+    intraday_tracker.add_argument("--timezone", default="America/New_York")
+    intraday_tracker.add_argument("--as-of")
+    intraday_tracker.set_defaults(func=run_intraday_tracker)
 
     agent_context = sub.add_parser("agent-research-context", help="Write a Phase 0 agent research context skeleton")
     agent_context.add_argument("--date", required=True)
