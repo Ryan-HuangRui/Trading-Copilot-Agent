@@ -139,7 +139,7 @@ python3 script/trading_copilot.py paper-order-recover \
   --append
 ```
 
-`paper-order-recover` is a local journal recovery workflow. It does not submit, cancel, or replace broker orders, and it skips duplicate `intent_id` or `broker_order_id` records.
+`paper-order-recover` is a local journal recovery workflow. It does not submit, cancel, or replace broker orders, preserves the submitted order shape for supported long-buy entry orders, and skips duplicate `intent_id` or `broker_order_id` records.
 
 ## Intraday And Post-Market Sync
 

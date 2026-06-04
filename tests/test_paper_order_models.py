@@ -7,7 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "script"))
 
-from paper_order_models import build_order_intent, stable_intent_id, validate_order_shape
+from paper_order_models import build_order_intent, paper_order_record, stable_intent_id, validate_order_shape
 
 
 def ready_preview() -> dict:
@@ -91,6 +91,26 @@ class PaperOrderModelsTest(unittest.TestCase):
         self.assertEqual(intent["tif"], "gtd")
         self.assertEqual(intent["expire_date"], "2026-06-19")
         self.assertEqual(validate_order_shape(intent), [])
+
+    def test_paper_order_record_preserves_order_time_fields(self):
+        preview = ready_preview()
+        preview.update(
+            {
+                "order_type": "LIT",
+                "entry_price": 100,
+                "trigger_price": 101,
+                "outside_rth": "RTH_ONLY",
+                "tif": "gtd",
+                "expire_date": "2026-06-19",
+            }
+        )
+        intent = build_order_intent(date="2026-05-26", session="pre-market", preview=preview)
+
+        record = paper_order_record(intent=intent, submit_status="submitted")
+
+        self.assertEqual(record["tif"], "gtd")
+        self.assertEqual(record["expire_date"], "2026-06-19")
+        self.assertEqual(record["outside_rth"], "RTH_ONLY")
 
     def test_validate_order_shape_requires_trigger_for_mit(self):
         intent = build_order_intent(

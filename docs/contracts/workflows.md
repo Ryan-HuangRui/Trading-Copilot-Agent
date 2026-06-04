@@ -884,10 +884,10 @@ Output:
 Required behavior:
 
 - Must not submit, cancel, replace, or adjust broker orders.
-- Must only recover ready entry buy LO paper orders.
-- Must match the broker order detail to exactly one ready preview order by symbol, side, quantity, order type, and limit price.
+- Must only recover ready long-buy paper entry orders supported by the shared paper order model.
+- Must match the broker order detail to exactly one ready preview order by symbol, side, quantity, order type, and the order-type-specific fields present in broker detail, including limit price, trigger price, trailing amount/percent, limit offset, `tif`, `expire_date`, and `outside_rth`.
 - Must skip duplicate `intent_id` or `broker_order_id` values already present in `paper-orders.jsonl`.
-- Recovered records must preserve `intent_id`, `broker_order_id`, `remark`, reconstructed `raw_request`, full broker `raw_response`, and recovery timestamp.
+- Recovered records must preserve `intent_id`, `broker_order_id`, `remark`, order shape fields, reconstructed `raw_request`, full broker `raw_response`, and recovery timestamp.
 
 ## paper-order-cancel
 
