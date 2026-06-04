@@ -126,6 +126,29 @@ def replace_record(**overrides) -> dict:
     return record
 
 
+def cancel_plan(**overrides) -> dict:
+    payload = {
+        "date": "2026-05-26",
+        "dry_run": False,
+        "executed": [
+            {
+                "intent_id": "intent-1",
+                "source_signal_id": "sig-1",
+                "symbol": "MU",
+                "longbridge_symbol": "MU.US",
+                "broker_order_id": "entry-o-1",
+                "cancel_status": "cancelled",
+                "reason": "entry order exceeded max open duration",
+                "raw_request": {"command": ["order", "cancel", "entry-o-1", "--format", "json"]},
+                "raw_response": {"order_id": "entry-o-1", "status": "cancelled"},
+            }
+        ],
+        "errors": [],
+    }
+    payload.update(overrides)
+    return payload
+
+
 def execution_state() -> dict:
     return {
         "date": "2026-05-26",
@@ -290,6 +313,56 @@ class PaperEventLedgerTest(unittest.TestCase):
             self.assertEqual(payload["decision_reason"], "tighten pending entry after failed reclaim")
             self.assertEqual(payload["raw_request"]["command"][1], "replace")
             self.assertEqual(output["summary"]["event_types"]["order_replaced"], 1)
+
+    def test_event_ledger_projects_cancel_plan_events(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_json(root / "report" / "2026-05-26" / "paper-order-cancel-plan.json", cancel_plan())
+
+            result = paper_event_ledger.run(paper_event_ledger.build_args(repo_root=str(root), date="2026-05-26"))
+
+            output = json.loads(Path(result["output"]).read_text(encoding="utf-8"))
+            cancelled = [event for event in output["events"] if event["event_type"] == "order_cancel_executed"]
+            self.assertEqual(len(cancelled), 1)
+            event = cancelled[0]
+            self.assertEqual(event["entity_type"], "paper_entry_order")
+            self.assertEqual(event["status"], "cancelled")
+            payload = event["payload"]
+            self.assertEqual(payload["broker_order_id"], "entry-o-1")
+            self.assertEqual(payload["cancel_status"], "cancelled")
+            self.assertEqual(payload["reason"], "entry order exceeded max open duration")
+            self.assertEqual(payload["raw_request"]["command"][1], "cancel")
+            self.assertEqual(output["summary"]["event_types"]["order_cancel_executed"], 1)
+
+    def test_event_ledger_projects_cancel_plan_error_events(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_json(
+                root / "report" / "2026-05-26" / "paper-order-cancel-plan.json",
+                cancel_plan(
+                    executed=[],
+                    errors=[
+                        {
+                            "intent_id": "intent-1",
+                            "source_signal_id": "sig-1",
+                            "symbol": "MU",
+                            "longbridge_symbol": "MU.US",
+                            "broker_order_id": "entry-o-1",
+                            "reason": "entry order exceeded max open duration",
+                            "error": "broker rejected cancel",
+                        }
+                    ],
+                ),
+            )
+
+            result = paper_event_ledger.run(paper_event_ledger.build_args(repo_root=str(root), date="2026-05-26"))
+
+            output = json.loads(Path(result["output"]).read_text(encoding="utf-8"))
+            failed = [event for event in output["events"] if event["event_type"] == "order_cancel_failed"]
+            self.assertEqual(len(failed), 1)
+            self.assertEqual(failed[0]["status"], "failed")
+            self.assertEqual(failed[0]["payload"]["error"], "broker rejected cancel")
+            self.assertEqual(output["summary"]["event_types"]["order_cancel_failed"], 1)
 
     def test_wrapper_exposes_event_ledger(self):
         with tempfile.TemporaryDirectory() as tmp:

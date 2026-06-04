@@ -154,7 +154,7 @@ python3 script/trading_copilot.py paper-learning-lessons --date "$DATE" --append
 python3 script/trading_copilot.py paper-strategy-review
 ```
 
-`paper-event-ledger` reads entry, replace, protective-stop, TP1, and full-exit paper journals by default. Successful pending-order replaces appear as deterministic `order_replaced` events in `runtime/journal/events.jsonl`.
+`paper-event-ledger` reads entry, cancel-plan, replace, protective-stop, TP1, and full-exit artifacts by default. Successful pending-order replaces appear as deterministic `order_replaced` events, and executed/failed cancels appear as `order_cancel_executed` / `order_cancel_failed` events in `runtime/journal/events.jsonl`.
 
 Optional compatibility projection into `runtime/journal/trades.jsonl`:
 

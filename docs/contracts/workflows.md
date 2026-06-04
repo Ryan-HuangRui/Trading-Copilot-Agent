@@ -1008,6 +1008,7 @@ Inputs:
 - Optional `runtime/paper/<DATE>/paper-take-profit-orders.jsonl`.
 - Optional `runtime/paper/<DATE>/paper-exit-orders.jsonl`.
 - Optional `runtime/paper/<DATE>/paper-replace-orders.jsonl`.
+- Optional `report/<DATE>/paper-order-cancel-plan.json`.
 - Optional `runtime/paper/<DATE>/paper-execution-state.json`.
 
 Output:
@@ -1022,6 +1023,7 @@ Required behavior:
 - Must preserve existing events from other workflows or dates.
 - Must include order shape fields in submitted and state-derived event payloads so non-LO TP1, trigger, and trailing orders remain auditable.
 - Must emit `order_replaced` events from `paper-replace-orders.jsonl`, preserving previous/new quantity, previous/new limit price, decision reason, and raw request/response.
+- Must emit `order_cancel_executed` and `order_cancel_failed` events from `paper-order-cancel-plan.json`, preserving cancel reason, broker order id, raw request/response, and error details when present.
 - Must emit at least submitted events from paper journals and observed status events from `paper-execution-state.json` when available.
 - Event payloads must preserve `intent_id`, `source_signal_id`, `broker_order_id`, `symbol`, `side`, `quantity`, `remark`, and raw request/response fields when present.
 
