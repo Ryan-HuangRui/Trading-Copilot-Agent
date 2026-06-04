@@ -142,6 +142,8 @@ Build a break-even stop movement plan after TP1 fill evidence exists:
 python3 script/trading_copilot.py paper-break-even-stop-plan --date <DATE>
 ```
 
+The default replacement stop is a Longbridge `sell MIT` at the computed break-even price. Alternative replacement stop order types can be dry-run with the shared shape flags, for example `--order-type LIT --limit-price <LIMIT>` or `--order-type TSLPPCT --trailing-percent 2.5 --limit-offset 0.3`.
+
 Execute a guarded break-even stop movement after enabling `paper_execution.allow_break_even_stop_move=true`:
 
 ```bash

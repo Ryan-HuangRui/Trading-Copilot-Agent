@@ -32,7 +32,7 @@
 - `paper_order_cancel.py`: cancel-plan builder for expired unfilled paper entry orders; defaults to dry-run and only cancels through the gated paper order adapter when execution gates are explicitly enabled.
 - `paper_protective_stop_plan.py`: protective stop planner for filled long paper entries. It defaults to dry-run, defaults stops to `sell MIT`, supports shared Longbridge paper order shape fields for alternate protective-stop order types, and only submits through the gated paper order adapter when execution gates are explicitly enabled.
 - `paper_take_profit_plan.py`: TP1 partial-exit planner for filled long paper entries. It defaults to dry-run, defaults TP1 to `sell LO`, supports shared Longbridge paper order shape fields for alternate TP1 order types, and only submits through the gated paper order adapter when execution gates are explicitly enabled.
-- `paper_break_even_stop_plan.py`: break-even stop movement planner for filled long paper entries after TP1 fill evidence. It defaults to dry-run and only performs guarded cancel + new MIT stop submission when execution gates are explicitly enabled.
+- `paper_break_even_stop_plan.py`: break-even stop movement planner for filled long paper entries after TP1 fill evidence. It defaults to dry-run, defaults replacement stops to `sell MIT`, supports shared Longbridge paper order shape fields for alternate replacement stop order types, and only performs guarded cancel + new stop submission when execution gates are explicitly enabled.
 - `paper_trade_review.py`: compares submitted/previewed paper orders with observed paper executions and can append matched paper fills to the journal.
 - `position_review.py`: compares read-only positions with a session-specific signal sidecar and writes review artifacts.
 - `data_quality.py`: checks daily snapshot data source/freshness, focused-symbol fallback, account price deltas, and abnormal moves.
@@ -80,6 +80,7 @@
 - Submit guarded paper TP1 partial exits after enabling `paper_execution.allow_take_profit=true`: `python3 script/trading_copilot.py paper-take-profit-plan --date 2026-05-06 --execute`.
 - Build break-even stop movement plan: `python3 script/trading_copilot.py paper-break-even-stop-plan --date 2026-05-06`.
 - Move stops to break-even after enabling `paper_execution.allow_break_even_stop_move=true`: `python3 script/trading_copilot.py paper-break-even-stop-plan --date 2026-05-06 --execute`.
+- Build break-even stop movement with a non-default stop shape: `python3 script/trading_copilot.py paper-break-even-stop-plan --date 2026-05-06 --order-type LIT --limit-price <LIMIT>`.
 - Run lifecycle with a non-market plan-invalidated exit shape: `python3 script/trading_copilot.py paper-lifecycle --date 2026-05-06 --exit-order-type LIT --exit-limit-price <LIMIT> --exit-trigger-price <TRIGGER>`.
 - Review paper executions: `python3 script/trading_copilot.py paper-trade-review --date 2026-05-06 --session pre-market --append`.
 - Run position review: `python3 script/trading_copilot.py position-review --date 2026-05-06 --append`.

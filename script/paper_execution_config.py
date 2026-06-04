@@ -92,7 +92,7 @@ SUPPORTED_BROKER_ACTIONS: tuple[dict[str, Any], ...] = (
         "action": "break_even_stop_move",
         "label": "Break-even stop move",
         "config_key": "allow_break_even_stop_move",
-        "order_type": "MIT",
+        "order_type": "LO/ELO/MO/AO/ALO/ODD/SLO/LIT/MIT/TSLPAMT/TSLPPCT",
         "side": "sell",
         "workflow": "paper-break-even-stop-plan",
         "maturity": "guarded_cancel_then_submit",

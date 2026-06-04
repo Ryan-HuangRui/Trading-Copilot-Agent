@@ -1250,9 +1250,10 @@ Required behavior:
 - Only fully filled long buy entries with TP1 fill evidence, a positive remaining quantity, an existing protective stop order id, and a break-even price may become move candidates.
 - TP1 fill evidence may come from `tp1_status=filled`, `take_profit_status=filled`, or positive `tp1_filled_quantity` / `take_profit_filled_quantity` in the execution state.
 - Break-even price is based on `avg_fill_price`, falling back to entry/limit price, with optional non-negative `--buffer-pct`.
-- Candidates must include the existing stop order id, remaining quantity, new trigger price, and preview steps for canceling the old stop and submitting a replacement `sell MIT`.
+- Candidates must include the existing stop order id, remaining quantity, replacement order shape, and preview steps for canceling the old stop and submitting the replacement stop.
 - The default mode is dry-run. `--execute` is allowed only against `lb_papertrading` when the selected paper execution config enables `broker_writes_enabled=true` and `allow_break_even_stop_move=true`.
-- Execution must cancel the old stop first and submit a new `sell MIT` stop for the remaining quantity. Longbridge `order replace` must not be used for this movement because it cannot update MIT trigger prices.
+- The default replacement stop is Longbridge `sell MIT` at the computed break-even price. Alternative replacement stop order types may use the shared order model through `--order-type`, `--limit-price`, `--trigger-price`, `--trailing-amount`, `--trailing-percent`, `--limit-offset`, `--expire-date`, and `--outside-rth`; price-based orders default price to the computed break-even price and trigger-based orders default trigger to the computed break-even price.
+- Execution must cancel the old stop first and submit a new stop for the remaining quantity. Longbridge `order replace` must not be used for this movement because it cannot update MIT trigger prices.
 - Successful movement records must be appended to `runtime/paper/<DATE>/paper-stop-orders.jsonl` and preserve the replaced stop id, new stop id, raw cancel request/response, raw submit request/response, and `intent_id`.
 
 ## paper-lifecycle
@@ -1282,6 +1283,7 @@ Required behavior:
 - The wrapper must run paper account snapshot and paper order sync before exit planning.
 - It must run cancel, protective-stop, TP1, and break-even workflows, passing `--execute` only for the explicitly requested action flags.
 - For plan-invalidated exits, it must pass shared exit order shape fields through to `paper-exit-plan`: `--exit-order-type`, `--exit-limit-price`, `--exit-trigger-price`, `--exit-trailing-amount`, `--exit-trailing-percent`, `--exit-limit-offset`, `--exit-expire-date`, and `--exit-outside-rth`.
+- For break-even stop movement, it must pass shared replacement stop order shape fields through to `paper-break-even-stop-plan`: `--break-even-order-type`, `--break-even-limit-price`, `--break-even-trigger-price`, `--break-even-trailing-amount`, `--break-even-trailing-percent`, `--break-even-limit-offset`, `--break-even-expire-date`, and `--break-even-outside-rth`.
 - It must refresh paper account snapshot and order sync after exit planning, then run paper event ledger and paper execution review.
 - It may append paper learning lessons only with `--append-lessons`.
 - It may refresh strategy-level paper review only with `--strategy-review`.

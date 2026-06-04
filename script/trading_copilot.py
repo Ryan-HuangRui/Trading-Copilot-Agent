@@ -2698,7 +2698,39 @@ def run_paper_lifecycle(args: argparse.Namespace) -> None:
             workflow="paper_break_even_stop_plan",
             script="script/paper_break_even_stop_plan.py",
             execute=bool(args.execute_break_even_stop),
-            extra=["--tif", args.break_even_tif],
+            extra=[
+                "--order-type",
+                getattr(args, "break_even_order_type", "MIT"),
+                "--tif",
+                args.break_even_tif,
+                *(
+                    ["--limit-price", str(args.break_even_limit_price)]
+                    if getattr(args, "break_even_limit_price", None) is not None
+                    else []
+                ),
+                *(
+                    ["--trigger-price", str(args.break_even_trigger_price)]
+                    if getattr(args, "break_even_trigger_price", None) is not None
+                    else []
+                ),
+                *(
+                    ["--trailing-amount", str(args.break_even_trailing_amount)]
+                    if getattr(args, "break_even_trailing_amount", None) is not None
+                    else []
+                ),
+                *(
+                    ["--trailing-percent", str(args.break_even_trailing_percent)]
+                    if getattr(args, "break_even_trailing_percent", None) is not None
+                    else []
+                ),
+                *(
+                    ["--limit-offset", str(args.break_even_limit_offset)]
+                    if getattr(args, "break_even_limit_offset", None) is not None
+                    else []
+                ),
+                *(["--expire-date", args.break_even_expire_date] if getattr(args, "break_even_expire_date", None) else []),
+                *(["--outside-rth", args.break_even_outside_rth] if getattr(args, "break_even_outside_rth", None) else []),
+            ],
         )
         account_snapshot()
         final_sync = order_sync()
@@ -3024,6 +3056,8 @@ def run_paper_break_even_stop_plan(args: argparse.Namespace) -> None:
         args.repo_root,
         "--buffer-pct",
         str(args.buffer_pct),
+        "--order-type",
+        args.order_type,
         "--tif",
         args.tif,
     ]
@@ -3033,6 +3067,26 @@ def run_paper_break_even_stop_plan(args: argparse.Namespace) -> None:
         command.extend(["--stops-journal", args.stops_journal])
     if args.output:
         command.extend(["--output", args.output])
+    optional_prices = [
+        ("--limit-price", args.limit_price),
+        ("--trigger-price", args.trigger_price),
+        ("--trailing-amount", args.trailing_amount),
+        ("--trailing-percent", args.trailing_percent),
+        ("--limit-offset", args.limit_offset),
+    ]
+    for flag, value in optional_prices:
+        if value is not None:
+            command.extend([flag, str(value)])
+    if args.expire_date:
+        command.extend(["--expire-date", args.expire_date])
+    if args.outside_rth:
+        command.extend(["--outside-rth", args.outside_rth])
+    if args.longbridge_cli:
+        command.extend(["--longbridge-cli", args.longbridge_cli])
+    if args.paper_execution_config:
+        command.extend(["--paper-execution-config", args.paper_execution_config])
+    if args.execute:
+        command.append("--execute")
 
     proc = run_child(command)
     stdout = parse_json_output(proc.stdout)
@@ -3712,6 +3766,14 @@ def build_parser() -> argparse.ArgumentParser:
     paper_lifecycle.add_argument("--exit-expire-date")
     paper_lifecycle.add_argument("--exit-outside-rth")
     paper_lifecycle.add_argument("--break-even-tif", default="gtc")
+    paper_lifecycle.add_argument("--break-even-order-type", default="MIT")
+    paper_lifecycle.add_argument("--break-even-limit-price", type=float)
+    paper_lifecycle.add_argument("--break-even-trigger-price", type=float)
+    paper_lifecycle.add_argument("--break-even-trailing-amount", type=float)
+    paper_lifecycle.add_argument("--break-even-trailing-percent", type=float)
+    paper_lifecycle.add_argument("--break-even-limit-offset", type=float)
+    paper_lifecycle.add_argument("--break-even-expire-date")
+    paper_lifecycle.add_argument("--break-even-outside-rth")
     paper_lifecycle.add_argument("--exit-fraction", type=float, default=0.5)
     paper_lifecycle.add_argument("--append-lessons", action="store_true")
     paper_lifecycle.add_argument("--strategy-review", action="store_true")
@@ -3802,7 +3864,18 @@ def build_parser() -> argparse.ArgumentParser:
     paper_be.add_argument("--stops-journal")
     paper_be.add_argument("--output")
     paper_be.add_argument("--buffer-pct", type=float, default=0.0)
+    paper_be.add_argument("--order-type", default="MIT")
+    paper_be.add_argument("--limit-price", type=float)
+    paper_be.add_argument("--trigger-price", type=float)
+    paper_be.add_argument("--trailing-amount", type=float)
+    paper_be.add_argument("--trailing-percent", type=float)
+    paper_be.add_argument("--limit-offset", type=float)
     paper_be.add_argument("--tif", default="gtc")
+    paper_be.add_argument("--expire-date")
+    paper_be.add_argument("--outside-rth")
+    paper_be.add_argument("--longbridge-cli")
+    paper_be.add_argument("--execute", action="store_true")
+    paper_be.add_argument("--paper-execution-config")
     paper_be.add_argument("--repo-root", default=str(ROOT))
     paper_be.set_defaults(func=run_paper_break_even_stop_plan)
 

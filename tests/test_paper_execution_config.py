@@ -82,6 +82,8 @@ class PaperExecutionConfigTest(unittest.TestCase):
         self.assertIn("MIT", actions["protective_stop"]["order_type"])
         self.assertIn("TSLPPCT", actions["protective_stop"]["order_type"])
         self.assertEqual(actions["break_even_stop_move"]["config_key"], "allow_break_even_stop_move")
+        self.assertIn("LIT", actions["break_even_stop_move"]["order_type"])
+        self.assertIn("TSLPPCT", actions["break_even_stop_move"]["order_type"])
         self.assertEqual(actions["take_profit_stop_resize"]["config_key"], "allow_take_profit_stop_resize")
         self.assertEqual(actions["exit_cancel_replace"]["config_key"], "allow_exit_cancel_replace")
         self.assertEqual(actions["exit_submit"]["config_key"], "allow_exit_submit")

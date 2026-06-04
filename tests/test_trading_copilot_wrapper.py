@@ -377,7 +377,15 @@ class TradingCopilotWrapperTest(unittest.TestCase):
             exit_tif="gtd",
             exit_expire_date="2026-05-27",
             exit_outside_rth="false",
+            break_even_order_type="LIT",
+            break_even_limit_price=100.0,
+            break_even_trigger_price=None,
+            break_even_trailing_amount=None,
+            break_even_trailing_percent=None,
+            break_even_limit_offset=None,
             break_even_tif="gtc",
+            break_even_expire_date=None,
+            break_even_outside_rth=None,
             exit_fraction=0.5,
             learning_dir="runtime/learning",
         )
@@ -414,6 +422,8 @@ class TradingCopilotWrapperTest(unittest.TestCase):
         self.assertEqual(by_workflow["paper_exit_plan"][by_workflow["paper_exit_plan"].index("--tif") + 1], "gtd")
         self.assertEqual(by_workflow["paper_exit_plan"][by_workflow["paper_exit_plan"].index("--expire-date") + 1], "2026-05-27")
         self.assertEqual(by_workflow["paper_exit_plan"][by_workflow["paper_exit_plan"].index("--outside-rth") + 1], "false")
+        self.assertEqual(by_workflow["paper_break_even_stop_plan"][by_workflow["paper_break_even_stop_plan"].index("--order-type") + 1], "LIT")
+        self.assertEqual(by_workflow["paper_break_even_stop_plan"][by_workflow["paper_break_even_stop_plan"].index("--limit-price") + 1], "100.0")
         payload = emit.call_args.args[0]
         self.assertEqual(payload["workflow"], "paper-lifecycle")
         self.assertEqual(payload["summary"]["paper_order_sync"]["filled"], 1)
@@ -456,7 +466,15 @@ class TradingCopilotWrapperTest(unittest.TestCase):
             exit_tif="gtd",
             exit_expire_date="2026-05-27",
             exit_outside_rth="false",
+            break_even_order_type="LIT",
+            break_even_limit_price=100.0,
+            break_even_trigger_price=None,
+            break_even_trailing_amount=None,
+            break_even_trailing_percent=None,
+            break_even_limit_offset=None,
             break_even_tif="gtc",
+            break_even_expire_date=None,
+            break_even_outside_rth=None,
             exit_fraction=0.5,
             learning_dir="runtime/learning",
         )
@@ -480,6 +498,8 @@ class TradingCopilotWrapperTest(unittest.TestCase):
         self.assertEqual(by_workflow["paper_exit_plan"][by_workflow["paper_exit_plan"].index("--expire-date") + 1], "2026-05-27")
         self.assertEqual(by_workflow["paper_exit_plan"][by_workflow["paper_exit_plan"].index("--outside-rth") + 1], "false")
         self.assertIn("--execute", by_workflow["paper_break_even_stop_plan"])
+        self.assertEqual(by_workflow["paper_break_even_stop_plan"][by_workflow["paper_break_even_stop_plan"].index("--order-type") + 1], "LIT")
+        self.assertEqual(by_workflow["paper_break_even_stop_plan"][by_workflow["paper_break_even_stop_plan"].index("--limit-price") + 1], "100.0")
         self.assertIn("--paper-execution-config", by_workflow["paper_order_cancel"])
         self.assertIn("/usr/local/bin/longbridge", by_workflow["paper_order_cancel"])
         self.assertIn("paper_learning_lessons", [Path(command[0]).stem for command in calls])
@@ -538,6 +558,59 @@ class TradingCopilotWrapperTest(unittest.TestCase):
         payload = emit.call_args.args[0]
         self.assertEqual(payload["workflow"], "paper-take-profit-plan")
         self.assertEqual(payload["summary"]["resized_stops"], 1)
+
+    def test_paper_break_even_wrapper_passes_execute_and_order_options(self):
+        calls = []
+
+        def fake_run_child(command):
+            calls.append(command)
+            payload = {
+                "status": "success",
+                "date": "2026-05-26",
+                "output": "report/2026-05-26/paper-break-even-stop-plan.json",
+                "dry_run": False,
+                "summary": {"move_candidates": 1, "moved": 1},
+            }
+            return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
+
+        args = Namespace(
+            date="2026-05-26",
+            repo_root=str(ROOT),
+            state="runtime/paper/2026-05-26/paper-execution-state.json",
+            stops_journal="runtime/paper/2026-05-26/paper-stop-orders.jsonl",
+            output="report/2026-05-26/paper-break-even-stop-plan.json",
+            buffer_pct=0.1,
+            order_type="LIT",
+            limit_price=100.0,
+            trigger_price=None,
+            trailing_amount=None,
+            trailing_percent=None,
+            limit_offset=None,
+            tif="gtd",
+            expire_date="2026-05-27",
+            outside_rth="false",
+            execute=True,
+            longbridge_cli="/usr/local/bin/longbridge",
+            paper_execution_config="config/paper_execution.local.json",
+        )
+
+        with patch.object(trading_copilot, "run_child", side_effect=fake_run_child), patch.object(
+            trading_copilot, "emit", side_effect=SystemExit
+        ) as emit:
+            with self.assertRaises(SystemExit):
+                trading_copilot.run_paper_break_even_stop_plan(args)
+
+        command = calls[0]
+        self.assertEqual(command[0], "script/paper_break_even_stop_plan.py")
+        self.assertEqual(command[command.index("--order-type") + 1], "LIT")
+        self.assertEqual(command[command.index("--limit-price") + 1], "100.0")
+        self.assertEqual(command[command.index("--tif") + 1], "gtd")
+        self.assertEqual(command[command.index("--expire-date") + 1], "2026-05-27")
+        self.assertIn("--execute", command)
+        self.assertIn("--paper-execution-config", command)
+        payload = emit.call_args.args[0]
+        self.assertEqual(payload["workflow"], "paper-break-even-stop-plan")
+        self.assertEqual(payload["summary"]["moved"], 1)
 
     def test_paper_exit_plan_wrapper_passes_execute_and_order_options(self):
         calls = []
