@@ -15,6 +15,10 @@ ENABLE_PAPER_DRY_RUN="${TCA_INTRADAY_ENABLE_PAPER_DRY_RUN:-0}"
 ENABLE_PAPER_EXECUTE="${TCA_INTRADAY_PAPER_EXECUTE:-0}"
 ENABLE_PAPER_LIFECYCLE="${TCA_INTRADAY_ENABLE_PAPER_LIFECYCLE:-0}"
 ENABLE_EXIT_EXECUTE="${TCA_INTRADAY_EXIT_EXECUTE:-0}"
+ENABLE_CANCEL_EXECUTE="${TCA_INTRADAY_CANCEL_EXECUTE:-0}"
+ENABLE_PROTECTIVE_STOP_EXECUTE="${TCA_INTRADAY_PROTECTIVE_STOP_EXECUTE:-0}"
+ENABLE_TAKE_PROFIT_EXECUTE="${TCA_INTRADAY_TAKE_PROFIT_EXECUTE:-0}"
+ENABLE_BREAK_EVEN_STOP_EXECUTE="${TCA_INTRADAY_BREAK_EVEN_STOP_EXECUTE:-0}"
 
 cd "$REPO" || exit 1
 mkdir -p "$LOG_DIR"
@@ -122,11 +126,14 @@ PROMPT="你是 Trading-Copilot-Agent 的 cc-connect 盘中 Codex 盯盘定时任
   python3 script/trading_copilot.py paper-execution-review --date $DATE
 - 如果有 submitted/skipped/error，使用 cc-connect send 向当前飞书会话发送一条简短模拟盘状态，包含 artifact 路径。
 
-盘中模拟盘生命周期开关：TCA_INTRADAY_ENABLE_PAPER_LIFECYCLE=$ENABLE_PAPER_LIFECYCLE，TCA_INTRADAY_EXIT_EXECUTE=$ENABLE_EXIT_EXECUTE。
+盘中模拟盘生命周期开关：TCA_INTRADAY_ENABLE_PAPER_LIFECYCLE=$ENABLE_PAPER_LIFECYCLE。
 - 只有 ENABLE_PAPER_LIFECYCLE=1 且 runtime/paper/$DATE/paper-orders.jsonl 存在时，才运行同步与 exit 管理：
   python3 script/trading_copilot.py paper-lifecycle --date $DATE --paper-execution-config $PAPER_CONFIG --append-lessons --strategy-review
-- 只有 ENABLE_EXIT_EXECUTE=1 时，且对应 config gate 已启用，才可以追加：
-  --execute-cancel --execute-protective-stop --execute-take-profit --execute-break-even-stop
+- exit 执行必须逐项打开，不能因为 TCA_INTRADAY_EXIT_EXECUTE=$ENABLE_EXIT_EXECUTE 就一次性打开全部：
+  - TCA_INTRADAY_CANCEL_EXECUTE=$ENABLE_CANCEL_EXECUTE；只有该值为 1 且 config 允许时才追加 --execute-cancel。
+  - TCA_INTRADAY_PROTECTIVE_STOP_EXECUTE=$ENABLE_PROTECTIVE_STOP_EXECUTE；只有该值为 1 且 config 允许时才追加 --execute-protective-stop。
+  - TCA_INTRADAY_TAKE_PROFIT_EXECUTE=$ENABLE_TAKE_PROFIT_EXECUTE；只有该值为 1 且 config 允许时才追加 --execute-take-profit。
+  - TCA_INTRADAY_BREAK_EVEN_STOP_EXECUTE=$ENABLE_BREAK_EVEN_STOP_EXECUTE；只有该值为 1 且 config 允许时才追加 --execute-break-even-stop。
 - 该 wrapper 已包含 account-snapshot、paper-order-sync、exit 计划、再次同步、paper-event-ledger、paper-execution-review。
 - lifecycle dry-run 或执行后，如果有 executed/submitted/moved/errors/candidate lessons，使用 cc-connect send 发送一条简短飞书状态。
 
