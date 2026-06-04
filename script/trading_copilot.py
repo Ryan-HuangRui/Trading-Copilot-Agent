@@ -557,6 +557,136 @@ def run_intraday_tracker(args: argparse.Namespace) -> None:
     emit(response)
 
 
+def run_intraday_dry_run(args: argparse.Namespace) -> None:
+    extract_command = [
+        "script/extract_monitor_signals.py",
+        "--monitor",
+        args.monitor,
+        "--date",
+        args.date,
+        "--max-signals",
+        str(args.max_signals),
+        "--timezone",
+        args.timezone,
+    ]
+    if args.signals_output:
+        extract_command.extend(["--signals-output", args.signals_output])
+    extract_proc = run_child(extract_command)
+    extract_stdout = parse_json_output(extract_proc.stdout)
+    if extract_proc.returncode != 0:
+        emit(failed_response("intraday-dry-run", extract_command, extract_proc), 1)
+    signals_path = (extract_stdout or {}).get("signals_path")
+    if not signals_path:
+        response = failed_response("intraday-dry-run", extract_command, extract_proc)
+        response["reason"] = "extract-monitor-signals did not return signals_path"
+        emit(response, 1)
+
+    validate_command = [
+        "script/validate_trade_plan.py",
+        "--date",
+        args.date,
+        "--session",
+        "monitor",
+        "--signals",
+        signals_path,
+    ]
+    validate_proc = run_child(validate_command)
+    validate_stdout = parse_json_output(validate_proc.stdout)
+    if validate_proc.returncode != 0:
+        emit(failed_response("intraday-dry-run", validate_command, validate_proc), 1)
+
+    preview_command = [
+        "script/paper_trade_preview.py",
+        "--date",
+        args.date,
+        "--session",
+        "monitor",
+        "--signals",
+        signals_path,
+        "--default-market",
+        args.default_market,
+        "--tif",
+        args.tif,
+        "--require-validation",
+    ]
+    if args.account_snapshot:
+        preview_command.extend(["--account-snapshot", args.account_snapshot])
+    if args.preview_output:
+        preview_command.extend(["--output", args.preview_output])
+    preview_proc = run_child(preview_command)
+    preview_stdout = parse_json_output(preview_proc.stdout)
+    if preview_proc.returncode != 0:
+        emit(failed_response("intraday-dry-run", preview_command, preview_proc), 1)
+    preview_path = (preview_stdout or {}).get("output") or args.preview_output
+
+    submit_command = [
+        "script/paper_trade_submit.py",
+        "--date",
+        args.date,
+        "--session",
+        "monitor",
+        "--signals",
+        signals_path,
+        "--max-daily-risk-pct",
+        str(args.max_daily_risk_pct),
+        "--max-daily-orders",
+        str(args.max_daily_orders),
+        "--require-validation",
+    ]
+    if preview_path:
+        submit_command.extend(["--preview", preview_path])
+    if args.account_snapshot:
+        submit_command.extend(["--account-snapshot", args.account_snapshot])
+    if args.submit_output:
+        submit_command.extend(["--output", args.submit_output])
+    submit_proc = run_child(submit_command)
+    submit_stdout = parse_json_output(submit_proc.stdout)
+    if submit_proc.returncode != 0:
+        emit(failed_response("intraday-dry-run", submit_command, submit_proc), 1)
+
+    summary_command = [
+        "script/feishu_summary.py",
+        "--date",
+        args.date,
+        "--session",
+        "monitor",
+        "--signals",
+        signals_path,
+        "--learning-dir",
+        args.learning_dir,
+    ]
+    if args.summary_output:
+        summary_command.extend(["--output", args.summary_output])
+    summary_proc = run_child(summary_command)
+    summary_stdout = parse_json_output(summary_proc.stdout)
+    if summary_proc.returncode != 0:
+        emit(failed_response("intraday-dry-run", summary_command, summary_proc), 1)
+
+    artifacts = [
+        signals_path,
+        (preview_stdout or {}).get("output"),
+        (submit_stdout or {}).get("output"),
+        (summary_stdout or {}).get("output"),
+    ]
+    response = base_response("intraday-dry-run", extract_command, extract_stdout)
+    response["date"] = args.date
+    response["artifacts"] = [artifact for artifact in artifacts if artifact]
+    response["dry_run"] = bool((submit_stdout or {}).get("dry_run", True))
+    response["validation"] = validate_stdout
+    response["signals"] = (extract_stdout or {}).get("signals", [])
+    response["preview_summary"] = (preview_stdout or {}).get("summary", {})
+    response["submit_summary"] = (submit_stdout or {}).get("summary", {})
+    response["feishu_summary"] = (summary_stdout or {}).get("summary", {})
+    response["commands"] = {
+        "extract": extract_command,
+        "validate": validate_command,
+        "preview": preview_command,
+        "submit": submit_command,
+        "feishu": summary_command,
+    }
+    emit(response)
+
+
 def run_agent_research_context(args: argparse.Namespace) -> None:
     symbols = normalize_symbols(args.symbol)
     output = resolve_repo_path(args.output) if args.output else ROOT / "report" / args.date / "agents" / "research-context.json"
@@ -2613,6 +2743,23 @@ def build_parser() -> argparse.ArgumentParser:
     intraday_tracker.add_argument("--timezone", default="America/New_York")
     intraday_tracker.add_argument("--as-of")
     intraday_tracker.set_defaults(func=run_intraday_tracker)
+
+    intraday_dry_run = sub.add_parser("intraday-dry-run", help="Run monitor candidates through dry-run paper checks")
+    intraday_dry_run.add_argument("--date", required=True)
+    intraday_dry_run.add_argument("--monitor", default="report/latest-monitor.json")
+    intraday_dry_run.add_argument("--max-signals", type=int, default=5)
+    intraday_dry_run.add_argument("--timezone", default="America/New_York")
+    intraday_dry_run.add_argument("--signals-output")
+    intraday_dry_run.add_argument("--account-snapshot")
+    intraday_dry_run.add_argument("--preview-output")
+    intraday_dry_run.add_argument("--submit-output")
+    intraday_dry_run.add_argument("--summary-output")
+    intraday_dry_run.add_argument("--default-market", default="US")
+    intraday_dry_run.add_argument("--tif", default="day")
+    intraday_dry_run.add_argument("--max-daily-risk-pct", type=float, default=3.0)
+    intraday_dry_run.add_argument("--max-daily-orders", type=int, default=3)
+    intraday_dry_run.add_argument("--learning-dir", default="runtime/learning")
+    intraday_dry_run.set_defaults(func=run_intraday_dry_run)
 
     agent_context = sub.add_parser("agent-research-context", help="Write a Phase 0 agent research context skeleton")
     agent_context.add_argument("--date", required=True)

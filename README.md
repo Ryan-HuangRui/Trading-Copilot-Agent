@@ -57,6 +57,7 @@ python3 script/trading_copilot.py post-market-review --watchlist config/watchlis
 python3 script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day --include-journal-signals --include-position-symbols --include-agent-research
 python3 script/trading_copilot.py monitor-brief --state config/monitor_state.json --interval 5min
 python3 script/trading_copilot.py intraday-tracker --date <DATE> --top-n 5
+python3 script/trading_copilot.py intraday-dry-run --date <DATE>
 python3 script/trading_copilot.py agent-research-context --date <DATE> --symbol <SYMBOL>
 python3 script/trading_copilot.py agent-research-reports --date <DATE> --symbol <SYMBOL>
 python3 script/trading_copilot.py validate-agent-reports --date <DATE> --symbol <SYMBOL>
@@ -279,6 +280,8 @@ Memory 只能降低置信度、增加限制或触发人工 review，不能提高
 - monitor scan 原生输出 setup/risk_quality/journal_appendable；journal 记录仍只是观察，不是执行指令
 - monitor dry-run 闭环：
   ```bash
+  python3 script/trading_copilot.py intraday-dry-run --date YYYY-MM-DD
+  # 等价拆解如下：
   python3 script/trading_copilot.py validate-trade-plan --session monitor --date YYYY-MM-DD
   python3 script/trading_copilot.py paper-trade-preview --date YYYY-MM-DD --session monitor --require-validation
   python3 script/trading_copilot.py paper-trade-submit --date YYYY-MM-DD --session monitor --require-validation

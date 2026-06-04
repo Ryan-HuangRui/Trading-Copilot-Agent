@@ -188,6 +188,31 @@ Required behavior:
 - Treat `events.jsonl` as notification candidates only.
 - Do not submit, cancel, or replace broker orders from this workflow.
 
+## intraday-dry-run
+
+Purpose: convert the latest monitor observations into validated watch-only monitor signals and run paper preview/submission dry-run checks.
+
+Canonical command:
+
+```bash
+python3 script/trading_copilot.py intraday-dry-run --date <DATE>
+```
+
+Deterministic sequence:
+
+1. `extract_monitor_signals.py`
+2. `validate_trade_plan.py --session monitor`
+3. `paper_trade_preview.py --session monitor --require-validation`
+4. `paper_trade_submit.py --session monitor --require-validation`
+5. `feishu_summary.py --session monitor`
+
+Required behavior:
+
+- The wrapper must not pass `--execute` to any child command.
+- `paper_trade_submit.py` remains dry-run for monitor session.
+- Output artifacts are review and notification inputs only.
+- This workflow must not submit broker orders.
+
 ## agent-research-context
 
 Purpose: create the TradingAgents-style research context envelope used by later deterministic data tools and role prompts.
