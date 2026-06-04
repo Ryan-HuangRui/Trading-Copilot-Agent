@@ -112,7 +112,10 @@ Confirm paper execution config stays explicit and defaults to no broker writes. 
     "allow_intraday_entry_submit": false,
     "allow_cancel": false,
     "allow_protective_stop": false,
-    "allow_take_profit": false
+    "allow_take_profit": false,
+    "allow_order_replace": false,
+    "allow_break_even_stop_move": false,
+    "allow_auth_status_unknown_paper_channel": false
   }
 }
 ```
@@ -371,7 +374,7 @@ Recommended cc connect instruction:
 Run Trading-Copilot-Agent paper order sync and execution review for <DATE>:
 refresh the Longbridge paper account snapshot, sync submitted order state, project paper events,
 generate execution review, append paper learning candidates, and refresh strategy-level paper review.
-Run cancel/protective-stop/TP1 workflows in dry-run mode only.
+Run cancel/pending-order-replace/protective-stop/TP1 workflows in dry-run mode only.
 ```
 
 Repository workflow stages:
@@ -380,7 +383,7 @@ Repository workflow stages:
 python3 script/trading_copilot.py paper-lifecycle --date <DATE> --append-lessons --strategy-review
 ```
 
-The wrapper expands to account snapshot, order sync, cancel/protective-stop/TP1/break-even planning, a post-plan resync, event ledger, execution review, optional learning append, and optional strategy review.
+The wrapper expands to account snapshot, order sync, cancel/pending-order-replace/protective-stop/TP1/full-exit/break-even planning, a post-plan resync, event ledger, execution review, optional learning append, and optional strategy review.
 
 Keep these execution switches disabled in the initial rollout:
 
@@ -388,6 +391,7 @@ Keep these execution switches disabled in the initial rollout:
 {
   "paper_execution": {
     "allow_cancel": false,
+    "allow_order_replace": false,
     "allow_protective_stop": false,
     "allow_take_profit": false,
     "allow_break_even_stop_move": false,
@@ -396,9 +400,9 @@ Keep these execution switches disabled in the initial rollout:
 }
 ```
 
-Do not add `--execute` to `paper-order-cancel`, `paper-protective-stop-plan`, `paper-take-profit-plan`, or `paper-break-even-stop-plan` while those config gates are false. Current exit-management execution is intentionally dry-run because protective stops use the full filled quantity while TP1 uses a partial exit quantity; automatic execution needs OCO or stop resize/cancel-then-submit safety before rollout. If the Longbridge CLI omits `account_channel` from `auth status`, `allow_auth_status_unknown_paper_channel=true` may be used only in ignored host-local config after the host token has been separately verified as paper trading; explicit non-paper channels still fail.
+Do not add `--execute` to `paper-order-cancel`, `paper-order-replace`, `paper-protective-stop-plan`, `paper-take-profit-plan`, or `paper-break-even-stop-plan` while those config gates are false. `paper-order-replace` is limited to pending order quantity/limit-price changes from `paper-replace-decisions.json`; stop trigger movement stays cancel+submit. Current exit-management execution is intentionally dry-run because protective stops use the full filled quantity while TP1 uses a partial exit quantity; automatic execution needs OCO or stop resize/cancel-then-submit safety before rollout. If the Longbridge CLI omits `account_channel` from `auth status`, `allow_auth_status_unknown_paper_channel=true` may be used only in ignored host-local config after the host token has been separately verified as paper trading; explicit non-paper channels still fail.
 
-The provided `ops/cc-connect/tca-paper-sync-review.sh` calls `paper-lifecycle`. It keeps each exit action dry-run unless the matching environment switch is set (`TCA_PAPER_CANCEL_EXECUTE=1`, `TCA_PAPER_PROTECTIVE_STOP_EXECUTE=1`, `TCA_PAPER_TAKE_PROFIT_EXECUTE=1`, or `TCA_PAPER_BREAK_EVEN_STOP_EXECUTE=1`). Even with those switches, the selected `config/paper_execution.local.json` must enable `broker_writes_enabled=true` and the matching action gate.
+The provided `ops/cc-connect/tca-paper-sync-review.sh` calls `paper-lifecycle`. It keeps each exit action dry-run unless the matching environment switch is set (`TCA_PAPER_CANCEL_EXECUTE=1`, `TCA_PAPER_ORDER_REPLACE_EXECUTE=1`, `TCA_PAPER_PROTECTIVE_STOP_EXECUTE=1`, `TCA_PAPER_TAKE_PROFIT_EXECUTE=1`, or `TCA_PAPER_BREAK_EVEN_STOP_EXECUTE=1`). Even with those switches, the selected `config/paper_execution.local.json` must enable `broker_writes_enabled=true` and the matching action gate.
 
 ## Optional Monitor Journal Task
 
@@ -418,6 +422,7 @@ TCA_INTRADAY_ENABLE_PAPER_LIFECYCLE=1 \
 TCA_INTRADAY_PAPER_EXECUTE=1 \
 TCA_INTRADAY_EXIT_EXECUTE=0 \
 TCA_INTRADAY_CANCEL_EXECUTE=1 \
+TCA_INTRADAY_ORDER_REPLACE_EXECUTE=0 \
 TCA_INTRADAY_PROTECTIVE_STOP_EXECUTE=1 \
 TCA_INTRADAY_TAKE_PROFIT_EXECUTE=0 \
 TCA_INTRADAY_RESIZE_STOP_BEFORE_TAKE_PROFIT=0 \
@@ -426,7 +431,7 @@ TCA_INTRADAY_BREAK_EVEN_STOP_EXECUTE=0 \
 bash ops/cc-connect/tca-intraday-codex-monitor.sh <DATE>
 ```
 
-This requires the ignored NAS-local `config/paper_execution.local.json` to set `broker_writes_enabled=true`, `allow_intraday_entry_submit=true`, `allow_cancel=true`, and `allow_protective_stop=true`. The wrapper still submits only when Codex writes a validated monitor sidecar and `intraday-dry-run` reports ready orders. TP1, plan-invalidated full exit, and break-even stop movement stay disabled in NAS cron; additionally, TP1 execution is blocked in code when an active protective stop quantity exceeds the post-TP1 remaining quantity unless `--resize-stop-before-submit` is explicitly used with the separate stop-resize gate. Plan-invalidated full exit requires both `TCA_INTRADAY_PLAN_EXIT_EXECUTE=1` and local gates `allow_exit_cancel_replace=true` plus `allow_exit_submit=true`.
+This requires the ignored NAS-local `config/paper_execution.local.json` to set `broker_writes_enabled=true`, `allow_intraday_entry_submit=true`, `allow_cancel=true`, and `allow_protective_stop=true`. The wrapper still submits only when Codex writes a validated monitor sidecar and `intraday-dry-run` reports ready orders. Pending order replace, TP1, plan-invalidated full exit, and break-even stop movement stay disabled in NAS cron by default. Pending order replace requires both `TCA_INTRADAY_ORDER_REPLACE_EXECUTE=1` and local gate `allow_order_replace=true`; it only updates unfilled pending order quantity/limit price. TP1 execution is blocked in code when an active protective stop quantity exceeds the post-TP1 remaining quantity unless `--resize-stop-before-submit` is explicitly used with the separate stop-resize gate. Plan-invalidated full exit requires both `TCA_INTRADAY_PLAN_EXIT_EXECUTE=1` and local gates `allow_exit_cancel_replace=true` plus `allow_exit_submit=true`.
 
 Optional dry-run paper checks:
 

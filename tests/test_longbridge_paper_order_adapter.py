@@ -252,6 +252,71 @@ class LongbridgePaperOrderAdapterTest(unittest.TestCase):
         self.assertEqual(calls[1][0:5], ["order", "buy", "MU.US", "200", "--order-type"])
         self.assertEqual(calls[1][5], "MO")
 
+    def test_replace_order_requires_execute_and_config_gate(self):
+        adapter = LongbridgePaperOrderAdapter(cli="/bin/longbridge", paper_execution_config=write_config())
+
+        with self.assertRaises(PermissionError):
+            adapter.replace_order("order-1", quantity=150, limit_price=99.5, execute=False)
+        with self.assertRaises(PermissionError):
+            adapter.replace_order("order-1", quantity=150, limit_price=99.5, execute=True)
+
+    def test_replace_order_builds_safe_command_and_records_response(self):
+        adapter = LongbridgePaperOrderAdapter(
+            cli="/bin/longbridge",
+            paper_execution_config=write_config(allow_order_replace=True),
+        )
+        calls = []
+
+        def fake_run(args):
+            calls.append(args)
+            if args[:2] == ["auth", "status"]:
+                return {"account": {"account_channel": "lb_papertrading"}, "token": {"status": "valid"}}
+            if args[:2] == ["order", "replace"]:
+                return {"order_id": "order-1", "status": "replaced"}
+            raise AssertionError(args)
+
+        with patch.object(adapter, "run_json", side_effect=fake_run):
+            result = adapter.replace_order("order-1", quantity=150, limit_price=99.5, execute=True)
+
+        self.assertEqual(result["broker_order_id"], "order-1")
+        self.assertEqual(
+            calls[1],
+            [
+                "order",
+                "replace",
+                "order-1",
+                "--qty",
+                "150",
+                "--price",
+                "99.5",
+                "--format",
+                "json",
+                "-y",
+            ],
+        )
+        self.assertEqual(result["raw_response"], {"order_id": "order-1", "status": "replaced"})
+
+    def test_replace_order_allows_quantity_only(self):
+        adapter = LongbridgePaperOrderAdapter(
+            cli="/bin/longbridge",
+            paper_execution_config=write_config(allow_order_replace=True),
+        )
+        calls = []
+
+        def fake_run(args):
+            calls.append(args)
+            if args[:2] == ["auth", "status"]:
+                return {"account": {"account_channel": "lb_papertrading"}, "token": {"status": "valid"}}
+            if args[:2] == ["order", "replace"]:
+                return {"order_id": "order-1", "status": "replaced"}
+            raise AssertionError(args)
+
+        with patch.object(adapter, "run_json", side_effect=fake_run):
+            adapter.replace_order("order-1", quantity=100, limit_price=None, execute=True)
+
+        self.assertNotIn("--price", calls[1])
+        self.assertEqual(calls[1][calls[1].index("--qty") + 1], "100")
+
     def test_submit_order_builds_lit_order_with_price_and_trigger(self):
         adapter = LongbridgePaperOrderAdapter(cli="/bin/longbridge", paper_execution_config=write_config())
         calls = []

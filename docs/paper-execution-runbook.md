@@ -53,6 +53,8 @@ Review the paper execution config before enabling broker writes:
     "allow_cancel": false,
     "allow_protective_stop": false,
     "allow_take_profit": false,
+    "allow_order_replace": false,
+    "allow_break_even_stop_move": false,
     "allow_auth_status_unknown_paper_channel": false
   }
 }
@@ -169,6 +171,7 @@ These commands are useful as dry-run plans:
 
 ```bash
 python3 script/trading_copilot.py paper-order-cancel --date "$DATE"
+python3 script/trading_copilot.py paper-order-replace --date "$DATE"
 python3 script/trading_copilot.py paper-protective-stop-plan --date "$DATE"
 python3 script/trading_copilot.py paper-take-profit-plan --date "$DATE"
 python3 script/trading_copilot.py paper-break-even-stop-plan --date "$DATE"
@@ -179,6 +182,8 @@ Do not enable these exit execution commands in the initial rollout:
 ```bash
 python3 script/trading_copilot.py paper-order-cancel --date "$DATE" --execute
 
+python3 script/trading_copilot.py paper-order-replace --date "$DATE" --execute
+
 python3 script/trading_copilot.py paper-protective-stop-plan --date "$DATE" --execute
 
 python3 script/trading_copilot.py paper-take-profit-plan --date "$DATE" --execute
@@ -186,7 +191,7 @@ python3 script/trading_copilot.py paper-take-profit-plan --date "$DATE" --execut
 python3 script/trading_copilot.py paper-break-even-stop-plan --date "$DATE" --execute
 ```
 
-Reason: current protective-stop planning submits a stop for the full filled quantity, while TP1 planning submits a partial sell order. Break-even movement is implemented as cancel old stop plus submit a new MIT stop because Longbridge `order replace` cannot modify MIT trigger prices. Keep automatic exit execution disabled until the operator has reviewed OCO, stop resize, and cancel-then-submit state-drift risk.
+Reason: current protective-stop planning submits a stop for the full filled quantity, while TP1 planning submits a partial sell order. Break-even movement is implemented as cancel old stop plus submit a new MIT stop because Longbridge `order replace` cannot modify MIT trigger prices. `paper-order-replace` is limited to pending order quantity/limit-price changes from `report/<DATE>/paper-replace-decisions.json`; it must not be used for filled orders or stop trigger movement. Keep automatic exit execution disabled until the operator has reviewed OCO, stop resize, and cancel-then-submit state-drift risk.
 
 For cc-connect deployments, `ops/cc-connect/tca-paper-sync-review.sh` runs cancel planning in dry-run mode by default. It adds `--execute` to `paper-order-cancel` only when `TCA_PAPER_CANCEL_EXECUTE=1` is set for that task, and the selected config must still enable `broker_writes_enabled=true` plus `allow_cancel=true`.
 
@@ -203,6 +208,7 @@ Use a config file as the paper broker-write policy. The tracked `config/paper_ex
     "allow_cancel": false,
     "allow_protective_stop": false,
     "allow_take_profit": false,
+    "allow_order_replace": false,
     "allow_break_even_stop_move": false,
     "allow_auth_status_unknown_paper_channel": false
   }
@@ -216,6 +222,7 @@ Interpretation:
 - `paper-trade-submit --session monitor --execute` is still hard-disabled even if a local config sets `allow_intraday_entry_submit=true`; use `intraday-paper-entry` for the dedicated Phase 3 path.
 - If `allow_protective_stop=false` and `allow_take_profit=false`, the scheduler must run protective-stop and TP1 workflows without `--execute`.
 - If `allow_cancel=false`, the scheduler must run cancel planning without `--execute`.
+- If `allow_order_replace=false`, the scheduler must run pending order replace planning without `--execute`.
 - If `TCA_PAPER_CANCEL_EXECUTE` is unset or not `1`, the provided cc-connect sync script keeps `paper-order-cancel` dry-run even when the local config enables cancellation.
 - Every broker write still needs its own `--execute`; config alone never submits orders.
 

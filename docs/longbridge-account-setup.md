@@ -1,6 +1,6 @@
 # Longbridge Account Snapshot Setup
 
-This runbook covers the read-only account snapshot, paper account snapshot, paper order preview/submit/cancel/protective-stop/review, and position review workflows. Production account workflows remain read-only. Paper writes are limited to guarded Longbridge paper-account entry orders, expired unfilled entry-order cancellation, protective stop submission, TP1 partial exits, and break-even stop movement.
+This runbook covers the read-only account snapshot, paper account snapshot, paper order preview/submit/cancel/replace/protective-stop/review, and position review workflows. Production account workflows remain read-only. Paper writes are limited to guarded Longbridge paper-account entry orders, expired unfilled entry-order cancellation, pending order quantity/limit replace, protective stop submission, TP1 partial exits, plan-invalidated exits, and break-even stop movement.
 
 ## Safety Boundary
 
@@ -8,7 +8,7 @@ This runbook covers the read-only account snapshot, paper account snapshot, pape
 - Allowed operations are read-only account, assets, positions, portfolio, quote, and market lookups.
 - Order, cancel, replace, modify, trade, buy, sell, submit, and watchlist write tokens are rejected by the adapter.
 - `script/longbridge_paper_trade_adapter.py` is separate and only supports Longbridge paper accounts. It may read paper order and execution lists after verifying `account_channel=lb_papertrading`.
-- `script/longbridge_paper_order_adapter.py` is the only broker-write adapter. It requires `account_channel=lb_papertrading`, `--execute`, and the matching `config/paper_execution.json` action gate, and currently supports simulated long entry orders across Longbridge-supported order types, expired unfilled entry-order cancellation, protective stop submission, TP1 partial-exit submission, and break-even stop movement.
+- `script/longbridge_paper_order_adapter.py` is the only broker-write adapter. It requires `account_channel=lb_papertrading`, `--execute`, and the matching `config/paper_execution.json` action gate, and currently supports simulated long entry orders across Longbridge-supported order types, expired unfilled entry-order cancellation, pending order quantity/limit replace, protective stop submission, TP1 partial-exit submission, plan-invalidated exit submission, and break-even stop movement.
 - Downstream scripts read `runtime/account/<DATE>/account-snapshot.json` instead of calling Longbridge directly.
 
 ## Longbridge CLI Commands

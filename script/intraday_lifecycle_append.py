@@ -85,6 +85,7 @@ def build_payloads(repo_root: Path, date: str) -> dict[str, tuple[Path, dict[str
     paths = {
         "paper_execution_state": paper_dir / "paper-execution-state.json",
         "paper_order_cancel": report_dir / "paper-order-cancel-plan.json",
+        "paper_order_replace": report_dir / "paper-replace-plan.json",
         "paper_protective_stop_plan": report_dir / "paper-protective-stop-plan.json",
         "paper_take_profit_plan": report_dir / "paper-take-profit-plan.json",
         "paper_exit_plan": report_dir / "paper-exit-plan.json",
@@ -98,6 +99,7 @@ def build_payloads(repo_root: Path, date: str) -> dict[str, tuple[Path, dict[str
 def summarize(payloads: dict[str, tuple[Path, dict[str, Any] | None]]) -> dict[str, int]:
     sync = summary(payloads["paper_execution_state"][1])
     cancel = summary(payloads["paper_order_cancel"][1])
+    replace = summary(payloads["paper_order_replace"][1])
     stop = summary(payloads["paper_protective_stop_plan"][1])
     take_profit = summary(payloads["paper_take_profit_plan"][1])
     exit_plan = summary(payloads["paper_exit_plan"][1])
@@ -111,6 +113,9 @@ def summarize(payloads: dict[str, tuple[Path, dict[str, Any] | None]]) -> dict[s
         "cancel_candidates": int_value(cancel, "cancel_candidates", "candidates"),
         "cancelled": int_value(cancel, "cancelled", "submitted"),
         "cancel_errors": int_value(cancel, "errors"),
+        "replace_candidates": int_value(replace, "replace_candidates", "candidates"),
+        "replaced": int_value(replace, "replaced", "submitted"),
+        "replace_errors": int_value(replace, "errors"),
         "protective_stop_candidates": int_value(stop, "stop_candidates", "candidates"),
         "protective_stop_submitted": int_value(stop, "submitted"),
         "protective_stop_errors": int_value(stop, "errors"),
@@ -134,6 +139,9 @@ def should_notify(counts: dict[str, int]) -> bool:
         "cancel_candidates",
         "cancelled",
         "cancel_errors",
+        "replace_candidates",
+        "replaced",
+        "replace_errors",
         "protective_stop_candidates",
         "protective_stop_submitted",
         "protective_stop_errors",
@@ -175,6 +183,14 @@ def build_section(
                 ("candidates", counts["cancel_candidates"]),
                 ("cancelled", counts["cancelled"]),
                 ("errors", counts["cancel_errors"]),
+            ],
+        ),
+        line(
+            "改单",
+            [
+                ("candidates", counts["replace_candidates"]),
+                ("replaced", counts["replaced"]),
+                ("errors", counts["replace_errors"]),
             ],
         ),
         line(

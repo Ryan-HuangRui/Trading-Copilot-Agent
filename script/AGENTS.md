@@ -15,7 +15,7 @@
 - `longbridge_cli_adapter.py`: read-only Longbridge CLI guard. Do not add order/write commands.
 - `longbridge_account_snapshot.py`: read-only account/position snapshot writer under `runtime/account/`.
 - `longbridge_paper_trade_adapter.py`: Longbridge paper-account guard and read-only paper order/execution fetcher.
-- `longbridge_paper_order_adapter.py`: gated Longbridge paper order writer. It must remain paper-only and supports guarded Longbridge paper order submission, cancel, protective stop, TP1, and break-even stop movement through explicit execute/config gates.
+- `longbridge_paper_order_adapter.py`: gated Longbridge paper order writer. It must remain paper-only and supports guarded Longbridge paper order submission, cancel, pending order replace, protective stop, TP1, and break-even stop movement through explicit execute/config gates.
 - `paper_account_snapshot.py`: read-only paper account, order, and execution snapshot writer under `runtime/paper/`.
 - `paper_order_models.py`: stable paper intent/order record builders and idempotency keys.
 - `paper_risk_guard.py`: deterministic execution-safety checks for paper order intents.
@@ -30,6 +30,7 @@
 - `paper_learning_lessons.py`: extracts paper execution candidate lessons into `runtime/learning/daily_lessons.jsonl` without promoting rules.
 - `paper_strategy_review.py`: aggregate paper execution reviews by setup and symbol without editing refined rules.
 - `paper_order_cancel.py`: cancel-plan builder for expired unfilled paper entry orders; defaults to dry-run and only cancels through the gated paper order adapter when execution gates are explicitly enabled.
+- `paper_order_replace.py`: replace-plan builder for pending unfilled paper entry orders with Codex-reviewed `paper-replace-decisions.json`; defaults to dry-run and only replaces quantity/limit price through the gated paper order adapter when execution gates are explicitly enabled. Do not use it for stop trigger movement.
 - `paper_protective_stop_plan.py`: protective stop planner for filled long paper entries. It defaults to dry-run, defaults stops to `sell MIT`, supports shared Longbridge paper order shape fields for alternate protective-stop order types, and only submits through the gated paper order adapter when execution gates are explicitly enabled.
 - `paper_take_profit_plan.py`: TP1 partial-exit planner for filled long paper entries. It defaults to dry-run, defaults TP1 to `sell LO`, supports shared Longbridge paper order shape fields for alternate TP1 order types, and only submits through the gated paper order adapter when execution gates are explicitly enabled.
 - `paper_break_even_stop_plan.py`: break-even stop movement planner for filled long paper entries after TP1 fill evidence. It defaults to dry-run, defaults replacement stops to `sell MIT`, supports shared Longbridge paper order shape fields for alternate replacement stop order types, and only performs guarded cancel + new stop submission when execution gates are explicitly enabled.
@@ -74,6 +75,8 @@
 - Aggregate paper strategy evidence: `python3 script/trading_copilot.py paper-strategy-review`.
 - Build paper cancel plan: `python3 script/trading_copilot.py paper-order-cancel --date 2026-05-06`.
 - Cancel guarded expired paper entry orders after enabling `paper_execution.allow_cancel=true`: `python3 script/trading_copilot.py paper-order-cancel --date 2026-05-06 --execute`.
+- Build pending paper order replace plan: `python3 script/trading_copilot.py paper-order-replace --date 2026-05-06`.
+- Replace guarded pending paper entry order quantity/limit after enabling `paper_execution.allow_order_replace=true`: `python3 script/trading_copilot.py paper-order-replace --date 2026-05-06 --execute`.
 - Build protective stop plan: `python3 script/trading_copilot.py paper-protective-stop-plan --date 2026-05-06`.
 - Submit guarded paper protective stops after enabling `paper_execution.allow_protective_stop=true`: `python3 script/trading_copilot.py paper-protective-stop-plan --date 2026-05-06 --execute`.
 - Build TP1 partial-exit plan: `python3 script/trading_copilot.py paper-take-profit-plan --date 2026-05-06`.

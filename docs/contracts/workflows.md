@@ -7,7 +7,7 @@ All workflows must preserve the repository safety rules:
 - Never place real trades.
 - Read-only Longbridge real-account snapshots are allowed only through the account snapshot workflow; real-account order placement, cancellation, replacement, and automatic position changes are prohibited.
 - Paper broker writes are allowed only through dedicated guarded paper adapters, only against `lb_papertrading`, and only for explicitly contracted operations.
-- Current paper write scope is limited to guarded paper entry submission, guarded cancellation of expired unfilled entry orders, guarded protective stop submission, guarded TP1 partial-exit submission, and guarded break-even stop movement. Paper replace, OCO, short selling, and real-account writes remain out of scope.
+- Current paper write scope is limited to guarded paper entry submission, guarded cancellation of expired unfilled entry orders, guarded pending order quantity/limit replace, guarded protective stop submission, guarded TP1 partial-exit submission, guarded plan-invalidated exit submission, and guarded break-even stop movement. OCO, short selling, native stop-trigger replace, and real-account writes remain out of scope.
 - Do not output deterministic buy/sell instructions.
 - Use scenarios, triggers, invalidation, risk, and `NO TRADE`.
 - Use `knowledge/refined/` as the only rule source for trading conclusions.
@@ -925,6 +925,72 @@ Required behavior:
 - The artifact must include `execution_policy` and `broker_capabilities`.
 - Executed cancel records must preserve `intent_id`, `broker_order_id`, `raw_request`, and `raw_response`.
 
+## paper-order-replace
+
+Purpose: build a dry-run replace plan for pending paper entry orders when a Codex-reviewed sidecar requests a safer quantity or limit price, and optionally execute the replace through the guarded paper adapter.
+
+Canonical command:
+
+```bash
+python3 script/trading_copilot.py paper-order-replace --date <DATE>
+```
+
+Execute command:
+
+```bash
+python3 script/trading_copilot.py paper-order-replace --date <DATE> --execute
+```
+
+Inputs:
+
+- `runtime/paper/<DATE>/paper-execution-state.json`.
+- `report/<DATE>/paper-replace-decisions.json`.
+- Optional `runtime/paper/<DATE>/paper-replace-orders.jsonl` for duplicate detection.
+- `config/paper_execution.json` when `--execute` is used.
+
+Output:
+
+- `report/<DATE>/paper-replace-plan.json`
+- `runtime/paper/<DATE>/paper-replace-orders.jsonl` only when `--execute` successfully replaces a pending paper order.
+
+Required behavior:
+
+- Default behavior is dry-run and must not call broker replace APIs.
+- Broker replace requires `--execute`, paper account validation, and config gates `broker_writes_enabled=true` plus `allow_order_replace=true`.
+- Only pending/open/submitted paper orders with `filled_quantity=0`, a broker order id, and a matching `replace_pending` decision may become replace candidates.
+- Replacement may reduce or keep quantity and may set a new positive limit price; it must not increase above current order quantity or reduce below filled quantity.
+- The workflow must not replace filled or partially filled orders.
+- This workflow is for Longbridge `order replace` quantity/price changes only. Stop trigger movement remains a cancel-and-submit workflow because MIT trigger prices cannot be safely changed through this replace path.
+- Duplicate `intent_id` values already present in `paper-replace-orders.jsonl` must be blocked.
+- The artifact must separate `replace_candidates`, `blocked`, `replaced`, and `errors`, and include `execution_policy` and `broker_capabilities`.
+- Successful replace records must preserve `intent_id`, `broker_order_id`, previous and new quantity/limit price, raw request/response, account channel, and `submitted_at`.
+
+Decision sidecar example:
+
+```json
+{
+  "date": "<DATE>",
+  "workflow": "paper-order-replace-decision",
+  "decisions": [
+    {
+      "intent_id": "<INTENT_ID>",
+      "symbol": "MU",
+      "action": "replace_pending",
+      "execution_status": "conditional_executable",
+      "reason": "limit should be tightened after failed reclaim",
+      "new_quantity": 100,
+      "new_limit_price": 99.5,
+      "risk_check": {
+        "remaining_unfilled_quantity": 100,
+        "max_account_risk_pct": 1,
+        "risk_per_share": 4.5
+      },
+      "evidence": ["report/latest-monitor.json", "runtime/paper/<DATE>/paper-execution-state.json"]
+    }
+  ]
+}
+```
+
 ## paper-event-ledger
 
 Purpose: project submitted and observed paper execution facts into the unified event stream.
@@ -1274,6 +1340,7 @@ Optional execution flags:
 python3 script/trading_copilot.py paper-lifecycle --date <DATE> \
   --paper-execution-config config/paper_execution.local.json \
   --execute-cancel \
+  --execute-order-replace \
   --execute-protective-stop \
   --execute-take-profit \
   --execute-exit \
@@ -1283,7 +1350,8 @@ python3 script/trading_copilot.py paper-lifecycle --date <DATE> \
 Required behavior:
 
 - The wrapper must run paper account snapshot and paper order sync before exit planning.
-- It must run cancel, protective-stop, TP1, and break-even workflows, passing `--execute` only for the explicitly requested action flags.
+- It must run cancel, pending order replace, protective-stop, TP1, full-exit, and break-even workflows, passing `--execute` only for the explicitly requested action flags.
+- For pending order replace, it must pass `report/<DATE>/paper-replace-decisions.json` through to `paper-order-replace`.
 - For plan-invalidated exits, it must pass shared exit order shape fields through to `paper-exit-plan`: `--exit-order-type`, `--exit-limit-price`, `--exit-trigger-price`, `--exit-trailing-amount`, `--exit-trailing-percent`, `--exit-limit-offset`, `--exit-expire-date`, and `--exit-outside-rth`.
 - For break-even stop movement, it must pass shared replacement stop order shape fields through to `paper-break-even-stop-plan`: `--break-even-order-type`, `--break-even-limit-price`, `--break-even-trigger-price`, `--break-even-trailing-amount`, `--break-even-trailing-percent`, `--break-even-limit-offset`, `--break-even-expire-date`, and `--break-even-outside-rth`.
 - It must refresh paper account snapshot and order sync after exit planning, then run paper event ledger and paper execution review.
@@ -1306,6 +1374,7 @@ Inputs:
 
 - `runtime/paper/<DATE>/paper-execution-state.json`
 - `report/<DATE>/paper-order-cancel-plan.json`
+- `report/<DATE>/paper-replace-plan.json`
 - `report/<DATE>/paper-protective-stop-plan.json`
 - `report/<DATE>/paper-take-profit-plan.json`
 - `report/<DATE>/paper-exit-plan.json`
@@ -1322,7 +1391,7 @@ Required behavior:
 
 - It must only read existing paper lifecycle artifacts and must not call Longbridge or any broker API.
 - If no lifecycle artifacts exist, it must return `status=skipped` and avoid creating `intraday.md`.
-- The summary must include cancel, protective-stop, take-profit, full-exit, break-even stop, ledger, and execution-review counts when those artifacts exist.
+- The summary must include cancel, pending order replace, protective-stop, take-profit, full-exit, break-even stop, ledger, and execution-review counts when those artifacts exist.
 - `should_notify=true` should be set when there are lifecycle candidates, submitted/moved/cancelled actions, errors, or ledger events.
 
 Required behavior for outcome backfill:

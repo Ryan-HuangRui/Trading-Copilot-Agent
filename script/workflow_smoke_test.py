@@ -19,6 +19,7 @@ import paper_break_even_stop_plan
 import paper_event_ledger
 import paper_execution_review
 import paper_exit_plan
+import paper_order_replace
 import paper_order_sync
 import paper_protective_stop_plan
 import paper_take_profit_plan
@@ -193,6 +194,7 @@ def run_paper_lifecycle_smoke(repo_root: Path, args: argparse.Namespace, steps: 
     )
     sync_args = paper_order_sync.build_args(repo_root=str(repo_root), date=args.date, paper_snapshot=paper_snapshot)
     steps["paper-order-sync"] = paper_order_sync.run(sync_args)
+    steps["paper-order-replace"] = paper_order_replace.run(paper_order_replace.build_args(repo_root=str(repo_root), date=args.date))
     steps["paper-protective-stop-plan"] = paper_protective_stop_plan.run(
         paper_protective_stop_plan.build_args(repo_root=str(repo_root), date=args.date)
     )

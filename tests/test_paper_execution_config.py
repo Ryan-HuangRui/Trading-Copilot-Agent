@@ -169,6 +169,21 @@ class PaperExecutionConfigTest(unittest.TestCase):
         config["allow_intraday_entry_submit"] = True
         ensure_paper_write_allowed(config, execute=True, action="intraday_entry_submit")
 
+    def test_order_replace_has_separate_gate(self):
+        config = {
+            "broker_writes_enabled": True,
+            "allow_order_replace": False,
+        }
+
+        matrix = broker_capability_matrix(config)
+        actions = {item["action"]: item for item in matrix["actions"]}
+        self.assertEqual(actions["order_replace"]["execution_status"], "config_disabled")
+        with self.assertRaises(PermissionError):
+            ensure_paper_write_allowed(config, execute=True, action="order_replace")
+
+        config["allow_order_replace"] = True
+        ensure_paper_write_allowed(config, execute=True, action="order_replace")
+
 
 if __name__ == "__main__":
     unittest.main()

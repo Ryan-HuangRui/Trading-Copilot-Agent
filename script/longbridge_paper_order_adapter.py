@@ -207,6 +207,45 @@ class LongbridgePaperOrderAdapter:
             "raw_response": raw_response if isinstance(raw_response, dict) else {"response": raw_response},
         }
 
+    def replace_order(
+        self,
+        broker_order_id: str,
+        *,
+        quantity: int,
+        limit_price: float | None = None,
+        execute: bool,
+        action: str = "order_replace",
+    ) -> dict[str, Any]:
+        order_id = str(broker_order_id or "").strip()
+        if not order_id:
+            raise ValueError("broker_order_id is required")
+        if int(quantity or 0) <= 0:
+            raise ValueError("quantity must be > 0")
+        if limit_price is not None and float(limit_price) <= 0:
+            raise ValueError("limit_price must be > 0 when supplied")
+        self.ensure_write_allowed(execute=execute, action=action)
+        account_channel = self.assert_paper_account()
+        command = ["order", "replace", order_id, "--qty", str(int(quantity))]
+        if limit_price is not None:
+            command.extend(["--price", format_decimal(float(limit_price))])
+        command.extend(["--format", "json", "-y"])
+        raw_response = self.run_json(command)
+        response_order_id = order_id
+        if isinstance(raw_response, dict):
+            response_order_id = str(raw_response.get("order_id") or raw_response.get("id") or raw_response.get("broker_order_id") or order_id)
+        return {
+            "broker": "longbridge",
+            "account_channel": account_channel or PAPER_ACCOUNT_CHANNEL,
+            "broker_order_id": response_order_id,
+            "raw_request": {
+                "command": command,
+                "broker_order_id": order_id,
+                "quantity": int(quantity),
+                "limit_price": limit_price,
+            },
+            "raw_response": raw_response if isinstance(raw_response, dict) else {"response": raw_response},
+        }
+
     def validate_protective_stop_intent(self, intent: dict[str, Any]) -> None:
         if intent.get("side") != "sell":
             raise ValueError("only sell side is supported for protective stops")

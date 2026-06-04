@@ -19,6 +19,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "allow_exit_cancel_replace": False,
     "allow_exit_submit": False,
     "allow_break_even_stop_move": False,
+    "allow_order_replace": False,
     "allow_auth_status_unknown_paper_channel": False,
 }
 
@@ -32,6 +33,7 @@ ACTION_CONFIG_KEYS = {
     "exit_cancel_replace": "allow_exit_cancel_replace",
     "exit_submit": "allow_exit_submit",
     "break_even_stop_move": "allow_break_even_stop_move",
+    "order_replace": "allow_order_replace",
 }
 
 SUPPORTED_BROKER_ACTIONS: tuple[dict[str, Any], ...] = (
@@ -61,6 +63,15 @@ SUPPORTED_BROKER_ACTIONS: tuple[dict[str, Any], ...] = (
         "side": None,
         "workflow": "paper-order-cancel",
         "maturity": "guarded",
+    },
+    {
+        "action": "order_replace",
+        "label": "Pending order replace",
+        "config_key": "allow_order_replace",
+        "order_type": "replace qty/price",
+        "side": None,
+        "workflow": "paper-order-replace",
+        "maturity": "guarded_pending_order",
     },
     {
         "action": "protective_stop",

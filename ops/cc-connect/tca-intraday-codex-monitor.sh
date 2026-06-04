@@ -16,6 +16,7 @@ ENABLE_PAPER_EXECUTE="${TCA_INTRADAY_PAPER_EXECUTE:-0}"
 ENABLE_PAPER_LIFECYCLE="${TCA_INTRADAY_ENABLE_PAPER_LIFECYCLE:-0}"
 ENABLE_EXIT_EXECUTE="${TCA_INTRADAY_EXIT_EXECUTE:-0}"
 ENABLE_CANCEL_EXECUTE="${TCA_INTRADAY_CANCEL_EXECUTE:-0}"
+ENABLE_ORDER_REPLACE_EXECUTE="${TCA_INTRADAY_ORDER_REPLACE_EXECUTE:-0}"
 ENABLE_PROTECTIVE_STOP_EXECUTE="${TCA_INTRADAY_PROTECTIVE_STOP_EXECUTE:-0}"
 ENABLE_TAKE_PROFIT_EXECUTE="${TCA_INTRADAY_TAKE_PROFIT_EXECUTE:-0}"
 ENABLE_RESIZE_STOP_BEFORE_TAKE_PROFIT="${TCA_INTRADAY_RESIZE_STOP_BEFORE_TAKE_PROFIT:-0}"
@@ -137,6 +138,7 @@ PROMPT="你是 Trading-Copilot-Agent 的 cc-connect 盘中 Codex 盯盘定时任
 - paper-exit-decisions.json 只能用于模拟盘退出 dry-run/执行候选。只有 action=exit_remaining、execution_status=conditional_executable、reason 非空、risk_check.cancel_open_exits_first=true 且 risk_check.remaining_quantity 匹配当前剩余仓位时，paper-exit-plan 才可把它作为 LLM exit decision 触发；否则保持 watch_only/blocked。
 - exit 执行必须逐项打开，不能因为 TCA_INTRADAY_EXIT_EXECUTE=$ENABLE_EXIT_EXECUTE 就一次性打开全部：
   - TCA_INTRADAY_CANCEL_EXECUTE=$ENABLE_CANCEL_EXECUTE；只有该值为 1 且 config 允许时才追加 --execute-cancel。
+  - TCA_INTRADAY_ORDER_REPLACE_EXECUTE=$ENABLE_ORDER_REPLACE_EXECUTE；只有该值为 1 且 config 允许 allow_order_replace 时才追加 --execute-order-replace。仅用于 pending paper order 的数量/限价替换；止损触发价移动仍走 cancel+submit。
   - TCA_INTRADAY_PROTECTIVE_STOP_EXECUTE=$ENABLE_PROTECTIVE_STOP_EXECUTE；只有该值为 1 且 config 允许时才追加 --execute-protective-stop。
   - TCA_INTRADAY_TAKE_PROFIT_EXECUTE=$ENABLE_TAKE_PROFIT_EXECUTE；只有该值为 1 且 config 允许时才追加 --execute-take-profit。
   - TCA_INTRADAY_RESIZE_STOP_BEFORE_TAKE_PROFIT=$ENABLE_RESIZE_STOP_BEFORE_TAKE_PROFIT；只有该值为 1 且 config 允许 take_profit_stop_resize 时，TP1 执行才可追加 --resize-stop-before-take-profit。

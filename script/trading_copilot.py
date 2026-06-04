@@ -2613,6 +2613,15 @@ def run_paper_lifecycle(args: argparse.Namespace) -> None:
             execute=bool(args.execute_cancel),
             extra=["--expire-after-minutes", str(args.expire_after_minutes)],
         )
+        replace = exit_plan(
+            workflow="paper_order_replace",
+            script="script/paper_order_replace.py",
+            execute=bool(args.execute_order_replace),
+            extra=[
+                "--decisions",
+                f"report/{args.date}/paper-replace-decisions.json",
+            ],
+        )
         account_snapshot()
         second_sync = order_sync()
         stop = exit_plan(
@@ -2842,6 +2851,7 @@ def run_paper_lifecycle(args: argparse.Namespace) -> None:
     summary = {
         "paper_order_sync": (final_sync or second_sync or first_sync or {}).get("summary", {}),
         "paper_order_cancel": (cancel or {}).get("summary", {}),
+        "paper_order_replace": (replace or {}).get("summary", {}),
         "paper_protective_stop_plan": (stop or {}).get("summary", {}),
         "paper_take_profit_plan": (take_profit or {}).get("summary", {}),
         "paper_exit_plan": (exit_position or {}).get("summary", {}),
@@ -2868,10 +2878,12 @@ def run_paper_lifecycle(args: argparse.Namespace) -> None:
                 args.execute_take_profit,
                 args.execute_exit,
                 args.execute_break_even_stop,
+                args.execute_order_replace,
             ]
         ),
         "execute_requested": {
             "cancel": bool(args.execute_cancel),
+            "order_replace": bool(args.execute_order_replace),
             "protective_stop": bool(args.execute_protective_stop),
             "take_profit": bool(args.execute_take_profit),
             "exit": bool(args.execute_exit),
@@ -2882,6 +2894,42 @@ def run_paper_lifecycle(args: argparse.Namespace) -> None:
         "commands": commands,
         "safety_note": "Paper lifecycle orchestration only; broker writes require per-action --execute flags and matching config gates.",
     }
+    emit(response)
+
+
+def run_paper_order_replace(args: argparse.Namespace) -> None:
+    command = [
+        "script/paper_order_replace.py",
+        "--date",
+        args.date,
+        "--repo-root",
+        args.repo_root,
+    ]
+    if args.state:
+        command.extend(["--state", args.state])
+    if args.decisions:
+        command.extend(["--decisions", args.decisions])
+    if args.output:
+        command.extend(["--output", args.output])
+    if args.replace_journal:
+        command.extend(["--replace-journal", args.replace_journal])
+    if args.longbridge_cli:
+        command.extend(["--longbridge-cli", args.longbridge_cli])
+    if args.paper_execution_config:
+        command.extend(["--paper-execution-config", args.paper_execution_config])
+    if args.execute:
+        command.append("--execute")
+
+    proc = run_child(command)
+    stdout = parse_json_output(proc.stdout)
+    if proc.returncode != 0:
+        emit(failed_response("paper-order-replace", command, proc), 1)
+
+    response = base_response("paper-order-replace", command, stdout)
+    response["date"] = (stdout or {}).get("date") or args.date
+    response["artifacts"] = [stdout["output"]] if stdout and stdout.get("output") else []
+    response["dry_run"] = (stdout or {}).get("dry_run")
+    response["summary"] = (stdout or {}).get("summary")
     emit(response)
 
 
@@ -3785,6 +3833,7 @@ def build_parser() -> argparse.ArgumentParser:
     paper_lifecycle.add_argument("--execute-take-profit", action="store_true")
     paper_lifecycle.add_argument("--execute-exit", action="store_true")
     paper_lifecycle.add_argument("--execute-break-even-stop", action="store_true")
+    paper_lifecycle.add_argument("--execute-order-replace", action="store_true")
     paper_lifecycle.add_argument("--resize-stop-before-take-profit", action="store_true")
     paper_lifecycle.add_argument("--expire-after-minutes", type=int, default=90)
     paper_lifecycle.add_argument("--stop-tif", default="gtc")
@@ -3829,6 +3878,18 @@ def build_parser() -> argparse.ArgumentParser:
     paper_lifecycle.add_argument("--learning-dir", default="runtime/learning")
     paper_lifecycle.add_argument("--repo-root", default=str(ROOT))
     paper_lifecycle.set_defaults(func=run_paper_lifecycle)
+
+    paper_replace = sub.add_parser("paper-order-replace", help="Build or execute guarded replace plans for pending paper orders")
+    paper_replace.add_argument("--date", required=True)
+    paper_replace.add_argument("--state")
+    paper_replace.add_argument("--decisions")
+    paper_replace.add_argument("--output")
+    paper_replace.add_argument("--replace-journal")
+    paper_replace.add_argument("--longbridge-cli")
+    paper_replace.add_argument("--execute", action="store_true")
+    paper_replace.add_argument("--paper-execution-config")
+    paper_replace.add_argument("--repo-root", default=str(ROOT))
+    paper_replace.set_defaults(func=run_paper_order_replace)
 
     paper_cancel = sub.add_parser("paper-order-cancel", help="Build a dry-run cancel plan for expired paper entry orders")
     paper_cancel.add_argument("--date", required=True)
