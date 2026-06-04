@@ -374,6 +374,43 @@ class TradingCopilotWrapperTest(unittest.TestCase):
         self.assertTrue(payload["should_notify"])
         self.assertEqual(payload["summary"]["exit_candidates"], 1)
 
+    def test_paper_account_snapshot_passes_execution_config(self):
+        calls = []
+
+        def fake_run_child(command):
+            calls.append(command)
+            payload = {
+                "status": "success",
+                "date": "2026-05-26",
+                "output": "runtime/paper/2026-05-26/paper-account-snapshot.json",
+                "account_channel": "lb_papertrading",
+                "positions_count": 0,
+                "orders_count": 0,
+                "executions_count": 0,
+            }
+            return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
+
+        args = Namespace(
+            date="2026-05-26",
+            timezone="America/New_York",
+            input=None,
+            output=None,
+            longbridge_cli=None,
+            paper_execution_config="config/paper_execution.local.json",
+            repo_root=str(ROOT),
+        )
+
+        with patch.object(trading_copilot, "run_child", side_effect=fake_run_child), patch.object(
+            trading_copilot, "emit", side_effect=SystemExit
+        ) as emit:
+            with self.assertRaises(SystemExit):
+                trading_copilot.run_paper_account_snapshot(args)
+
+        self.assertEqual(calls[0][calls[0].index("--paper-execution-config") + 1], "config/paper_execution.local.json")
+        payload = emit.call_args.args[0]
+        self.assertEqual(payload["workflow"], "paper-account-snapshot")
+        self.assertEqual(payload["account_channel"], "lb_papertrading")
+
     def test_paper_lifecycle_chains_sync_exit_plans_and_review(self):
         calls = []
 

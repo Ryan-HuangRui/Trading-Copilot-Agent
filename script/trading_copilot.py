@@ -2178,6 +2178,8 @@ def run_paper_account_snapshot(args: argparse.Namespace) -> None:
         command.extend(["--output", args.output])
     if args.longbridge_cli:
         command.extend(["--longbridge-cli", args.longbridge_cli])
+    if args.paper_execution_config:
+        command.extend(["--paper-execution-config", args.paper_execution_config])
 
     proc = run_child(command)
     stdout = parse_json_output(proc.stdout)
