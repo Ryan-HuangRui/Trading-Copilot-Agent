@@ -549,6 +549,7 @@ Inputs:
 Required behavior:
 
 - `execution_status=conditional_executable` requires a complete Trade Plan Card: `entry.trigger_price`, `stop.initial_stop`, `take_profit.tp1`, `risk.max_account_risk_pct`, `risk.risk_per_share`, and at least one `execution_rules.skip_conditions` item.
+- Conditional entry order fields must pass the shared Longbridge paper order shape checks: supported `order_type`, required price/trigger/trailing fields, valid `tif`, required `expire_date` for `gtd`, and valid `outside_rth` when supplied.
 - TP1 reward/risk must be at least 2R.
 - Incomplete plans must be downgraded by the agent to `watch_only` or `no_trade` before delivery.
 - `extract-report-signals --require-validation` and `sync-longbridge-watchlist --require-validation` must run this gate as well as `validate-report`.

@@ -239,7 +239,7 @@ Consumer rules:
 - Full-session validation requires this file.
 - `extract-report-signals` prefers this file and falls back to Markdown only when it is absent.
 - Actionable signals must include structured trigger, invalidation, and risk fields.
-- `conditional_executable` plans must include a complete Trade Plan Card and at least 2R to TP1.
+- `conditional_executable` plans must include a complete Trade Plan Card, valid Longbridge entry order shape fields, and at least 2R to TP1.
 - Incomplete plan cards should be downgraded to `watch_only` or `no_trade`, not delivered as executable.
 - The session signal sidecar must match the report focus list.
 

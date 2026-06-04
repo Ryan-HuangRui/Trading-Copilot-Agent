@@ -6,8 +6,64 @@ import json
 from pathlib import Path
 from typing import Any
 
+from paper_order_models import validate_order_shape
 from signal_artifacts import read_json, resolve_signals_path, validate_sidecar_payload
 from validate_report import refined_setup_files
+
+
+def as_float(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def entry_order_intent(signal: dict[str, Any]) -> dict[str, Any]:
+    entry = signal.get("entry") if isinstance(signal.get("entry"), dict) else {}
+    symbol = str(signal.get("symbol") or "").strip().upper()
+    direction = str(signal.get("direction") or "long").strip().lower()
+    trigger = signal.get("trigger") if isinstance(signal.get("trigger"), dict) else {}
+
+    limit_price = as_float(entry.get("limit_price"))
+    if limit_price is None:
+        limit_price = as_float(entry.get("price"))
+    if limit_price is None:
+        limit_price = as_float(entry.get("trigger_price"))
+
+    trigger_price = as_float(entry.get("trigger_price"))
+    if trigger_price is None:
+        trigger_price = as_float(trigger.get("price"))
+
+    return {
+        "side": "sell" if direction == "short" else "buy",
+        "longbridge_symbol": symbol,
+        "quantity": 1,
+        "order_type": entry.get("order_type") or "LO",
+        "limit_price": limit_price,
+        "trigger_price": trigger_price,
+        "trailing_amount": as_float(entry.get("trailing_amount")),
+        "trailing_percent": as_float(entry.get("trailing_percent")),
+        "limit_offset": as_float(entry.get("limit_offset")),
+        "tif": entry.get("tif") or "day",
+        "expire_date": entry.get("expire_date"),
+        "outside_rth": entry.get("outside_rth"),
+    }
+
+
+def validate_conditional_entry_order_shapes(payload: dict[str, Any], path: Path) -> list[str]:
+    signals = payload.get("signals")
+    if not isinstance(signals, list):
+        return []
+    errors: list[str] = []
+    for idx, signal in enumerate(signals):
+        if not isinstance(signal, dict):
+            continue
+        if signal.get("plan_type") != "trade_plan" or signal.get("execution_status") != "conditional_executable":
+            continue
+        item = f"{path}: signals[{idx}]"
+        for error in validate_order_shape(entry_order_intent(signal)):
+            errors.append(f"{item}: entry order shape invalid: {error}")
+    return errors
 
 
 def validate(args: argparse.Namespace) -> dict[str, Any]:
@@ -47,6 +103,7 @@ def validate(args: argparse.Namespace) -> dict[str, Any]:
         )
         errors.extend(sidecar_errors)
         warnings.extend(sidecar_warnings)
+        errors.extend(validate_conditional_entry_order_shapes(payload, sidecar))
 
     return {
         "status": "fail" if errors else "pass",
