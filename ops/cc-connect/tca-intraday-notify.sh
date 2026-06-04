@@ -28,6 +28,46 @@ run_step() {
   return "$rc"
 }
 
+GUARD="$(python3 script/trading_day_guard.py --date "$DATE" --format json 2>>"$LOG" || true)"
+IS_TRADING_DAY="$(python3 - "$GUARD" <<'PY'
+import json
+import sys
+
+try:
+    payload = json.loads(sys.argv[1])
+except Exception:
+    print("unknown")
+else:
+    print("1" if payload.get("is_trading_day") else "0")
+PY
+)"
+
+if [ "$IS_TRADING_DAY" != "1" ]; then
+  python3 - "$RESULT" "$DATE" "$GUARD" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+result_path, date, guard_text = sys.argv[1:4]
+try:
+    guard = json.loads(guard_text)
+except Exception:
+    guard = {"is_trading_day": None, "reason": "trading_day_guard_failed"}
+payload = {
+    "status": "skipped",
+    "date": date,
+    "should_send": False,
+    "reason": guard.get("reason") or "non_trading_day",
+    "guard": guard,
+    "summary": {"unsent_events": 0},
+}
+Path(result_path).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+PY
+  cat "$RESULT"
+  rm -f "$LOG" "$RESULT"
+  exit 0
+fi
+
 if [ "${TCA_INTRADAY_SKIP_MONITOR:-0}" != "1" ]; then
   run_step python3 script/trading_copilot.py monitor-brief --state "$STATE" --interval "$INTERVAL"
 fi
