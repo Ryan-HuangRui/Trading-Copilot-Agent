@@ -154,24 +154,25 @@ def sidecar_template_signal(scan: dict[str, Any], *, date: str, source: str) -> 
     }
 
 
-def candidate_record(
+def is_deterministic_candidate(scan: dict[str, Any]) -> bool:
+    status = str(scan.get("status") or "")
+    return status in REVIEWABLE_STATUSES and scan.get("journal_appendable") is not False
+
+
+def observation_record(
     scan: dict[str, Any],
     *,
     premarket: dict[str, dict[str, Any]],
     intraday_state: dict[str, Any],
     paper_orders: dict[str, list[dict[str, Any]]],
 ) -> dict[str, Any] | None:
-    status = str(scan.get("status") or "")
-    if status not in REVIEWABLE_STATUSES:
-        return None
-    if scan.get("journal_appendable") is False:
-        return None
     symbol = str(scan.get("symbol") or "").upper()
     if not symbol:
         return None
     return {
         "symbol": symbol,
-        "monitor_status": status,
+        "monitor_status": scan.get("status"),
+        "deterministic_candidate": is_deterministic_candidate(scan),
         "setup": scan.get("setup"),
         "setup_files": scan.get("setup_files") if isinstance(scan.get("setup_files"), list) else [],
         "reason": scan.get("reason"),
@@ -180,6 +181,9 @@ def candidate_record(
         "target1": scan.get("target1"),
         "risk_quality": scan.get("risk_quality"),
         "bar_timestamp": scan.get("bar_timestamp"),
+        "price_data_interval": scan.get("price_data_interval"),
+        "latest_bar": scan.get("latest_bar") if isinstance(scan.get("latest_bar"), dict) else None,
+        "recent_bars": scan.get("recent_bars") if isinstance(scan.get("recent_bars"), list) else [],
         "trigger_detail": scan.get("trigger_detail") if isinstance(scan.get("trigger_detail"), dict) else None,
         "invalidation_detail": scan.get("invalidation_detail") if isinstance(scan.get("invalidation_detail"), dict) else None,
         "premarket_plan": premarket.get(symbol),
@@ -206,13 +210,14 @@ def build_context(args: argparse.Namespace) -> dict[str, Any]:
     paper_index = paper_orders_by_symbol(paper_state_payload)
 
     source = source_path(monitor_path, repo_root)
+    observations: list[dict[str, Any]] = []
     candidates: list[dict[str, Any]] = []
     templates: list[dict[str, Any]] = []
     scans = monitor_payload.get("scans") if isinstance(monitor_payload.get("scans"), list) else []
     for scan in scans:
         if not isinstance(scan, dict):
             continue
-        record = candidate_record(
+        record = observation_record(
             scan,
             premarket=premarket_index,
             intraday_state=intraday_state_payload,
@@ -220,10 +225,12 @@ def build_context(args: argparse.Namespace) -> dict[str, Any]:
         )
         if record is None:
             continue
-        candidates.append(record)
+        if len(observations) >= args.max_observations:
+            continue
+        observations.append(record)
         templates.append(sidecar_template_signal(scan, date=args.date, source=source))
-        if len(candidates) >= args.max_candidates:
-            break
+        if record["deterministic_candidate"] and len(candidates) < args.max_candidates:
+            candidates.append(record)
 
     payload = {
         "schema_version": "intraday-opportunity-context/v1",
@@ -239,7 +246,9 @@ def build_context(args: argparse.Namespace) -> dict[str, Any]:
         "llm_contract": {
             "output_signals": source_path(signals_output, repo_root),
             "decision_owner": "codex_llm",
+            "primary_input": "observation_scans",
             "may_raise_to_conditional_executable": True,
+            "must_review_all_observation_scans": True,
             "must_validate_with": f"python3 script/trading_copilot.py validate-trade-plan --session monitor --date {args.date}",
             "safety": [
                 "真实账户禁止写操作",
@@ -248,6 +257,12 @@ def build_context(args: argparse.Namespace) -> dict[str, Any]:
             ],
         },
         "refined_setups": refined_setups(repo_root),
+        "summary": {
+            "observation_scans": len(observations),
+            "deterministic_candidate_scans": len(candidates),
+            "sidecar_template_signals": len(templates),
+        },
+        "observation_scans": observations,
         "candidate_scans": candidates,
         "intraday_markdown_excerpt": read_text(intraday_markdown_path)[-args.markdown_chars :] if intraday_markdown_path.exists() else "",
         "paper_summary": paper_state_payload.get("summary") if isinstance(paper_state_payload.get("summary"), dict) else {},
@@ -258,7 +273,7 @@ def build_context(args: argparse.Namespace) -> dict[str, Any]:
             "signals": templates,
             "summary": {
                 "total": len(templates),
-                "candidate": len(templates),
+                "candidate": len(candidates),
                 "blocked": 0,
                 "skipped": 0,
             },
@@ -273,6 +288,7 @@ def build_context(args: argparse.Namespace) -> dict[str, Any]:
         "output": str(output),
         "signals_output": str(signals_output),
         "summary": {
+            "observation_scans": len(observations),
             "candidate_scans": len(candidates),
             "template_signals": len(templates),
         },
@@ -290,6 +306,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output")
     parser.add_argument("--signals-output")
     parser.add_argument("--max-candidates", type=int, default=3)
+    parser.add_argument("--max-observations", type=int, default=30)
     parser.add_argument("--markdown-chars", type=int, default=6000)
     parser.add_argument("--repo-root", default=str(Path(__file__).resolve().parents[1]))
     return parser

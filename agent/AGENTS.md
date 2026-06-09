@@ -15,7 +15,7 @@
 - Pre-market analysis should read `report/<DATE>/pre-market-context.json`, which references the previous trading day's `daily-snapshot.json`.
 - Post-market analysis should read `report/<SNAPSHOT_DATE>/daily-snapshot.json` directly.
 - Every executable candidate needs setup file, trigger, invalidation, and risk constraint.
-- For monitor-session opportunities, read `report/<DATE>/intraday-opportunity-context.json` first. Deterministic monitor extraction is watch-only; only the Codex review prompt may write a `conditional_executable` monitor Trade Plan Card.
+- For monitor-session opportunities, read `report/<DATE>/intraday-opportunity-context.json` first. `observation_scans` / `sidecar_template.signals` are the all-symbol decision inputs and include latest/recent bar evidence; deterministic `candidate_scans` are evidence only. Only the Codex review prompt may write a `conditional_executable` monitor Trade Plan Card.
 - Use `NO TRADE` when regime is unclear, Barb Wire/Tight Trading Range, data is insufficient, or global rules fail.
 - For scheduled pre/post-market analysis, run the trading-day guard first and stop on non-trading days.
 

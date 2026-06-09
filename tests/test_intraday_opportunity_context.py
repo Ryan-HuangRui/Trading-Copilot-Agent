@@ -41,6 +41,12 @@ class IntradayOpportunityContextTest(unittest.TestCase):
                             "risk_quality": "acceptable",
                             "journal_appendable": True,
                             "bar_timestamp": "2026-05-26T14:30:00",
+                            "latest_bar": {"dt": "2026-05-26T14:30:00", "open": 99, "high": 101, "low": 98, "close": 100.5, "volume": 5000},
+                            "recent_bars": [
+                                {"dt": "2026-05-26T14:25:00", "open": 98, "high": 100, "low": 97.5, "close": 99.5, "volume": 3000},
+                                {"dt": "2026-05-26T14:30:00", "open": 99, "high": 101, "low": 98, "close": 100.5, "volume": 5000},
+                            ],
+                            "price_data_interval": "scan_interval",
                         },
                         {"symbol": "NVDA", "status": "观察中", "setup": "NO VALID SETUP"},
                     ],
@@ -96,14 +102,27 @@ class IntradayOpportunityContextTest(unittest.TestCase):
             context = json.loads(output.read_text(encoding="utf-8"))
             self.assertEqual(context["date"], "2026-05-26")
             self.assertEqual(context["llm_contract"]["output_signals"], "report/2026-05-26/monitor-signals.json")
+            self.assertEqual([item["symbol"] for item in context["observation_scans"]], ["MU", "NVDA"])
             self.assertEqual([item["symbol"] for item in context["candidate_scans"]], ["MU"])
             self.assertEqual(context["candidate_scans"][0]["premarket_plan"]["execution_status"], "conditional_executable")
+            self.assertTrue(context["observation_scans"][0]["deterministic_candidate"])
+            self.assertFalse(context["observation_scans"][1]["deterministic_candidate"])
+            self.assertEqual(context["observation_scans"][0]["latest_bar"]["close"], 100.5)
+            self.assertEqual(len(context["observation_scans"][0]["recent_bars"]), 2)
+            self.assertEqual(context["observation_scans"][0]["price_data_interval"], "scan_interval")
+            self.assertEqual(context["summary"]["observation_scans"], 2)
+            self.assertEqual(context["summary"]["deterministic_candidate_scans"], 1)
+            self.assertEqual([item["symbol"] for item in context["sidecar_template"]["signals"]], ["MU", "NVDA"])
             template = context["sidecar_template"]["signals"][0]
             self.assertEqual(template["symbol"], "MU")
             self.assertEqual(template["plan_type"], "watch_only")
             self.assertEqual(template["execution_status"], "watch_only")
             self.assertEqual(template["entry"]["trigger_price"], 100)
             self.assertEqual(template["take_profit"]["tp1"], 112)
+            watch_template = context["sidecar_template"]["signals"][1]
+            self.assertEqual(watch_template["symbol"], "NVDA")
+            self.assertEqual(watch_template["plan_type"], "watch_only")
+            self.assertIn("Codex", watch_template["risk"]["text"])
 
 
 if __name__ == "__main__":

@@ -107,12 +107,13 @@ PROMPT="你是 Trading-Copilot-Agent 的 cc-connect 盘中 Codex 盯盘定时任
 4. 如果 should_send=true，tca-intraday-notify.sh 已经发送 intraday-notification.md，不要重复发送。
 
 盘中模拟盘 dry-run 开关：TCA_INTRADAY_ENABLE_PAPER_DRY_RUN=$ENABLE_PAPER_DRY_RUN。
-- 只有该值为 1 时，才可以基于最新 monitor 数据、盘前计划、人工观察列表、knowledge/refined 生成或更新 report/$DATE/monitor-signals.json。
+- 只有该值为 1 时，才可以基于最新 monitor 数据、盘前计划、人工观察列表、paper 状态、knowledge/refined 生成或更新 report/$DATE/monitor-signals.json。
 - 先运行：
   python3 script/trading_copilot.py intraday-opportunity-context --date $DATE
-- 读取 report/$DATE/intraday-opportunity-context.json。它提供候选扫描、盘前计划、盘中状态、paper 状态和 sidecar_template。
-- 如果没有高质量条件化机会，保持 watch_only，并运行 dry-run 或说明没有 ready 订单。
-- 若要升级为 conditional_executable，必须由你基于 context、knowledge/refined 和完整 Trade Plan Card 主观判断；不得由 extract-monitor-signals 自动升级。
+- 读取 report/$DATE/intraday-opportunity-context.json。它提供 observation_scans 全观察池（含 latest_bar/recent_bars 价格证据）、candidate_scans 代码高亮候选、盘前计划、盘中状态、paper 状态和 sidecar_template。
+- 你必须以 observation_scans/sidecar_template.signals 为主输入逐标的分析；candidate_scans 只是辅助证据，不能限制你的机会识别范围。
+- 如果没有高质量条件化机会，逐标的保持 watch_only/no_trade，并运行 dry-run 或说明没有 ready 订单。
+- 若要升级为 conditional_executable，必须由你基于全观察池 context、knowledge/refined 和完整 Trade Plan Card 主观判断；不得由 extract-monitor-signals 或 monitor_scan 自动升级。
 - 写出 report/$DATE/monitor-signals.json 后，必须随后运行：
   python3 script/trading_copilot.py validate-trade-plan --session monitor --date $DATE --signals report/$DATE/monitor-signals.json
   python3 script/trading_copilot.py paper-account-snapshot --date $DATE --paper-execution-config $PAPER_CONFIG

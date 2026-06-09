@@ -79,7 +79,7 @@ class IntradayReviewAppendTest(unittest.TestCase):
         )
         write_json(
             root / "report" / "2026-05-26" / "intraday-opportunity-context.json",
-            {"summary": {"candidate_scans": 2, "template_signals": 2}},
+            {"summary": {"observation_scans": 6, "deterministic_candidate_scans": 2, "template_signals": 6}},
         )
 
     def test_appends_codex_review_section_to_intraday_markdown(self):
@@ -98,6 +98,7 @@ class IntradayReviewAppendTest(unittest.TestCase):
             text = markdown.read_text(encoding="utf-8")
             self.assertIn("## 10:45 EDT Codex 机会评审", text)
             self.assertIn("- 汇总：signals=2；conditional_executable=1；watch_only=1；no_trade=0", text)
+            self.assertIn("- Codex 输入：observation_scans=6；deterministic_candidate_scans=2；template_signals=6", text)
             self.assertIn("- dry-run：ready=1；submitted=0；blocked=1；errors=0", text)
             self.assertIn("- MU: watch_only / watch_only", text)
             self.assertIn("- AMD: trade_plan / conditional_executable", text)

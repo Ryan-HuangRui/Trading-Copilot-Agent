@@ -116,6 +116,7 @@ def build_section(
     context_path: Path,
     submission_path: Path,
     signals_payload: dict[str, Any],
+    context_payload: dict[str, Any],
     submission_payload: dict[str, Any],
     repo_root: Path,
     max_notes_chars: int,
@@ -123,6 +124,7 @@ def build_section(
     raw_signals = signals_payload.get("signals") if isinstance(signals_payload.get("signals"), list) else []
     signals = [signal for signal in raw_signals if isinstance(signal, dict)]
     counts = count_by_status(signals)
+    context_summary = context_payload.get("summary") if isinstance(context_payload.get("summary"), dict) else {}
     submit_summary = submission_payload.get("summary") if isinstance(submission_payload.get("summary"), dict) else {}
     section_lines = [
         f"## {display_time(as_of, timezone_name)} Codex 机会评审",
@@ -135,6 +137,16 @@ def build_section(
             f"no_trade={counts['no_trade']}"
         ),
     ]
+    if context_summary:
+        observation_scans = context_summary.get("observation_scans")
+        deterministic_candidates = context_summary.get("deterministic_candidate_scans", context_summary.get("candidate_scans"))
+        template_signals = context_summary.get("template_signals", context_summary.get("sidecar_template_signals"))
+        section_lines.append(
+            "- Codex 输入："
+            f"observation_scans={observation_scans if observation_scans is not None else 'unknown'}；"
+            f"deterministic_candidate_scans={deterministic_candidates if deterministic_candidates is not None else 'unknown'}；"
+            f"template_signals={template_signals if template_signals is not None else 'unknown'}"
+        )
     if submit_summary:
         section_lines.append(
             "- dry-run："
@@ -156,6 +168,8 @@ def build_section(
         "dry_run_submitted": submit_summary.get("submitted", 0),
         "dry_run_blocked": submit_summary.get("blocked", 0),
         "dry_run_errors": submit_summary.get("errors", 0),
+        "observation_scans": context_summary.get("observation_scans"),
+        "deterministic_candidate_scans": context_summary.get("deterministic_candidate_scans", context_summary.get("candidate_scans")),
     }
     return "\n".join(section_lines) + "\n", summary
 
@@ -185,6 +199,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         }
 
     signals_payload = read_json(signals_path, {"signals": []})
+    context_payload = read_json(context_path, {})
     submission_payload = read_json(submission_path, {})
     as_of = parse_as_of(args.as_of)
     section, summary = build_section(
@@ -195,6 +210,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         context_path=context_path,
         submission_path=submission_path,
         signals_payload=signals_payload,
+        context_payload=context_payload,
         submission_payload=submission_payload,
         repo_root=repo_root,
         max_notes_chars=args.max_notes_chars,

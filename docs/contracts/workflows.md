@@ -215,13 +215,14 @@ Required behavior:
 - The wrapper must not pass `--execute` to any child command.
 - `paper_trade_submit.py` remains dry-run for monitor session.
 - A `conditional_executable` monitor sidecar must come from Codex/LLM review of `intraday-opportunity-context`; deterministic extraction must keep `watch_only`.
+- Codex must treat `observation_scans` / `sidecar_template.signals` as the all-symbol decision input. Deterministic `candidate_scans` are highlights only and must not restrict LLM opportunity discovery.
 - After a Codex-reviewed sidecar exists, the daily intraday Markdown should include the review summary so each poll preserves why candidates stayed `watch_only`, became `no_trade`, or became `conditional_executable`.
 - Output artifacts are review and notification inputs only.
 - This workflow must not submit broker orders.
 
 ## intraday-opportunity-context
 
-Purpose: build the fixed Codex review context for deciding whether intraday monitor observations remain `watch_only` or become complete `conditional_executable` monitor Trade Plan Cards.
+Purpose: build the fixed Codex review context for deciding, across the full intraday observation universe, whether each monitor observation remains `watch_only`, becomes `no_trade`, or becomes a complete `conditional_executable` monitor Trade Plan Card.
 
 Canonical command:
 
@@ -244,8 +245,9 @@ Output:
 
 Required behavior:
 
-- The artifact must include candidate monitor scans, matching pre-market plans, intraday state, paper state summary, refined setup file names, and a `sidecar_template`.
-- The template must default to `plan_type=watch_only` and `execution_status=watch_only`.
+- The artifact must include `observation_scans` for every monitor scan selected for LLM review, including `latest_bar` / `recent_bars` price evidence, plus `candidate_scans` for deterministic highlights, matching pre-market plans, intraday state, paper state summary, refined setup file names, and a `sidecar_template`.
+- `sidecar_template.signals` must cover the full `observation_scans` universe and default to `plan_type=watch_only` and `execution_status=watch_only`.
+- `candidate_scans` must not be used as a pre-filter for Codex decisions; it is supporting evidence only.
 - Only Codex/LLM review may raise a signal to `plan_type=trade_plan` and `execution_status=conditional_executable`; validation still requires the complete Trade Plan Card and RR >= 2.
 - This workflow must not submit, cancel, replace, or recover broker orders.
 

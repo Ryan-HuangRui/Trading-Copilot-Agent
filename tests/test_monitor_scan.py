@@ -37,6 +37,10 @@ class MonitorScanTest(unittest.TestCase):
         self.assertEqual(scan["risk_quality"], "acceptable")
         self.assertIn("price", scan["trigger_detail"])
         self.assertIn("price", scan["invalidation_detail"])
+        self.assertEqual(scan["latest_bar"]["close"], bars[-1]["close"])
+        self.assertEqual(len(scan["recent_bars"]), 20)
+        self.assertEqual(scan["recent_bars"][-1]["dt"], bars[-1]["dt"])
+        self.assertEqual(scan["price_data_interval"], "scan_interval")
 
 
 if __name__ == "__main__":

@@ -67,6 +67,15 @@ def ema(values: List[float], period: int) -> Optional[float]:
     return e
 
 
+def price_context_fields(bars: List[Dict], *, limit: int = 20) -> Dict:
+    recent = bars[-limit:]
+    return {
+        "price_data_interval": "scan_interval",
+        "latest_bar": dict(bars[-1]),
+        "recent_bars": [dict(bar) for bar in recent],
+    }
+
+
 def analyze_long_signal(symbol: str, bars: List[Dict]) -> Dict:
     closes = [b["close"] for b in bars]
     highs = [b["high"] for b in bars]
@@ -111,6 +120,7 @@ def analyze_long_signal(symbol: str, bars: List[Dict]) -> Dict:
             "risk_quality": "acceptable" if risk > 0 else "invalid",
             "journal_appendable": risk > 0,
             "bar_timestamp": bars[-1].get("dt"),
+            **price_context_fields(bars),
         }
 
     near = c >= prev20_high * 0.997
@@ -138,6 +148,7 @@ def analyze_long_signal(symbol: str, bars: List[Dict]) -> Dict:
             "risk_quality": "watch_only",
             "journal_appendable": True,
             "bar_timestamp": bars[-1].get("dt"),
+            **price_context_fields(bars),
         }
 
     return {
@@ -155,6 +166,7 @@ def analyze_long_signal(symbol: str, bars: List[Dict]) -> Dict:
         "risk_quality": "insufficient_setup",
         "journal_appendable": False,
         "bar_timestamp": bars[-1].get("dt"),
+        **price_context_fields(bars),
     }
 
 
@@ -212,7 +224,12 @@ def main():
         d = client.time_series(s, interval=args.interval, outputsize=120)
         bars = parse_series(d.get("values", []))
         if len(bars) < 25:
-            scans.append({"symbol": s, "status": "数据不足"})
+            scan = {"symbol": s, "status": "数据不足", "reason": "可用K线少于25根", "recent_bars": [dict(bar) for bar in bars]}
+            if bars:
+                scan["latest_bar"] = dict(bars[-1])
+                scan["price_data_interval"] = "scan_interval"
+                scan["bar_timestamp"] = bars[-1].get("dt")
+            scans.append(scan)
             continue
         scan = analyze_long_signal(s, bars)
         scans.append(scan)

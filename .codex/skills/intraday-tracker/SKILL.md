@@ -55,9 +55,11 @@ python3 script/trading_copilot.py intraday-dry-run --date <DATE>
 python3 script/trading_copilot.py intraday-review-append --date <DATE>
 ```
 
-This extracts monitor signals, validates monitor plans, builds paper previews, prepares a paper submit dry-run, and writes a Feishu-ready monitor summary. It must not pass `--execute`.
+This validates Codex-reviewed monitor decisions, builds paper previews, prepares a paper submit dry-run, and writes a Feishu-ready monitor summary. It must not pass `--execute`.
 
-After Codex writes or reviews `report/<DATE>/monitor-signals.json`, append the review summary into `report/<DATE>/intraday.md` with `intraday-review-append` so the daily intraday report includes both state tracking and the reason candidates stayed `watch_only` or became `conditional_executable`.
+Before Codex writes `report/<DATE>/monitor-signals.json`, build `report/<DATE>/intraday-opportunity-context.json` and use `observation_scans` / `sidecar_template.signals` as the all-symbol decision input. `observation_scans` include latest/recent bar evidence. `candidate_scans` are deterministic highlights only.
+
+After Codex writes or reviews `report/<DATE>/monitor-signals.json`, append the review summary into `report/<DATE>/intraday.md` with `intraday-review-append` so the daily intraday report includes state tracking, the all-symbol input scope, and the reason symbols stayed `watch_only`, became `no_trade`, or became `conditional_executable`.
 
 ## Phase 3 Dedicated Paper Entry
 
