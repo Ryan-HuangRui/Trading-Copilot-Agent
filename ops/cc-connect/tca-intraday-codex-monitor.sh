@@ -100,6 +100,11 @@ PROMPT="你是 Trading-Copilot-Agent 的 cc-connect 盘中 Codex 盯盘定时任
 - 不输出确定性买卖指令；盘中交易机会只能写成带触发、失效、风险的条件化模拟盘计划。
 - 不提交 git，不修改配置，不修改代码；只允许写当天 report/runtime 运行产物。
 
+飞书发送等级：
+- 不要把普通命令执行、命令成功/跳过、dry-run 结果、artifact 路径清单或运行流水发送到飞书；这些内容只写入日志、report/runtime artifact 和最终回复。
+- 只有以下情况才允许额外 cc-connect send：盘中 notify 事件由 tca-intraday-notify.sh 去重后发送；模拟盘实际 submitted/executed/cancelled/replaced/moved；保护止损/退出等风险动作；会影响监控或风险控制的 critical error。
+- blocked/watch_only/skipped/ready=0/无候选/仅 candidate lessons 都不单独发送飞书，只在最终回复说明。
+
 默认只读流程：
 1. 执行：bash ops/cc-connect/tca-intraday-notify.sh $DATE
 2. 读取输出 JSON、report/latest-monitor.json、report/$DATE/intraday.md、runtime/intraday/$DATE/state.json、runtime/intraday/$DATE/events.jsonl。
@@ -130,7 +135,7 @@ PROMPT="你是 Trading-Copilot-Agent 的 cc-connect 盘中 Codex 盯盘定时任
   python3 script/trading_copilot.py paper-order-sync --date $DATE
   python3 script/trading_copilot.py paper-event-ledger --date $DATE
   python3 script/trading_copilot.py paper-execution-review --date $DATE
-- 如果有 submitted/skipped/error，使用 cc-connect send 向当前飞书会话发送一条简短模拟盘状态，包含 artifact 路径。
+- 只有出现实际 submitted 或 critical error 时，才使用 cc-connect send 向当前飞书会话发送一条简短模拟盘告警；skipped/blocked/ready=0/普通执行结果不发飞书。
 
 盘中模拟盘生命周期开关：TCA_INTRADAY_ENABLE_PAPER_LIFECYCLE=$ENABLE_PAPER_LIFECYCLE。
 - 只有 ENABLE_PAPER_LIFECYCLE=1 且 runtime/paper/$DATE/paper-orders.jsonl 存在时，才运行同步与 exit 管理：
@@ -148,11 +153,12 @@ PROMPT="你是 Trading-Copilot-Agent 的 cc-connect 盘中 Codex 盯盘定时任
 - 该 wrapper 已包含 account-snapshot、paper-order-sync、exit 计划、再次同步、paper-event-ledger、paper-execution-review。
 - lifecycle dry-run 或执行后，必须追加生命周期摘要到当天盘中报告：
   python3 script/trading_copilot.py intraday-lifecycle-append --date $DATE
-- 读取 report/$DATE/intraday-lifecycle-summary.json；如果 should_notify=true，或 lifecycle 有 executed/submitted/moved/errors/candidate lessons，使用 cc-connect send 发送一条简短飞书状态，包含 artifact 路径。
+- 读取 report/$DATE/intraday-lifecycle-summary.json；只有 lifecycle 有实际 executed/submitted/cancelled/replaced/moved、保护止损/退出风险动作、或 critical errors，才使用 cc-connect send 发送一条简短飞书告警；仅 should_notify=true、candidate lessons、命令执行摘要或 artifact 路径清单不单独发飞书。
 
 失败处理：
-- 任一步失败时，使用 cc-connect send 发送简短失败状态，包含 date、失败命令、reason、关键 log tail。
-- 最终回复给 wrapper 的内容要短，列出执行了哪些阶段、是否发送飞书、主要 artifact。"
+- 普通步骤失败、数据暂不可用、skipped、blocked、无候选，只写最终回复和 artifact。
+- 只有会导致监控不可用、订单/风控状态不可确认、或可能影响已有模拟盘风险控制的 critical error，才使用 cc-connect send 发送简短失败告警。
+- 最终回复给 wrapper 的内容要短，列出执行了哪些阶段、是否触发飞书等级、主要 artifact。"
 
 "$CODEX_BIN" exec --cd "$REPO" --sandbox danger-full-access --output-last-message "$LOG_DIR/last-codex-monitor-message.txt" "$PROMPT" >>"$RUN_LOG" 2>&1
 RC=$?

@@ -478,7 +478,7 @@ python3 script/trading_copilot.py paper-lifecycle --date <DATE> --paper-executio
 python3 script/trading_copilot.py intraday-lifecycle-append --date <DATE>
 ```
 
-After lifecycle planning or execution, read `report/<DATE>/intraday-lifecycle-summary.json`; send a Feishu lifecycle status only when `should_notify=true` or the lifecycle wrapper reports executed/submitted/moved/errors/candidate lessons.
+After lifecycle planning or execution, read `report/<DATE>/intraday-lifecycle-summary.json`; send a Feishu lifecycle status only when the lifecycle wrapper reports actual executed/submitted/cancelled/replaced/moved actions, protective stop/exit risk actions, or critical errors. Do not send command execution traces, dry-run summaries, skipped/blocked states, artifact-only status, or candidate lessons as separate Feishu messages.
 
 Use monitor sidecar and journal entries as observation records unless Codex writes a validated monitor Trade Plan Card and the explicit paper gates are enabled.
 
