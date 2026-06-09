@@ -1,0 +1,141 @@
+import json
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def write_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+
+class IntradayOpportunityContextTest(unittest.TestCase):
+    def test_context_builds_codex_review_inputs_and_sidecar_template(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            setup = root / "knowledge" / "refined" / "setups" / "strong_breakout_trend_following.md"
+            setup.parent.mkdir(parents=True, exist_ok=True)
+            setup.write_text("# setup\n", encoding="utf-8")
+            write_json(
+                root / "report" / "latest-monitor.json",
+                {
+                    "risk_per_trade_pct": 1,
+                    "interval": "5min",
+                    "scans": [
+                        {
+                            "symbol": "MU",
+                            "status": "可执行",
+                            "setup": "strong_breakout_trend_following.md",
+                            "setup_files": ["strong_breakout_trend_following.md"],
+                            "reason": "上升趋势+20Bar突破+放量",
+                            "trigger": 100,
+                            "stop": 95,
+                            "target1": 112,
+                            "trigger_detail": {"type": "break_above", "price": 100, "text": "breaks 100"},
+                            "invalidation_detail": {"type": "break_below", "price": 95, "text": "breaks 95"},
+                            "risk_quality": "acceptable",
+                            "journal_appendable": True,
+                            "bar_timestamp": "2026-05-26T14:30:00",
+                            "latest_bar": {"dt": "2026-05-26T14:30:00", "open": 99, "high": 101, "low": 98, "close": 100.5, "volume": 5000},
+                            "recent_bars": [
+                                {"dt": "2026-05-26T14:25:00", "open": 98, "high": 100, "low": 97.5, "close": 99.5, "volume": 3000},
+                                {"dt": "2026-05-26T14:30:00", "open": 99, "high": 101, "low": 98, "close": 100.5, "volume": 5000},
+                            ],
+                            "price_data_interval": "scan_interval",
+                            "price_evidence": {
+                                "primary_interval": "5min",
+                                "bars": {
+                                    "5min": [{"dt": "2026-05-26T14:30:00", "close": 100.5}],
+                                    "15min": [{"dt": "2026-05-26T14:30:00", "close": 100.0}],
+                                    "1day": [{"dt": "2026-05-23", "close": 98.0}],
+                                },
+                                "key_levels": {"previous_day_close": 98.0, "vwap": 99.5},
+                                "derived": {"distance_to_vwap_pct": 1.005},
+                            },
+                        },
+                        {"symbol": "NVDA", "status": "观察中", "setup": "NO VALID SETUP"},
+                    ],
+                },
+            )
+            write_json(
+                root / "report" / "2026-05-26" / "pre-market-signals.json",
+                {
+                    "date": "2026-05-26",
+                    "session": "pre-market",
+                    "signals": [
+                        {
+                            "symbol": "MU",
+                            "setup": "strong_breakout_trend_following.md",
+                            "plan_type": "trade_plan",
+                            "execution_status": "conditional_executable",
+                            "entry": {"trigger_price": 99},
+                            "stop": {"initial_stop": 95},
+                            "take_profit": {"tp1": 112},
+                            "risk": {"max_account_risk_pct": 1, "risk_per_share": 4},
+                        }
+                    ],
+                },
+            )
+            write_json(
+                root / "runtime" / "intraday" / "2026-05-26" / "state.json",
+                {"symbols": {"MU": {"classification": "near_trigger", "last_price": 100.2}}},
+            )
+            write_json(
+                root / "runtime" / "paper" / "2026-05-26" / "paper-execution-state.json",
+                {"summary": {"filled": 0}, "orders": []},
+            )
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "script" / "intraday_opportunity_context.py"),
+                    "--repo-root",
+                    str(root),
+                    "--date",
+                    "2026-05-26",
+                ],
+                cwd=ROOT,
+                check=False,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, msg=proc.stderr or proc.stdout)
+            payload = json.loads(proc.stdout)
+            self.assertEqual(payload["status"], "success")
+            output = Path(payload["output"])
+            context = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(context["date"], "2026-05-26")
+            self.assertEqual(context["llm_contract"]["output_signals"], "report/2026-05-26/monitor-signals.json")
+            self.assertEqual([item["symbol"] for item in context["observation_scans"]], ["MU", "NVDA"])
+            self.assertEqual([item["symbol"] for item in context["candidate_scans"]], ["MU"])
+            self.assertEqual(context["candidate_scans"][0]["premarket_plan"]["execution_status"], "conditional_executable")
+            self.assertTrue(context["observation_scans"][0]["deterministic_candidate"])
+            self.assertFalse(context["observation_scans"][1]["deterministic_candidate"])
+            self.assertEqual(context["observation_scans"][0]["latest_bar"]["close"], 100.5)
+            self.assertEqual(len(context["observation_scans"][0]["recent_bars"]), 2)
+            self.assertEqual(context["observation_scans"][0]["price_data_interval"], "scan_interval")
+            self.assertEqual(context["observation_scans"][0]["price_evidence"]["primary_interval"], "5min")
+            self.assertEqual(context["observation_scans"][0]["price_evidence"]["bars"]["15min"][0]["close"], 100.0)
+            self.assertEqual(context["summary"]["observation_scans"], 2)
+            self.assertEqual(context["summary"]["deterministic_candidate_scans"], 1)
+            self.assertEqual([item["symbol"] for item in context["sidecar_template"]["signals"]], ["MU", "NVDA"])
+            template = context["sidecar_template"]["signals"][0]
+            self.assertEqual(template["symbol"], "MU")
+            self.assertEqual(template["plan_type"], "watch_only")
+            self.assertEqual(template["execution_status"], "watch_only")
+            self.assertEqual(template["entry"]["trigger_price"], 100)
+            self.assertEqual(template["take_profit"]["tp1"], 112)
+            watch_template = context["sidecar_template"]["signals"][1]
+            self.assertEqual(watch_template["symbol"], "NVDA")
+            self.assertEqual(watch_template["plan_type"], "watch_only")
+            self.assertIn("Codex", watch_template["risk"]["text"])
+
+
+if __name__ == "__main__":
+    unittest.main()

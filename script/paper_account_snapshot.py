@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 
 from longbridge_account_snapshot import normalize_account, normalize_position, read_json, unwrap_items
 from longbridge_paper_trade_adapter import ensure_paper_account, fetch_paper_snapshot, longbridge_cli_path
+from paper_execution_config import load_paper_execution_config, normalize_paper_execution_config
 
 
 def current_date(timezone_name: str) -> str:
@@ -88,7 +89,8 @@ def normalize_payload(raw: dict[str, Any], date: str, source: str) -> dict[str, 
     auth = raw.get("auth")
     if not isinstance(auth, dict):
         auth = {"account": {"account_channel": raw.get("account_channel")}, "token": {"status": "valid"}}
-    account_channel = ensure_paper_account(auth)
+    paper_execution_config = normalize_paper_execution_config(raw.get("paper_execution_config") if isinstance(raw.get("paper_execution_config"), dict) else None)
+    account_channel = ensure_paper_account(auth, paper_execution_config)
     positions = [
         normalize_position(item)
         for item in unwrap_items(raw.get("positions"))
@@ -126,7 +128,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         source = str(input_path)
     else:
         cli = longbridge_cli_path(args.longbridge_cli)
-        raw = fetch_paper_snapshot(cli)
+        paper_execution_config, _config_path = load_paper_execution_config(repo_root, args.paper_execution_config)
+        raw = fetch_paper_snapshot(cli, paper_execution_config)
+        raw["paper_execution_config"] = paper_execution_config
         source = "longbridge-cli"
     payload = normalize_payload(raw, date, source)
     output = output_path(repo_root, date, args.output)
@@ -151,6 +155,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--input", help="Read paper account payload from JSON fixture instead of Longbridge CLI")
     parser.add_argument("--output")
     parser.add_argument("--longbridge-cli")
+    parser.add_argument("--paper-execution-config")
     parser.add_argument("--repo-root", default=str(Path(__file__).resolve().parents[1]))
     return parser
 

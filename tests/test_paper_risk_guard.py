@@ -48,6 +48,36 @@ class PaperRiskGuardTest(unittest.TestCase):
         self.assertTrue(result["passed"])
         self.assertEqual(result["errors"], [])
 
+    def test_market_entry_order_passes_guard(self):
+        result = evaluate_order_intent(
+            intent(order_type="MO", limit_price=None),
+            account_snapshot={"account_channel": "lb_papertrading", "account": {"net_liquidation": 100000, "cash": 25000}},
+            submitted_intent_ids=set(),
+            config=RiskGuardConfig(max_daily_risk_pct=3, max_daily_orders=3),
+        )
+
+        self.assertTrue(result["passed"], result["errors"])
+
+    def test_conditional_limit_entry_order_passes_guard(self):
+        result = evaluate_order_intent(
+            intent(order_type="LIT", trigger_price=101),
+            account_snapshot={"account_channel": "lb_papertrading", "account": {"net_liquidation": 100000, "cash": 25000}},
+            submitted_intent_ids=set(),
+            config=RiskGuardConfig(max_daily_risk_pct=3, max_daily_orders=3),
+        )
+
+        self.assertTrue(result["passed"], result["errors"])
+
+    def test_gtd_and_outside_rth_entry_order_passes_guard(self):
+        result = evaluate_order_intent(
+            intent(order_type="LIT", trigger_price=101, tif="gtd", expire_date="2026-06-19", outside_rth="RTH_ONLY"),
+            account_snapshot={"account_channel": "lb_papertrading", "account": {"net_liquidation": 100000, "cash": 25000}},
+            submitted_intent_ids=set(),
+            config=RiskGuardConfig(max_daily_risk_pct=3, max_daily_orders=3),
+        )
+
+        self.assertTrue(result["passed"], result["errors"])
+
     def test_non_paper_account_fails_guard(self):
         result = evaluate_order_intent(
             intent(),
@@ -82,7 +112,7 @@ class PaperRiskGuardTest(unittest.TestCase):
         self.assertFalse(result["passed"])
         self.assertIn("estimated_notional exceeds available cash", result["errors"])
 
-    def test_unsupported_order_shape_fails_guard(self):
+    def test_sell_entry_shape_fails_guard(self):
         result = evaluate_order_intent(
             intent(side="sell", order_type="MO"),
             account_snapshot={"account_channel": "lb_papertrading", "account": {"net_liquidation": 100000, "cash": 25000}},
@@ -92,7 +122,17 @@ class PaperRiskGuardTest(unittest.TestCase):
 
         self.assertFalse(result["passed"])
         self.assertIn("only buy side is supported", result["errors"])
-        self.assertIn("only LO limit orders are supported", result["errors"])
+
+    def test_unsupported_order_type_fails_guard(self):
+        result = evaluate_order_intent(
+            intent(order_type="BOGUS"),
+            account_snapshot={"account_channel": "lb_papertrading", "account": {"net_liquidation": 100000, "cash": 25000}},
+            submitted_intent_ids=set(),
+            config=RiskGuardConfig(),
+        )
+
+        self.assertFalse(result["passed"])
+        self.assertIn("unsupported order_type: BOGUS", result["errors"])
 
     def test_load_submitted_intent_ids_reads_jsonl(self):
         with tempfile.TemporaryDirectory() as tmp:

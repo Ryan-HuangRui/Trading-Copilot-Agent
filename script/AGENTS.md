@@ -9,26 +9,32 @@
 - `prepare_daily_context.py`: pre-market context builder that reads the previous trading day's snapshot and writes `report/<DATE>/pre-market-context.json`.
 - `pre_market_report.py`: scripted pre-market report generator.
 - `monitor_scan.py`: 5m watchlist/position scan and `report/latest-monitor.json` writer.
+- `intraday_tracker.py`: read-only pre-market plan tracker that appends `report/<DATE>/intraday.md` and updates `runtime/intraday/<DATE>/state.json` / `events.jsonl`.
+- `intraday_event_notify.py`: builds a Feishu-ready message from unsent intraday tracker events and records sent event ids.
+- `validate_intraday_decision_coverage.py`: verifies a Codex-reviewed monitor sidecar has one explicit decision per `intraday-opportunity-context` observation symbol; it must not judge trade quality or call broker APIs.
+- `intraday_review_append.py`: appends Codex-reviewed monitor sidecar decisions and dry-run counts into `report/<DATE>/intraday.md`; it must not call broker APIs.
 - `longbridge_cli_adapter.py`: read-only Longbridge CLI guard. Do not add order/write commands.
 - `longbridge_account_snapshot.py`: read-only account/position snapshot writer under `runtime/account/`.
 - `longbridge_paper_trade_adapter.py`: Longbridge paper-account guard and read-only paper order/execution fetcher.
-- `longbridge_paper_order_adapter.py`: gated Longbridge paper order writer. It must remain paper-only and currently supports limit buy submission, cancel, and protective stop submission through explicit execute/env gates.
+- `longbridge_paper_order_adapter.py`: gated Longbridge paper order writer. It must remain paper-only and supports guarded Longbridge paper order submission, cancel, pending order replace, protective stop, TP1, and break-even stop movement through explicit execute/config gates.
 - `paper_account_snapshot.py`: read-only paper account, order, and execution snapshot writer under `runtime/paper/`.
 - `paper_order_models.py`: stable paper intent/order record builders and idempotency keys.
 - `paper_risk_guard.py`: deterministic execution-safety checks for paper order intents.
 - `paper_trade_preview.py`: converts validated Trade Plan Cards into dry-run paper order previews.
 - `paper_trade_submit.py`: prepares controlled paper submissions from previews and risk guard output; defaults to dry-run and only submits through the gated paper order adapter when execution gates are explicitly enabled.
+- `intraday_paper_entry.py`: standalone monitor-session paper entry path using the separate `intraday_entry_submit` gate; keep plain `paper-trade-submit --session monitor --execute` hard-disabled.
 - `paper_order_recover.py`: recovers a broker-submitted paper entry order into `paper-orders.jsonl` from Longbridge order detail without submitting, cancelling, or replacing broker orders.
 - `paper_order_sync.py`: read-only paper order state sync from entry/stop/TP1 journals and paper account snapshots.
-- `paper_event_ledger.py`: read-only projection from paper journals/execution state into `runtime/journal/events.jsonl`.
+- `paper_event_ledger.py`: read-only projection from paper entry, cancel, replace, stop, TP1, exit artifacts and execution state into `runtime/journal/events.jsonl`.
 - `paper_execution_review.py`: deterministic paper execution quality review that writes JSON/Markdown and candidate lessons without editing refined rules.
 - `paper_execution_config.py`: paper broker-write policy loader plus Longbridge paper capability matrix. Keep this as the source of truth for enabled, dry-run-only, and unsupported paper actions.
 - `paper_learning_lessons.py`: extracts paper execution candidate lessons into `runtime/learning/daily_lessons.jsonl` without promoting rules.
 - `paper_strategy_review.py`: aggregate paper execution reviews by setup and symbol without editing refined rules.
 - `paper_order_cancel.py`: cancel-plan builder for expired unfilled paper entry orders; defaults to dry-run and only cancels through the gated paper order adapter when execution gates are explicitly enabled.
-- `paper_protective_stop_plan.py`: protective stop planner for filled long paper entries. It defaults to dry-run and only submits paper stops through the gated paper order adapter when execution gates are explicitly enabled.
-- `paper_take_profit_plan.py`: TP1 partial-exit planner for filled long paper entries. It defaults to dry-run and only submits paper take-profit orders through the gated paper order adapter when execution gates are explicitly enabled.
-- `paper_break_even_stop_plan.py`: break-even stop movement planner for filled long paper entries after TP1 fill evidence. It is dry-run only and must not cancel, replace, or submit broker orders.
+- `paper_order_replace.py`: replace-plan builder for pending unfilled paper entry orders with Codex-reviewed `paper-replace-decisions.json`; defaults to dry-run and only replaces quantity/limit price through the gated paper order adapter when execution gates are explicitly enabled. Do not use it for stop trigger movement.
+- `paper_protective_stop_plan.py`: protective stop planner for filled long paper entries. It defaults to dry-run, defaults stops to `sell MIT`, supports shared Longbridge paper order shape fields for alternate protective-stop order types, and only submits through the gated paper order adapter when execution gates are explicitly enabled.
+- `paper_take_profit_plan.py`: TP1 partial-exit planner for filled long paper entries. It defaults to dry-run, defaults TP1 to `sell LO`, supports shared Longbridge paper order shape fields for alternate TP1 order types, and only submits through the gated paper order adapter when execution gates are explicitly enabled.
+- `paper_break_even_stop_plan.py`: break-even stop movement planner for filled long paper entries after TP1 fill evidence. It defaults to dry-run, defaults replacement stops to `sell MIT`, supports shared Longbridge paper order shape fields for alternate replacement stop order types, and only performs guarded cancel + new stop submission when execution gates are explicitly enabled.
 - `paper_trade_review.py`: compares submitted/previewed paper orders with observed paper executions and can append matched paper fills to the journal.
 - `position_review.py`: compares read-only positions with a session-specific signal sidecar and writes review artifacts.
 - `data_quality.py`: checks daily snapshot data source/freshness, focused-symbol fallback, account price deltas, and abnormal moves.
@@ -53,11 +59,15 @@
 - Run unified pre-market workflow: `python3 script/trading_copilot.py pre-market-plan --watchlist config/watchlist.json --skip-non-trading-day`.
 - Run unified post-market workflow: `python3 script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day --include-journal-signals --include-position-symbols`.
 - Run unified monitor workflow: `python3 script/trading_copilot.py monitor-brief --state config/monitor_state.json --interval 5min`.
+- Run read-only intraday tracker: `python3 script/trading_copilot.py intraday-tracker --date 2026-05-06 --top-n 5`.
+- Append Codex intraday review into the daily Markdown log: `python3 script/trading_copilot.py intraday-review-append --date 2026-05-06`.
 - Run read-only account snapshot: `python3 script/trading_copilot.py account-snapshot --date 2026-05-06`.
 - Run read-only paper account snapshot: `python3 script/trading_copilot.py paper-account-snapshot --date 2026-05-06`.
 - Build paper order previews: `python3 script/trading_copilot.py paper-trade-preview --date 2026-05-06 --session pre-market --require-validation`.
 - Prepare dry-run paper submissions: `python3 script/trading_copilot.py paper-trade-submit --date 2026-05-06 --session pre-market --require-validation`.
 - Submit guarded paper entry orders after enabling `paper_execution.broker_writes_enabled=true` and `paper_execution.allow_entry_submit=true` in `config/paper_execution.json`: `python3 script/trading_copilot.py paper-trade-submit --date 2026-05-06 --session pre-market --require-validation --execute`.
+- Run intraday paper entry dry-run: `python3 script/trading_copilot.py intraday-paper-entry --date 2026-05-06 --require-validation`.
+- Submit guarded intraday paper entry orders only after enabling `paper_execution.allow_intraday_entry_submit=true`: `python3 script/trading_copilot.py intraday-paper-entry --date 2026-05-06 --require-validation --execute`.
 - Recover an already-submitted paper entry order into the local journal: `python3 script/trading_copilot.py paper-order-recover --date 2026-05-06 --session pre-market --broker-order-id <ORDER_ID> --append`.
 - Sync paper order state: `python3 script/trading_copilot.py paper-order-sync --date 2026-05-06`.
 - Project paper events: `python3 script/trading_copilot.py paper-event-ledger --date 2026-05-06`.
@@ -66,11 +76,16 @@
 - Aggregate paper strategy evidence: `python3 script/trading_copilot.py paper-strategy-review`.
 - Build paper cancel plan: `python3 script/trading_copilot.py paper-order-cancel --date 2026-05-06`.
 - Cancel guarded expired paper entry orders after enabling `paper_execution.allow_cancel=true`: `python3 script/trading_copilot.py paper-order-cancel --date 2026-05-06 --execute`.
+- Build pending paper order replace plan: `python3 script/trading_copilot.py paper-order-replace --date 2026-05-06`.
+- Replace guarded pending paper entry order quantity/limit after enabling `paper_execution.allow_order_replace=true`: `python3 script/trading_copilot.py paper-order-replace --date 2026-05-06 --execute`.
 - Build protective stop plan: `python3 script/trading_copilot.py paper-protective-stop-plan --date 2026-05-06`.
 - Submit guarded paper protective stops after enabling `paper_execution.allow_protective_stop=true`: `python3 script/trading_copilot.py paper-protective-stop-plan --date 2026-05-06 --execute`.
 - Build TP1 partial-exit plan: `python3 script/trading_copilot.py paper-take-profit-plan --date 2026-05-06`.
 - Submit guarded paper TP1 partial exits after enabling `paper_execution.allow_take_profit=true`: `python3 script/trading_copilot.py paper-take-profit-plan --date 2026-05-06 --execute`.
-- Build dry-run break-even stop movement plan: `python3 script/trading_copilot.py paper-break-even-stop-plan --date 2026-05-06`.
+- Build break-even stop movement plan: `python3 script/trading_copilot.py paper-break-even-stop-plan --date 2026-05-06`.
+- Move stops to break-even after enabling `paper_execution.allow_break_even_stop_move=true`: `python3 script/trading_copilot.py paper-break-even-stop-plan --date 2026-05-06 --execute`.
+- Build break-even stop movement with a non-default stop shape: `python3 script/trading_copilot.py paper-break-even-stop-plan --date 2026-05-06 --order-type LIT --limit-price <LIMIT>`.
+- Run lifecycle with a non-market plan-invalidated exit shape: `python3 script/trading_copilot.py paper-lifecycle --date 2026-05-06 --exit-order-type LIT --exit-limit-price <LIMIT> --exit-trigger-price <TRIGGER>`.
 - Review paper executions: `python3 script/trading_copilot.py paper-trade-review --date 2026-05-06 --session pre-market --append`.
 - Run position review: `python3 script/trading_copilot.py position-review --date 2026-05-06 --append`.
 - Run data quality review: `python3 script/trading_copilot.py data-quality --date 2026-05-06`.
@@ -85,6 +100,8 @@
 - Generate scripted report: `python3 script/pre_market_report.py --watchlist config/watchlist.json`.
 - Generate scripted report with guard: `python3 script/pre_market_report.py --watchlist config/watchlist.json --skip-non-trading-day`.
 - Monitor scan: `python3 script/monitor_scan.py --state config/monitor_state.json --interval 5min`.
+- Intraday tracker: `python3 script/intraday_tracker.py --date 2026-05-06 --top-n 5`.
+- Intraday event notification payload: `python3 script/intraday_event_notify.py --date 2026-05-06 --mark-sent`.
 - Refresh source metadata: `python3 script/import_priceactions_knowledge.py`.
 
 ## Conventions
@@ -93,6 +110,9 @@
 - Load `TWELVE_DATA_API_KEY` from `.env` or the process environment only for Twelve Data fallback; never hardcode or print secrets.
 - Preserve provider rate limits unless the data provider contract is intentionally changed. Longbridge uses `config/longbridge_rate_limit_state.json`; Twelve Data fallback uses `config/rate_limit_state.json`.
 - Keep output writes under ignored runtime paths (`raw_data/`, `report/`, `config/rate_limit_state.json`, `config/longbridge_rate_limit_state.json`) unless the task is metadata import.
+- Intraday tracker events are notification candidates only. Do not treat `runtime/intraday/<DATE>/events.jsonl` as execution instructions.
+- Intraday event notification must deduplicate with `runtime/intraday/<DATE>/sent-events.json`.
+- Do not enable `paper-trade-submit --session monitor --execute`; use the dedicated `intraday-paper-entry` wrapper for the Phase 3 paper-only path.
 - Longbridge account workflows are read-only. Paper-trading workflows may inspect paper orders/executions and produce dry-run previews/submissions. Broker writes are allowed only through `longbridge_paper_order_adapter.py`, only for paper accounts, and only when the explicit execution gates are enabled.
 - If adding a script that fetches market data, reuse `build_market_data_client()` so Longbridge remains primary and Twelve Data remains fallback.
 - S&P 500 universe fetches may use standard-library HTTP, but per-symbol market-data screening must still use the shared market-data provider stack.

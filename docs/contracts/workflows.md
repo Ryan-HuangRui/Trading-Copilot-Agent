@@ -7,7 +7,7 @@ All workflows must preserve the repository safety rules:
 - Never place real trades.
 - Read-only Longbridge real-account snapshots are allowed only through the account snapshot workflow; real-account order placement, cancellation, replacement, and automatic position changes are prohibited.
 - Paper broker writes are allowed only through dedicated guarded paper adapters, only against `lb_papertrading`, and only for explicitly contracted operations.
-- Current paper write scope is limited to guarded entry limit-buy submission, guarded cancellation of expired unfilled entry orders, guarded protective stop submission, and guarded TP1 partial-exit submission. Paper replace, break-even stop movement, trailing stops, OCO, market orders, short selling, and real-account writes remain out of scope.
+- Current paper write scope is limited to guarded paper entry submission, guarded cancellation of expired unfilled entry orders, guarded pending order quantity/limit replace, guarded protective stop submission, guarded TP1 partial-exit submission, guarded plan-invalidated exit submission, and guarded break-even stop movement. OCO, short selling, native stop-trigger replace, and real-account writes remain out of scope.
 - Do not output deterministic buy/sell instructions.
 - Use scenarios, triggers, invalidation, risk, and `NO TRADE`.
 - Use `knowledge/refined/` as the only rule source for trading conclusions.
@@ -156,6 +156,142 @@ Required behavior:
 - Monitor signals default to `plan_type=watch_only` and `execution_status=watch_only`.
 - Monitor paper submission is dry-run only.
 - `paper-trade-submit --session monitor --execute` must be hard-rejected before broker credentials or adapters are used.
+
+## intraday-tracker
+
+Purpose: track pre-market focus plans and manually watched symbols against the latest intraday monitor artifact.
+
+Canonical command:
+
+```bash
+python3 script/trading_copilot.py intraday-tracker --date <DATE> --top-n 5
+```
+
+Inputs:
+
+- `report/<DATE>/pre-market-signals.json`
+- Optional `config/intraday_watchlist.json`
+- `report/latest-monitor.json`
+- Existing `report/<DATE>/intraday.md` when present
+- Existing `runtime/intraday/<DATE>/state.json` and `events.jsonl` when present
+
+Deterministic output:
+
+- Appends `report/<DATE>/intraday.md`
+- Writes `runtime/intraday/<DATE>/state.json`
+- Appends important state changes to `runtime/intraday/<DATE>/events.jsonl`
+
+Required behavior:
+
+- Treat the Markdown file as a human-readable rolling log.
+- Treat `state.json` as the machine-readable prior state source.
+- Treat `events.jsonl` as notification candidates only.
+- Do not submit, cancel, or replace broker orders from this workflow.
+
+## intraday-dry-run
+
+Purpose: run monitor-session paper preview/submission dry-run checks from either deterministic watch-only monitor extraction or a Codex-reviewed monitor sidecar.
+
+Canonical command:
+
+```bash
+python3 script/trading_copilot.py intraday-dry-run --date <DATE>
+python3 script/trading_copilot.py intraday-decision-coverage --date <DATE> --context report/<DATE>/intraday-opportunity-context.json --signals report/<DATE>/monitor-signals.json
+python3 script/trading_copilot.py intraday-dry-run --date <DATE> --signals report/<DATE>/monitor-signals.json
+python3 script/trading_copilot.py intraday-review-append --date <DATE> --signals report/<DATE>/monitor-signals.json --submission report/<DATE>/paper-trade-submission.json --context report/<DATE>/intraday-opportunity-context.json
+```
+
+Deterministic sequence:
+
+1. If `--signals` is omitted, run `extract_monitor_signals.py` to create watch-only monitor signals.
+2. If `--signals` is provided, use that sidecar directly and do not overwrite it.
+3. `validate_trade_plan.py --session monitor`
+4. `paper_trade_preview.py --session monitor --require-validation`
+5. `paper_trade_submit.py --session monitor --require-validation`
+6. `feishu_summary.py --session monitor`
+7. `intraday_review_append.py` appends the Codex sidecar decision summary and dry-run counts to `report/<DATE>/intraday.md`
+
+Required behavior:
+
+- The wrapper must not pass `--execute` to any child command.
+- `paper_trade_submit.py` remains dry-run for monitor session.
+- A `conditional_executable` monitor sidecar must come from Codex/LLM review of `intraday-opportunity-context`; deterministic extraction must keep `watch_only`.
+- Codex must treat `observation_scans` / `sidecar_template.signals` as the all-symbol decision input. Deterministic `candidate_scans` are highlights only and must not restrict LLM opportunity discovery.
+- A Codex-reviewed sidecar must pass `intraday-decision-coverage` before trade-plan validation or dry-run so every observation symbol has an explicit `watch_only`, `no_trade`, or `conditional_executable` decision.
+- After a Codex-reviewed sidecar exists, the daily intraday Markdown should include the review summary so each poll preserves why candidates stayed `watch_only`, became `no_trade`, or became `conditional_executable`.
+- Output artifacts are review and notification inputs only.
+- This workflow must not submit broker orders.
+
+## intraday-decision-coverage
+
+Purpose: verify that a Codex-reviewed monitor sidecar contains one explicit decision for every symbol in `intraday-opportunity-context`'s `sidecar_template.signals`.
+
+Canonical command:
+
+```bash
+python3 script/trading_copilot.py intraday-decision-coverage --date <DATE> --context report/<DATE>/intraday-opportunity-context.json --signals report/<DATE>/monitor-signals.json
+```
+
+Required behavior:
+
+- The validator must fail when any observation symbol is missing from `monitor-signals.json`.
+- The validator does not judge trade quality, RR, setup validity, or broker readiness; those remain `validate-trade-plan`, `paper_trade_preview`, and risk guard responsibilities.
+- This workflow must not submit, cancel, replace, or recover broker orders.
+
+## intraday-opportunity-context
+
+Purpose: build the fixed Codex review context for deciding, across the full intraday observation universe, whether each monitor observation remains `watch_only`, becomes `no_trade`, or becomes a complete `conditional_executable` monitor Trade Plan Card.
+
+Canonical command:
+
+```bash
+python3 script/trading_copilot.py intraday-opportunity-context --date <DATE>
+```
+
+Inputs:
+
+- `report/latest-monitor.json`
+- `report/<DATE>/pre-market-signals.json` when present
+- `runtime/intraday/<DATE>/state.json` when present
+- `report/<DATE>/intraday.md` when present
+- `runtime/paper/<DATE>/paper-execution-state.json` when present
+- `knowledge/refined/setups/*.md`
+
+Output:
+
+- `report/<DATE>/intraday-opportunity-context.json`
+
+Required behavior:
+
+- The artifact must include `observation_scans` for every monitor scan selected for LLM review, including multi-timeframe `price_evidence` by default: 5m up to 78 bars, 15m 40 bars, daily 60 bars, key levels, and derived distances. It must also include `candidate_scans` for deterministic highlights, matching pre-market plans, intraday state, paper state summary, refined setup file names, and a `sidecar_template`.
+- `sidecar_template.signals` must cover the full `observation_scans` universe and default to `plan_type=watch_only` and `execution_status=watch_only`.
+- `candidate_scans` must not be used as a pre-filter for Codex decisions; it is supporting evidence only.
+- Only Codex/LLM review may raise a signal to `plan_type=trade_plan` and `execution_status=conditional_executable`; validation still requires the complete Trade Plan Card and RR >= 2.
+- This workflow must not submit, cancel, replace, or recover broker orders.
+
+## intraday-paper-entry
+
+Purpose: standalone gated paper-entry workflow for monitor-session candidates after the dry-run loop has been reviewed.
+
+Canonical dry-run command:
+
+```bash
+python3 script/trading_copilot.py intraday-paper-entry --date <DATE> --require-validation
+```
+
+Canonical execute command:
+
+```bash
+python3 script/trading_copilot.py intraday-paper-entry --date <DATE> --require-validation --execute --paper-execution-config config/paper_execution.local.json
+```
+
+Required behavior:
+
+- This is the only supported Phase 3 intraday paper-entry execute wrapper.
+- It fixes the submission session to `monitor` and broker action to `intraday_entry_submit`.
+- Execute requires `broker_writes_enabled=true`, `allow_intraday_entry_submit=true`, `--execute`, and the Longbridge paper account channel `lb_papertrading`.
+- Plain `paper-trade-submit --session monitor --execute` remains hard-rejected.
+- The workflow must write `report/<DATE>/intraday-paper-entry.json` by default.
 
 ## agent-research-context
 
@@ -436,6 +572,7 @@ Inputs:
 Required behavior:
 
 - `execution_status=conditional_executable` requires a complete Trade Plan Card: `entry.trigger_price`, `stop.initial_stop`, `take_profit.tp1`, `risk.max_account_risk_pct`, `risk.risk_per_share`, and at least one `execution_rules.skip_conditions` item.
+- Conditional entry order fields must pass the shared Longbridge paper order shape checks: supported `order_type`, required price/trigger/trailing fields, valid `tif`, required `expire_date` for `gtd`, and valid `outside_rth` when supplied.
 - TP1 reward/risk must be at least 2R.
 - Incomplete plans must be downgraded by the agent to `watch_only` or `no_trade` before delivery.
 - `extract-report-signals --require-validation` and `sync-longbridge-watchlist --require-validation` must run this gate as well as `validate-report`.
@@ -571,6 +708,7 @@ Inputs:
 - `report/<DATE>/pre-market-signals.json` or `report/<DATE>/post-market-signals.json`
 - Optional `report/<DATE>/position-review.json`
 - Optional `report/<DATE>/plan-review.json`
+- Optional post-market intraday artifacts: `report/<DATE>/intraday.md`, `runtime/intraday/<DATE>/state.json`, `runtime/intraday/<DATE>/events.jsonl`, and `runtime/intraday/<DATE>/sent-events.json`
 - Optional `runtime/learning/daily_lessons.jsonl`
 
 Output:
@@ -580,6 +718,7 @@ Output:
 Required behavior:
 
 - Show only a compact execution panel: conditional plans, watch candidates, `NO TRADE`, position review summary, plan review summary, and daily lessons.
+- For post-market summaries, include a compact intraday-monitor recap when artifacts exist: focus symbols, final state distribution, important event count, sent notification count, and artifact paths.
 - Keep the full analysis in the Markdown report artifacts; Feishu content should stay summary-first.
 - Do not present conditional plans as deterministic buy/sell instructions.
 
@@ -618,12 +757,14 @@ Canonical command:
 
 ```bash
 python3 script/trading_copilot.py paper-account-snapshot --date <DATE>
+python3 script/trading_copilot.py paper-account-snapshot --date <DATE> --paper-execution-config config/paper_execution.local.json
 ```
 
 Inputs:
 
 - Longbridge CLI `auth status`, `assets`, `positions`, today's `order` list, and `order executions`.
 - The workflow must verify `account_channel=lb_papertrading` before reading paper orders/executions.
+- Optional `--paper-execution-config` may enable `allow_auth_status_unknown_paper_channel=true` only for hosts separately verified to use the paper account token. Explicit non-paper channels must still fail.
 - Optional `--input` JSON fixture for tests.
 
 Output:
@@ -662,6 +803,9 @@ Required behavior:
 - Default is dry-run only.
 - With `--require-validation`, a complete `conditional_executable` Trade Plan Card is required.
 - Quantity is computed from paper account net liquidation, `risk.max_account_risk_pct`, `risk.risk_per_share`, and available cash.
+- Entry order type comes from `entry.order_type` and supports the shared Longbridge paper order model: `LO`, `ELO`, `MO`, `AO`, `ALO`, `ODD`, `SLO`, `LIT`, `MIT`, `TSLPAMT`, and `TSLPPCT`.
+- Preview must preserve entry-level `tif`, `expire_date` for `gtd`, and `outside_rth` when supplied. If `entry.tif` is absent, the command-level `--tif` default is used.
+- Required order-shape fields must block incomplete previews: price for price-based orders, trigger price for trigger orders, trailing amount/percent for trailing orders, and `expire_date` for `gtd`.
 - The output may include preview CLI commands for human/manual use, but the workflow must not execute them.
 - Unsupported directions or incomplete risk data must produce blocked previews, not orders.
 
@@ -724,6 +868,7 @@ Required behavior:
 - Must match submitted entry, protective stop, and TP1 orders by `broker_order_id`, then `remark`, then `intent_id`, then `symbol + side + quantity` fallback.
 - Must summarize order states including `submitted`, `accepted`, `partially_filled`, `filled`, `cancelled`, `rejected`, and `expired`.
 - Must include `protective_stops`, `take_profit_orders`, and `exit_summary` in the execution state when those journals exist.
+- Must preserve order shape fields for entry/stop/TP1/exit records, including limit, trigger, trailing, `tif`, `expire_date`, and `outside_rth`.
 - Must enrich entry orders with matched stop/TP1 fields such as `protective_stop_order_id`, `stop_status`, `take_profit_order_id`, `tp1_status`, `tp1_filled_quantity`, and `remaining_quantity`.
 - Must enrich entry orders with a `lifecycle` summary including entry, protection, TP1, remaining quantity, and overall lifecycle status.
 - Must preserve matched broker order and execution payloads for audit and later review.
@@ -759,10 +904,10 @@ Output:
 Required behavior:
 
 - Must not submit, cancel, replace, or adjust broker orders.
-- Must only recover ready entry buy LO paper orders.
-- Must match the broker order detail to exactly one ready preview order by symbol, side, quantity, order type, and limit price.
+- Must only recover ready long-buy paper entry orders supported by the shared paper order model.
+- Must match the broker order detail to exactly one ready preview order by symbol, side, quantity, order type, and the order-type-specific fields present in broker detail, including limit price, trigger price, trailing amount/percent, limit offset, `tif`, `expire_date`, and `outside_rth`.
 - Must skip duplicate `intent_id` or `broker_order_id` values already present in `paper-orders.jsonl`.
-- Recovered records must preserve `intent_id`, `broker_order_id`, `remark`, reconstructed `raw_request`, full broker `raw_response`, and recovery timestamp.
+- Recovered records must preserve `intent_id`, `broker_order_id`, `remark`, order shape fields, reconstructed `raw_request`, full broker `raw_response`, and recovery timestamp.
 
 ## paper-order-cancel
 
@@ -800,6 +945,72 @@ Required behavior:
 - The artifact must include `execution_policy` and `broker_capabilities`.
 - Executed cancel records must preserve `intent_id`, `broker_order_id`, `raw_request`, and `raw_response`.
 
+## paper-order-replace
+
+Purpose: build a dry-run replace plan for pending paper entry orders when a Codex-reviewed sidecar requests a safer quantity or limit price, and optionally execute the replace through the guarded paper adapter.
+
+Canonical command:
+
+```bash
+python3 script/trading_copilot.py paper-order-replace --date <DATE>
+```
+
+Execute command:
+
+```bash
+python3 script/trading_copilot.py paper-order-replace --date <DATE> --execute
+```
+
+Inputs:
+
+- `runtime/paper/<DATE>/paper-execution-state.json`.
+- `report/<DATE>/paper-replace-decisions.json`.
+- Optional `runtime/paper/<DATE>/paper-replace-orders.jsonl` for duplicate detection.
+- `config/paper_execution.json` when `--execute` is used.
+
+Output:
+
+- `report/<DATE>/paper-replace-plan.json`
+- `runtime/paper/<DATE>/paper-replace-orders.jsonl` only when `--execute` successfully replaces a pending paper order.
+
+Required behavior:
+
+- Default behavior is dry-run and must not call broker replace APIs.
+- Broker replace requires `--execute`, paper account validation, and config gates `broker_writes_enabled=true` plus `allow_order_replace=true`.
+- Only pending/open/submitted paper orders with `filled_quantity=0`, a broker order id, and a matching `replace_pending` decision may become replace candidates.
+- Replacement may reduce or keep quantity and may set a new positive limit price; it must not increase above current order quantity or reduce below filled quantity.
+- The workflow must not replace filled or partially filled orders.
+- This workflow is for Longbridge `order replace` quantity/price changes only. Stop trigger movement remains a cancel-and-submit workflow because MIT trigger prices cannot be safely changed through this replace path.
+- Duplicate `intent_id` values already present in `paper-replace-orders.jsonl` must be blocked.
+- The artifact must separate `replace_candidates`, `blocked`, `replaced`, and `errors`, and include `execution_policy` and `broker_capabilities`.
+- Successful replace records must preserve `intent_id`, `broker_order_id`, previous and new quantity/limit price, raw request/response, account channel, and `submitted_at`.
+
+Decision sidecar example:
+
+```json
+{
+  "date": "<DATE>",
+  "workflow": "paper-order-replace-decision",
+  "decisions": [
+    {
+      "intent_id": "<INTENT_ID>",
+      "symbol": "MU",
+      "action": "replace_pending",
+      "execution_status": "conditional_executable",
+      "reason": "limit should be tightened after failed reclaim",
+      "new_quantity": 100,
+      "new_limit_price": 99.5,
+      "risk_check": {
+        "remaining_unfilled_quantity": 100,
+        "max_account_risk_pct": 1,
+        "risk_per_share": 4.5
+      },
+      "evidence": ["report/latest-monitor.json", "runtime/paper/<DATE>/paper-execution-state.json"]
+    }
+  ]
+}
+```
+
 ## paper-event-ledger
 
 Purpose: project submitted and observed paper execution facts into the unified event stream.
@@ -815,6 +1026,9 @@ Inputs:
 - `runtime/paper/<DATE>/paper-orders.jsonl`.
 - Optional `runtime/paper/<DATE>/paper-stop-orders.jsonl`.
 - Optional `runtime/paper/<DATE>/paper-take-profit-orders.jsonl`.
+- Optional `runtime/paper/<DATE>/paper-exit-orders.jsonl`.
+- Optional `runtime/paper/<DATE>/paper-replace-orders.jsonl`.
+- Optional `report/<DATE>/paper-order-cancel-plan.json`.
 - Optional `runtime/paper/<DATE>/paper-execution-state.json`.
 
 Output:
@@ -827,6 +1041,9 @@ Required behavior:
 - Must be read-only with respect to broker APIs; it must not submit, cancel, replace, or adjust orders.
 - Must emit deterministic event ids so repeated runs for the same date replace the same workflow/date projection without duplicate events.
 - Must preserve existing events from other workflows or dates.
+- Must include order shape fields in submitted and state-derived event payloads so non-LO TP1, trigger, and trailing orders remain auditable.
+- Must emit `order_replaced` events from `paper-replace-orders.jsonl`, preserving previous/new quantity, previous/new limit price, decision reason, and raw request/response.
+- Must emit `order_cancel_executed` and `order_cancel_failed` events from `paper-order-cancel-plan.json`, preserving cancel reason, broker order id, raw request/response, and error details when present.
 - Must emit at least submitted events from paper journals and observed status events from `paper-execution-state.json` when available.
 - Event payloads must preserve `intent_id`, `source_signal_id`, `broker_order_id`, `symbol`, `side`, `quantity`, `remark`, and raw request/response fields when present.
 
@@ -958,6 +1175,8 @@ Canonical command:
 
 ```bash
 python3 script/trading_copilot.py paper-protective-stop-plan --date <DATE>
+python3 script/trading_copilot.py paper-protective-stop-plan --date <DATE> --order-type LIT --limit-price <LIMIT>
+python3 script/trading_copilot.py paper-protective-stop-plan --date <DATE> --order-type TSLPPCT --trailing-percent 2.5 --limit-offset 0.3
 ```
 
 Execution command:
@@ -983,7 +1202,8 @@ Required behavior:
 - Broker stop submission requires both `--execute` and `config/paper_execution.json` with `paper_execution.broker_writes_enabled=true` and `paper_execution.allow_protective_stop=true`.
 - Broker stop submission must use only `script/longbridge_paper_order_adapter.py`.
 - Only fully filled long buy entries with positive `stop_price`, positive filled quantity, and no existing protective stop may become stop candidates.
-- The first stop plan uses Longbridge `sell` `MIT` with `--trigger-price <stop_price>` and `tif=gtc` by default.
+- The default stop plan uses Longbridge `sell` `MIT` with `--trigger-price <stop_price>` and `tif=gtc`.
+- Protective stops may use the shared Longbridge order shape through `--order-type`, `--limit-price`, `--trigger-price`, `--trailing-amount`, `--trailing-percent`, `--limit-offset`, `--expire-date`, and `--outside-rth`. Price-based orders default price to `stop_price`; trigger-based orders default trigger to `stop_price`.
 - Duplicate `intent_id` values already present in `paper-stop-orders.jsonl` must be blocked.
 - The artifact must separate `stop_candidates`, `blocked`, `submitted`, and `errors`.
 - The artifact must include `execution_policy` and `broker_capabilities`.
@@ -997,12 +1217,15 @@ Canonical command:
 
 ```bash
 python3 script/trading_copilot.py paper-take-profit-plan --date <DATE>
+python3 script/trading_copilot.py paper-take-profit-plan --date <DATE> --order-type MIT
+python3 script/trading_copilot.py paper-take-profit-plan --date <DATE> --order-type TSLPPCT --trailing-percent 2.5 --limit-offset 0.3
 ```
 
 Execution command:
 
 ```bash
 python3 script/trading_copilot.py paper-take-profit-plan --date <DATE> --execute
+python3 script/trading_copilot.py paper-take-profit-plan --date <DATE> --execute --resize-stop-before-submit
 ```
 
 Inputs:
@@ -1020,17 +1243,84 @@ Required behavior:
 
 - Default behavior is dry-run and must not call broker write APIs.
 - Broker TP1 submission requires both `--execute` and `config/paper_execution.json` with `paper_execution.broker_writes_enabled=true` and `paper_execution.allow_take_profit=true`.
+- When `--resize-stop-before-submit` is used, stop resizing requires the separate `paper_execution.allow_take_profit_stop_resize=true` gate. The workflow must cancel the existing over-sized protective stop, submit a resized MIT stop for the post-TP1 remaining quantity, record it in `paper-stop-orders.jsonl`, and only then submit TP1.
 - Broker TP1 submission must use only `script/longbridge_paper_order_adapter.py`.
 - Only fully filled long buy entries with positive `take_profit`, positive filled quantity, and no existing TP1/take-profit order may become TP1 candidates.
-- The first TP1 plan uses Longbridge `sell` `LO` with `--price <take_profit>`, `tif=gtc` by default, and a default `--exit-fraction 0.5`.
+- The default TP1 plan uses Longbridge `sell` `LO` with `--price <take_profit>`, `tif=gtc`, and `--exit-fraction 0.5`.
+- TP1 may use the shared Longbridge order shape through `--order-type`, `--limit-price`, `--trigger-price`, `--trailing-amount`, `--trailing-percent`, `--limit-offset`, `--expire-date`, and `--outside-rth`. `LO`/price-based orders default the price to `take_profit`; trigger-based orders default the trigger to `take_profit`.
+- TP1 execution must block when an active protective stop quantity exceeds the post-TP1 remaining quantity. This prevents full-size stop plus partial TP orders from creating over-exit risk when no OCO link exists.
 - Duplicate `intent_id` values already present in `paper-take-profit-orders.jsonl` must be blocked.
 - The artifact must separate `take_profit_candidates`, `blocked`, `submitted`, and `errors`.
 - The artifact must include `execution_policy` and `broker_capabilities`.
-- Successful TP1 records must preserve `intent_id`, `entry_broker_order_id`, `broker_order_id`, `remark`, `raw_request`, `raw_response`, `exit_fraction`, and `submitted_at`.
+- Successful TP1 records must preserve `intent_id`, `entry_broker_order_id`, `broker_order_id`, order shape fields, `remark`, `raw_request`, `raw_response`, `exit_fraction`, and `submitted_at`.
+
+## paper-exit-plan
+
+Purpose: build or execute a guarded full/remaining-position exit plan when the intraday tracker marks an open paper position's plan as invalidated.
+
+Canonical command:
+
+```bash
+python3 script/trading_copilot.py paper-exit-plan --date <DATE>
+```
+
+Execution command:
+
+```bash
+python3 script/trading_copilot.py paper-exit-plan --date <DATE> --execute
+```
+
+Inputs:
+
+- `runtime/paper/<DATE>/paper-execution-state.json`.
+- `runtime/intraday/<DATE>/state.json`.
+- Optional `runtime/paper/<DATE>/paper-exit-orders.jsonl` for duplicate detection.
+- Optional `report/<DATE>/paper-exit-decisions.json` for LLM/Codex-reviewed exit decisions before hard invalidation.
+
+Output:
+
+- `report/<DATE>/paper-exit-plan.json`
+- `runtime/paper/<DATE>/paper-exit-orders.jsonl` only when `--execute` successfully submits an exit order.
+
+Required behavior:
+
+- Default behavior is dry-run and must not call broker write APIs.
+- Broker execution requires `--execute`, paper account validation, and config gates `allow_exit_cancel_replace=true` plus `allow_exit_submit=true`.
+- Only filled long entries with an open lifecycle state and positive remaining quantity may become exit candidates.
+- The first trigger source is `runtime/intraday/<DATE>/state.json` with symbol state `invalidated`.
+- A second trigger source is `report/<DATE>/paper-exit-decisions.json`. A decision can trigger an exit only when it matches the open `intent_id` or symbol and contains `action=exit_remaining`, `execution_status=conditional_executable`, a non-empty `reason`, `risk_check.cancel_open_exits_first=true`, and `risk_check.remaining_quantity` equal to the current remaining quantity.
+- Execution must cancel open protective stop and TP1 orders before submitting the exit order, so independent exit orders cannot over-exit the simulated position.
+- The default exit order type is Longbridge `sell` `MO`; `LO`, `MIT`, `LIT`, and trailing order types are available through the shared order model when their required price/trigger/trailing fields are supplied.
+- Duplicate `intent_id` values already present in `paper-exit-orders.jsonl` must be blocked.
+- The artifact must separate `exit_candidates`, `blocked`, `submitted`, and `errors`, and include `execution_policy` and `broker_capabilities`.
+
+Decision sidecar example:
+
+```json
+{
+  "date": "<DATE>",
+  "workflow": "paper-exit-decision",
+  "decisions": [
+    {
+      "intent_id": "<INTENT_ID>",
+      "symbol": "MU",
+      "action": "exit_remaining",
+      "execution_status": "conditional_executable",
+      "reason": "5m lower-high breakdown with failed reclaim",
+      "risk_check": {
+        "remaining_quantity": 100,
+        "cancel_open_exits_first": true,
+        "max_loss_if_exit_now_r": 1.1
+      },
+      "evidence": ["runtime/intraday/<DATE>/state.json", "report/latest-monitor.json"]
+    }
+  ]
+}
+```
 
 ## paper-break-even-stop-plan
 
-Purpose: build a dry-run plan to move an existing protective stop to break-even after TP1 fill evidence exists.
+Purpose: build or execute a guarded plan to move an existing protective stop to break-even after TP1 fill evidence exists.
 
 Canonical command:
 
@@ -1053,8 +1343,81 @@ Required behavior:
 - Only fully filled long buy entries with TP1 fill evidence, a positive remaining quantity, an existing protective stop order id, and a break-even price may become move candidates.
 - TP1 fill evidence may come from `tp1_status=filled`, `take_profit_status=filled`, or positive `tp1_filled_quantity` / `take_profit_filled_quantity` in the execution state.
 - Break-even price is based on `avg_fill_price`, falling back to entry/limit price, with optional non-negative `--buffer-pct`.
-- Candidates must include the existing stop order id, remaining quantity, new trigger price, and preview steps for canceling the old stop and submitting a replacement `sell MIT`.
-- Because cancel/replace safety needs separate execution design, there is no `--execute` mode for this workflow.
+- Candidates must include the existing stop order id, remaining quantity, replacement order shape, and preview steps for canceling the old stop and submitting the replacement stop.
+- The default mode is dry-run. `--execute` is allowed only against `lb_papertrading` when the selected paper execution config enables `broker_writes_enabled=true` and `allow_break_even_stop_move=true`.
+- The default replacement stop is Longbridge `sell MIT` at the computed break-even price. Alternative replacement stop order types may use the shared order model through `--order-type`, `--limit-price`, `--trigger-price`, `--trailing-amount`, `--trailing-percent`, `--limit-offset`, `--expire-date`, and `--outside-rth`; price-based orders default price to the computed break-even price and trigger-based orders default trigger to the computed break-even price.
+- Execution must cancel the old stop first and submit a new stop for the remaining quantity. Longbridge `order replace` must not be used for this movement because it cannot update MIT trigger prices.
+- Successful movement records must be appended to `runtime/paper/<DATE>/paper-stop-orders.jsonl` and preserve the replaced stop id, new stop id, raw cancel request/response, raw submit request/response, and `intent_id`.
+
+## paper-lifecycle
+
+Purpose: orchestrate paper order lifecycle management for a date: refresh paper account state, sync order lifecycle, prepare or execute exit-management actions, rebuild event ledger, and generate execution review.
+
+Canonical command:
+
+```bash
+python3 script/trading_copilot.py paper-lifecycle --date <DATE>
+```
+
+Optional execution flags:
+
+```bash
+python3 script/trading_copilot.py paper-lifecycle --date <DATE> \
+  --paper-execution-config config/paper_execution.local.json \
+  --execute-cancel \
+  --execute-order-replace \
+  --execute-protective-stop \
+  --execute-take-profit \
+  --execute-exit \
+  --execute-break-even-stop
+```
+
+Required behavior:
+
+- The wrapper must run paper account snapshot and paper order sync before exit planning.
+- It must run cancel, pending order replace, protective-stop, TP1, full-exit, and break-even workflows, passing `--execute` only for the explicitly requested action flags.
+- For pending order replace, it must pass `report/<DATE>/paper-replace-decisions.json` through to `paper-order-replace`.
+- For plan-invalidated exits, it must pass shared exit order shape fields through to `paper-exit-plan`: `--exit-order-type`, `--exit-limit-price`, `--exit-trigger-price`, `--exit-trailing-amount`, `--exit-trailing-percent`, `--exit-limit-offset`, `--exit-expire-date`, and `--exit-outside-rth`.
+- For break-even stop movement, it must pass shared replacement stop order shape fields through to `paper-break-even-stop-plan`: `--break-even-order-type`, `--break-even-limit-price`, `--break-even-trigger-price`, `--break-even-trailing-amount`, `--break-even-trailing-percent`, `--break-even-limit-offset`, `--break-even-expire-date`, and `--break-even-outside-rth`.
+- It must refresh paper account snapshot and order sync after exit planning, then run paper event ledger and paper execution review.
+- It may append paper learning lessons only with `--append-lessons`.
+- It may refresh strategy-level paper review only with `--strategy-review`.
+- The response must include child command payloads, artifacts, aggregate summaries, and an `execute_requested` object for each exit action.
+- It must not bypass the child workflows' paper account, execute, duplicate, and config-gate checks.
+
+## intraday-lifecycle-append
+
+Purpose: append paper lifecycle status into the same-day intraday Markdown log and produce a compact notification/filter artifact.
+
+Canonical command:
+
+```bash
+python3 script/trading_copilot.py intraday-lifecycle-append --date <DATE>
+```
+
+Inputs:
+
+- `runtime/paper/<DATE>/paper-execution-state.json`
+- `report/<DATE>/paper-order-cancel-plan.json`
+- `report/<DATE>/paper-replace-plan.json`
+- `report/<DATE>/paper-protective-stop-plan.json`
+- `report/<DATE>/paper-take-profit-plan.json`
+- `report/<DATE>/paper-exit-plan.json`
+- `report/<DATE>/paper-break-even-stop-plan.json`
+- `report/<DATE>/paper-event-ledger.json`
+- `report/<DATE>/paper-execution-review.json`
+
+Outputs:
+
+- Appends a `模拟盘生命周期` section to `report/<DATE>/intraday.md`
+- Writes `report/<DATE>/intraday-lifecycle-summary.json`
+
+Required behavior:
+
+- It must only read existing paper lifecycle artifacts and must not call Longbridge or any broker API.
+- If no lifecycle artifacts exist, it must return `status=skipped` and avoid creating `intraday.md`.
+- The summary must include cancel, pending order replace, protective-stop, take-profit, full-exit, break-even stop, ledger, and execution-review counts when those artifacts exist.
+- `should_notify=true` should be set when there are lifecycle candidates, submitted/moved/cancelled actions, errors, or ledger events.
 
 Required behavior for outcome backfill:
 
@@ -1242,13 +1605,16 @@ Canonical command:
 
 ```bash
 python3 script/workflow_smoke_test.py --date <DATE> --week <YYYY-Www> --account-input path/to/account-fixture.json
+python3 script/workflow_smoke_test.py --date <DATE> --week <YYYY-Www> --paper-input path/to/paper-fixture.json --paper-lifecycle-smoke
 ```
 
 Required behavior:
 
 - Use existing fixture artifacts under `--repo-root`.
 - Exercise validation, signal extraction, outcome backfill, optional account snapshot and position review, daily review, weekly review, and monitor extraction.
+- When `--paper-lifecycle-smoke` is set with `--paper-input`, seed local paper order journals from the fixture preview and exercise paper order sync, protective stop, TP1, plan-invalidated exit, break-even stop planning, event ledger, execution review, and intraday lifecycle append.
 - Must not fetch market data or account data.
+- Must not call Longbridge or any broker API.
 
 ## research-note
 

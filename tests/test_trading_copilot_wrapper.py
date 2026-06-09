@@ -156,6 +156,924 @@ class TradingCopilotWrapperTest(unittest.TestCase):
         self.assertEqual(payload["validation"]["status"], "pass")
         self.assertEqual(payload["artifacts"], [str(sidecar)])
 
+    def test_intraday_dry_run_chains_monitor_preview_submit_without_execute(self):
+        calls = []
+
+        def fake_run_child(command):
+            calls.append(command)
+            if command[0] == "script/extract_monitor_signals.py":
+                payload = {
+                    "status": "success",
+                    "date": "2026-05-26",
+                    "signals_path": "report/2026-05-26/monitor-signals.json",
+                    "signals": [{"symbol": "MU"}],
+                    "appended": [],
+                    "skipped_duplicates": [],
+                }
+            elif command[0] == "script/validate_trade_plan.py":
+                payload = {"status": "pass", "errors": [], "warnings": [], "checked_artifacts": ["report/2026-05-26/monitor-signals.json"]}
+            elif command[0] == "script/paper_trade_preview.py":
+                payload = {"status": "success", "date": "2026-05-26", "output": "report/2026-05-26/paper-trade-preview.json", "summary": {"ready": 0}}
+            elif command[0] == "script/paper_trade_submit.py":
+                payload = {
+                    "status": "success",
+                    "date": "2026-05-26",
+                    "output": "report/2026-05-26/paper-trade-submission.json",
+                    "dry_run": True,
+                    "summary": {"ready": 0},
+                }
+            elif command[0] == "script/feishu_summary.py":
+                payload = {"status": "success", "output": "report/2026-05-26/monitor-feishu-summary.md", "summary": {"candidate": 1}}
+            else:
+                payload = {"status": "success"}
+            return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
+
+        args = Namespace(
+            date="2026-05-26",
+            signals=None,
+            monitor="report/latest-monitor.json",
+            max_signals=5,
+            timezone="America/New_York",
+            signals_output=None,
+            account_snapshot=None,
+            preview_output=None,
+            submit_output=None,
+            summary_output=None,
+            default_market="US",
+            tif="day",
+            max_daily_risk_pct=3.0,
+            max_daily_orders=3,
+            learning_dir="runtime/learning",
+        )
+
+        with patch.object(trading_copilot, "run_child", side_effect=fake_run_child), patch.object(
+            trading_copilot, "emit", side_effect=SystemExit
+        ) as emit:
+            with self.assertRaises(SystemExit):
+                trading_copilot.run_intraday_dry_run(args)
+
+        self.assertEqual(
+            [command[0] for command in calls],
+            [
+                "script/extract_monitor_signals.py",
+                "script/validate_trade_plan.py",
+                "script/paper_trade_preview.py",
+                "script/paper_trade_submit.py",
+                "script/feishu_summary.py",
+            ],
+        )
+        self.assertNotIn("--execute", [part for command in calls for part in command])
+        submit_command = calls[3]
+        self.assertIn("--session", submit_command)
+        self.assertIn("monitor", submit_command)
+        payload = emit.call_args.args[0]
+        self.assertEqual(payload["workflow"], "intraday-dry-run")
+        self.assertTrue(payload["dry_run"])
+
+    def test_intraday_dry_run_accepts_codex_reviewed_signals_without_extracting(self):
+        calls = []
+
+        def fake_run_child(command):
+            calls.append(command)
+            if command[0] == "script/validate_trade_plan.py":
+                payload = {"status": "pass", "errors": [], "warnings": [], "checked_artifacts": ["report/2026-05-26/monitor-signals.json"]}
+            elif command[0] == "script/paper_trade_preview.py":
+                payload = {"status": "success", "date": "2026-05-26", "output": "report/2026-05-26/paper-trade-preview.json", "summary": {"ready": 1}}
+            elif command[0] == "script/paper_trade_submit.py":
+                payload = {
+                    "status": "success",
+                    "date": "2026-05-26",
+                    "output": "report/2026-05-26/paper-trade-submission.json",
+                    "dry_run": True,
+                    "summary": {"ready": 1},
+                }
+            elif command[0] == "script/feishu_summary.py":
+                payload = {"status": "success", "output": "report/2026-05-26/monitor-feishu-summary.md", "summary": {"conditional_executable": 1}}
+            else:
+                payload = {"status": "success"}
+            return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
+
+        args = Namespace(
+            date="2026-05-26",
+            signals="report/2026-05-26/monitor-signals.json",
+            monitor="report/latest-monitor.json",
+            max_signals=5,
+            timezone="America/New_York",
+            signals_output=None,
+            account_snapshot=None,
+            preview_output=None,
+            submit_output=None,
+            summary_output=None,
+            default_market="US",
+            tif="day",
+            max_daily_risk_pct=3.0,
+            max_daily_orders=3,
+            learning_dir="runtime/learning",
+        )
+
+        with patch.object(trading_copilot, "run_child", side_effect=fake_run_child), patch.object(
+            trading_copilot, "emit", side_effect=SystemExit
+        ) as emit:
+            with self.assertRaises(SystemExit):
+                trading_copilot.run_intraday_dry_run(args)
+
+        self.assertEqual(
+            [command[0] for command in calls],
+            [
+                "script/validate_trade_plan.py",
+                "script/paper_trade_preview.py",
+                "script/paper_trade_submit.py",
+                "script/feishu_summary.py",
+            ],
+        )
+        self.assertEqual(calls[0][calls[0].index("--signals") + 1], "report/2026-05-26/monitor-signals.json")
+        payload = emit.call_args.args[0]
+        self.assertEqual(payload["signals_path"], "report/2026-05-26/monitor-signals.json")
+        self.assertEqual(payload["submit_summary"], {"ready": 1})
+        self.assertEqual(payload["artifacts"][-1], "report/2026-05-26/monitor-feishu-summary.md")
+
+    def test_intraday_decision_coverage_wraps_validator(self):
+        calls = []
+
+        def fake_run_child(command):
+            calls.append(command)
+            payload = {
+                "status": "pass",
+                "date": "2026-05-26",
+                "summary": {"required_symbols": 2, "covered_symbols": 2},
+            }
+            return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
+
+        args = Namespace(
+            date="2026-05-26",
+            context="report/2026-05-26/intraday-opportunity-context.json",
+            signals="report/2026-05-26/monitor-signals.json",
+        )
+
+        with patch.object(trading_copilot, "run_child", side_effect=fake_run_child), patch.object(
+            trading_copilot, "emit", side_effect=SystemExit
+        ) as emit:
+            with self.assertRaises(SystemExit):
+                trading_copilot.run_intraday_decision_coverage(args)
+
+        self.assertEqual(calls[0][0], "script/validate_intraday_decision_coverage.py")
+        self.assertEqual(calls[0][calls[0].index("--context") + 1], "report/2026-05-26/intraday-opportunity-context.json")
+        self.assertEqual(calls[0][calls[0].index("--signals") + 1], "report/2026-05-26/monitor-signals.json")
+        payload = emit.call_args.args[0]
+        self.assertEqual(payload["workflow"], "intraday-decision-coverage")
+        self.assertEqual(payload["summary"]["covered_symbols"], 2)
+
+    def test_intraday_review_append_wraps_markdown_appender(self):
+        calls = []
+
+        def fake_run_child(command):
+            calls.append(command)
+            payload = {
+                "status": "success",
+                "workflow": "intraday-review-append",
+                "date": "2026-05-26",
+                "markdown": "report/2026-05-26/intraday.md",
+                "signals": "report/2026-05-26/monitor-signals.json",
+                "summary": {"signals": 2, "conditional_executable": 1},
+            }
+            return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
+
+        args = Namespace(
+            date="2026-05-26",
+            signals="report/2026-05-26/monitor-signals.json",
+            submission="report/2026-05-26/paper-trade-submission.json",
+            context="report/2026-05-26/intraday-opportunity-context.json",
+            markdown=None,
+            timezone="America/New_York",
+            as_of=None,
+            max_notes_chars=120,
+        )
+
+        with patch.object(trading_copilot, "run_child", side_effect=fake_run_child), patch.object(
+            trading_copilot, "emit", side_effect=SystemExit
+        ) as emit:
+            with self.assertRaises(SystemExit):
+                trading_copilot.run_intraday_review_append(args)
+
+        self.assertEqual(calls[0][0], "script/intraday_review_append.py")
+        self.assertEqual(calls[0][calls[0].index("--signals") + 1], "report/2026-05-26/monitor-signals.json")
+        self.assertEqual(calls[0][calls[0].index("--submission") + 1], "report/2026-05-26/paper-trade-submission.json")
+        payload = emit.call_args.args[0]
+        self.assertEqual(payload["workflow"], "intraday-review-append")
+        self.assertEqual(payload["artifacts"], ["report/2026-05-26/intraday.md"])
+        self.assertEqual(payload["summary"]["conditional_executable"], 1)
+
+    def test_intraday_lifecycle_append_wraps_markdown_appender(self):
+        calls = []
+
+        def fake_run_child(command):
+            calls.append(command)
+            payload = {
+                "status": "success",
+                "workflow": "intraday-lifecycle-append",
+                "date": "2026-05-26",
+                "markdown": "report/2026-05-26/intraday.md",
+                "output": "report/2026-05-26/intraday-lifecycle-summary.json",
+                "summary": {"exit_candidates": 1},
+                "should_notify": True,
+            }
+            return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
+
+        args = Namespace(
+            date="2026-05-26",
+            markdown=None,
+            output=None,
+            timezone="America/New_York",
+            as_of="2026-05-26T15:05:00+00:00",
+        )
+
+        with patch.object(trading_copilot, "run_child", side_effect=fake_run_child), patch.object(
+            trading_copilot, "emit", side_effect=SystemExit
+        ) as emit:
+            with self.assertRaises(SystemExit):
+                trading_copilot.run_intraday_lifecycle_append(args)
+
+        self.assertEqual(calls[0][0], "script/intraday_lifecycle_append.py")
+        self.assertEqual(calls[0][calls[0].index("--date") + 1], "2026-05-26")
+        self.assertEqual(calls[0][calls[0].index("--as-of") + 1], "2026-05-26T15:05:00+00:00")
+        payload = emit.call_args.args[0]
+        self.assertEqual(payload["workflow"], "intraday-lifecycle-append")
+        self.assertEqual(
+            payload["artifacts"],
+            ["report/2026-05-26/intraday.md", "report/2026-05-26/intraday-lifecycle-summary.json"],
+        )
+        self.assertTrue(payload["should_notify"])
+        self.assertEqual(payload["summary"]["exit_candidates"], 1)
+
+    def test_paper_account_snapshot_passes_execution_config(self):
+        calls = []
+
+        def fake_run_child(command):
+            calls.append(command)
+            payload = {
+                "status": "success",
+                "date": "2026-05-26",
+                "output": "runtime/paper/2026-05-26/paper-account-snapshot.json",
+                "account_channel": "lb_papertrading",
+                "positions_count": 0,
+                "orders_count": 0,
+                "executions_count": 0,
+            }
+            return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
+
+        args = Namespace(
+            date="2026-05-26",
+            timezone="America/New_York",
+            input=None,
+            output=None,
+            longbridge_cli=None,
+            paper_execution_config="config/paper_execution.local.json",
+            repo_root=str(ROOT),
+        )
+
+        with patch.object(trading_copilot, "run_child", side_effect=fake_run_child), patch.object(
+            trading_copilot, "emit", side_effect=SystemExit
+        ) as emit:
+            with self.assertRaises(SystemExit):
+                trading_copilot.run_paper_account_snapshot(args)
+
+        self.assertEqual(calls[0][calls[0].index("--paper-execution-config") + 1], "config/paper_execution.local.json")
+        payload = emit.call_args.args[0]
+        self.assertEqual(payload["workflow"], "paper-account-snapshot")
+        self.assertEqual(payload["account_channel"], "lb_papertrading")
+
+    def test_paper_lifecycle_chains_sync_exit_plans_and_review(self):
+        calls = []
+
+        def fake_run_child(command):
+            calls.append(command)
+            workflow = Path(command[0]).stem
+            outputs = {
+                "paper_account_snapshot": {"status": "success", "date": "2026-05-26", "output": "runtime/paper/2026-05-26/paper-account-snapshot.json"},
+                "paper_order_sync": {"status": "success", "date": "2026-05-26", "output": "runtime/paper/2026-05-26/paper-execution-state.json", "summary": {"filled": 1}},
+                "paper_order_cancel": {"status": "success", "date": "2026-05-26", "output": "report/2026-05-26/paper-order-cancel-plan.json", "dry_run": True, "summary": {"cancel_candidates": 0}},
+                "paper_order_replace": {"status": "success", "date": "2026-05-26", "output": "report/2026-05-26/paper-replace-plan.json", "dry_run": True, "summary": {"replace_candidates": 0}},
+                "paper_protective_stop_plan": {"status": "success", "date": "2026-05-26", "output": "report/2026-05-26/paper-protective-stop-plan.json", "dry_run": True, "summary": {"stop_candidates": 1}},
+                "paper_take_profit_plan": {"status": "success", "date": "2026-05-26", "output": "report/2026-05-26/paper-take-profit-plan.json", "dry_run": True, "summary": {"take_profit_candidates": 1}},
+                "paper_exit_plan": {"status": "success", "date": "2026-05-26", "output": "report/2026-05-26/paper-exit-plan.json", "dry_run": True, "summary": {"exit_candidates": 0}},
+                "paper_break_even_stop_plan": {"status": "success", "date": "2026-05-26", "output": "report/2026-05-26/paper-break-even-stop-plan.json", "dry_run": True, "summary": {"move_candidates": 0}},
+                "paper_event_ledger": {"status": "success", "date": "2026-05-26", "output": "report/2026-05-26/paper-event-ledger.json", "events_journal": "runtime/journal/events.jsonl", "summary": {"events": 3}},
+                "paper_execution_review": {"status": "success", "date": "2026-05-26", "output": "report/2026-05-26/paper-execution-review.json", "markdown": "report/2026-05-26/paper-execution-review.md", "summary": {"orders": 1}},
+            }
+            return subprocess.CompletedProcess(command, 0, json.dumps(outputs[workflow]), "")
+
+        args = Namespace(
+            date="2026-05-26",
+            repo_root=str(ROOT),
+            paper_account_input=None,
+            paper_execution_config="config/paper_execution.local.json",
+            longbridge_cli=None,
+            execute_cancel=False,
+            execute_protective_stop=False,
+            execute_take_profit=False,
+            execute_exit=False,
+            execute_break_even_stop=False,
+            execute_order_replace=False,
+            resize_stop_before_take_profit=False,
+            append_lessons=False,
+            strategy_review=False,
+            expire_after_minutes=90,
+            stop_tif="gtc",
+            take_profit_tif="gtc",
+            exit_order_type="LIT",
+            exit_limit_price=94.5,
+            exit_trigger_price=95.0,
+            exit_trailing_amount=None,
+            exit_trailing_percent=None,
+            exit_limit_offset=None,
+            exit_tif="gtd",
+            exit_expire_date="2026-05-27",
+            exit_outside_rth="false",
+            break_even_order_type="LIT",
+            break_even_limit_price=100.0,
+            break_even_trigger_price=None,
+            break_even_trailing_amount=None,
+            break_even_trailing_percent=None,
+            break_even_limit_offset=None,
+            break_even_tif="gtc",
+            break_even_expire_date=None,
+            break_even_outside_rth=None,
+            exit_fraction=0.5,
+            learning_dir="runtime/learning",
+        )
+
+        with patch.object(trading_copilot, "run_child", side_effect=fake_run_child), patch.object(
+            trading_copilot, "emit", side_effect=SystemExit
+        ) as emit:
+            with self.assertRaises(SystemExit):
+                trading_copilot.run_paper_lifecycle(args)
+
+        self.assertEqual(
+            [Path(command[0]).stem for command in calls],
+            [
+                "paper_account_snapshot",
+                "paper_order_sync",
+                "paper_order_cancel",
+                "paper_order_replace",
+                "paper_account_snapshot",
+                "paper_order_sync",
+                "paper_protective_stop_plan",
+                "paper_take_profit_plan",
+                "paper_exit_plan",
+                "paper_break_even_stop_plan",
+                "paper_account_snapshot",
+                "paper_order_sync",
+                "paper_event_ledger",
+                "paper_execution_review",
+            ],
+        )
+        self.assertNotIn("--execute", [part for command in calls for part in command])
+        by_workflow = {Path(command[0]).stem: command for command in calls}
+        self.assertEqual(by_workflow["paper_exit_plan"][by_workflow["paper_exit_plan"].index("--order-type") + 1], "LIT")
+        self.assertEqual(by_workflow["paper_exit_plan"][by_workflow["paper_exit_plan"].index("--limit-price") + 1], "94.5")
+        self.assertEqual(by_workflow["paper_exit_plan"][by_workflow["paper_exit_plan"].index("--trigger-price") + 1], "95.0")
+        self.assertEqual(by_workflow["paper_exit_plan"][by_workflow["paper_exit_plan"].index("--tif") + 1], "gtd")
+        self.assertEqual(by_workflow["paper_exit_plan"][by_workflow["paper_exit_plan"].index("--expire-date") + 1], "2026-05-27")
+        self.assertEqual(by_workflow["paper_exit_plan"][by_workflow["paper_exit_plan"].index("--outside-rth") + 1], "false")
+        self.assertEqual(by_workflow["paper_break_even_stop_plan"][by_workflow["paper_break_even_stop_plan"].index("--order-type") + 1], "LIT")
+        self.assertEqual(by_workflow["paper_break_even_stop_plan"][by_workflow["paper_break_even_stop_plan"].index("--limit-price") + 1], "100.0")
+        payload = emit.call_args.args[0]
+        self.assertEqual(payload["workflow"], "paper-lifecycle")
+        self.assertEqual(payload["summary"]["paper_order_sync"]["filled"], 1)
+        self.assertIn("report/2026-05-26/paper-execution-review.json", payload["artifacts"])
+
+    def test_paper_lifecycle_applies_independent_execute_flags(self):
+        calls = []
+
+        def fake_run_child(command):
+            calls.append(command)
+            workflow = Path(command[0]).stem
+            payload = {"status": "success", "date": "2026-05-26", "summary": {}, "output": f"artifact/{workflow}.json"}
+            if workflow in {"paper_order_cancel", "paper_protective_stop_plan", "paper_take_profit_plan", "paper_break_even_stop_plan"}:
+                payload["dry_run"] = "--execute" not in command
+            return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
+
+        args = Namespace(
+            date="2026-05-26",
+            repo_root=str(ROOT),
+            paper_account_input=None,
+            paper_execution_config="config/paper_execution.local.json",
+            longbridge_cli="/usr/local/bin/longbridge",
+            execute_cancel=True,
+            execute_protective_stop=True,
+            execute_take_profit=True,
+            execute_exit=True,
+            execute_break_even_stop=True,
+            execute_order_replace=True,
+            resize_stop_before_take_profit=True,
+            append_lessons=True,
+            strategy_review=True,
+            expire_after_minutes=90,
+            stop_tif="gtc",
+            take_profit_tif="gtc",
+            exit_order_type="LIT",
+            exit_limit_price=94.5,
+            exit_trigger_price=95.0,
+            exit_trailing_amount=None,
+            exit_trailing_percent=None,
+            exit_limit_offset=None,
+            exit_tif="gtd",
+            exit_expire_date="2026-05-27",
+            exit_outside_rth="false",
+            break_even_order_type="LIT",
+            break_even_limit_price=100.0,
+            break_even_trigger_price=None,
+            break_even_trailing_amount=None,
+            break_even_trailing_percent=None,
+            break_even_limit_offset=None,
+            break_even_tif="gtc",
+            break_even_expire_date=None,
+            break_even_outside_rth=None,
+            exit_fraction=0.5,
+            learning_dir="runtime/learning",
+        )
+
+        with patch.object(trading_copilot, "run_child", side_effect=fake_run_child), patch.object(
+            trading_copilot, "emit", side_effect=SystemExit
+        ) as emit:
+            with self.assertRaises(SystemExit):
+                trading_copilot.run_paper_lifecycle(args)
+
+        by_workflow = {Path(command[0]).stem: command for command in calls}
+        self.assertIn("--execute", by_workflow["paper_order_cancel"])
+        self.assertIn("--execute", by_workflow["paper_order_replace"])
+        self.assertEqual(by_workflow["paper_order_replace"][by_workflow["paper_order_replace"].index("--decisions") + 1], "report/2026-05-26/paper-replace-decisions.json")
+        self.assertIn("--execute", by_workflow["paper_protective_stop_plan"])
+        self.assertIn("--execute", by_workflow["paper_take_profit_plan"])
+        self.assertIn("--resize-stop-before-submit", by_workflow["paper_take_profit_plan"])
+        self.assertIn("--execute", by_workflow["paper_exit_plan"])
+        self.assertIn("--order-type", by_workflow["paper_exit_plan"])
+        self.assertEqual(by_workflow["paper_exit_plan"][by_workflow["paper_exit_plan"].index("--order-type") + 1], "LIT")
+        self.assertEqual(by_workflow["paper_exit_plan"][by_workflow["paper_exit_plan"].index("--limit-price") + 1], "94.5")
+        self.assertEqual(by_workflow["paper_exit_plan"][by_workflow["paper_exit_plan"].index("--trigger-price") + 1], "95.0")
+        self.assertEqual(by_workflow["paper_exit_plan"][by_workflow["paper_exit_plan"].index("--expire-date") + 1], "2026-05-27")
+        self.assertEqual(by_workflow["paper_exit_plan"][by_workflow["paper_exit_plan"].index("--outside-rth") + 1], "false")
+        self.assertIn("--execute", by_workflow["paper_break_even_stop_plan"])
+        self.assertEqual(by_workflow["paper_break_even_stop_plan"][by_workflow["paper_break_even_stop_plan"].index("--order-type") + 1], "LIT")
+        self.assertEqual(by_workflow["paper_break_even_stop_plan"][by_workflow["paper_break_even_stop_plan"].index("--limit-price") + 1], "100.0")
+        self.assertIn("--paper-execution-config", by_workflow["paper_order_cancel"])
+        self.assertIn("/usr/local/bin/longbridge", by_workflow["paper_order_cancel"])
+        self.assertIn("paper_learning_lessons", [Path(command[0]).stem for command in calls])
+        self.assertIn("paper_strategy_review", [Path(command[0]).stem for command in calls])
+        payload = emit.call_args.args[0]
+        self.assertTrue(payload["execute_requested"]["cancel"])
+        self.assertTrue(payload["execute_requested"]["order_replace"])
+        self.assertTrue(payload["execute_requested"]["take_profit"])
+        self.assertTrue(payload["execute_requested"]["exit"])
+
+    def test_paper_order_replace_wrapper_passes_execute_and_decision_options(self):
+        calls = []
+
+        def fake_run_child(command):
+            calls.append(command)
+            payload = {
+                "status": "success",
+                "date": "2026-05-26",
+                "output": "report/2026-05-26/paper-replace-plan.json",
+                "dry_run": False,
+                "summary": {"replace_candidates": 1, "replaced": 1},
+            }
+            return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
+
+        args = Namespace(
+            date="2026-05-26",
+            repo_root=str(ROOT),
+            state="runtime/paper/2026-05-26/paper-execution-state.json",
+            decisions="report/2026-05-26/paper-replace-decisions.json",
+            output="report/2026-05-26/paper-replace-plan.json",
+            replace_journal="runtime/paper/2026-05-26/paper-replace-orders.jsonl",
+            execute=True,
+            longbridge_cli="/usr/local/bin/longbridge",
+            paper_execution_config="config/paper_execution.local.json",
+        )
+
+        with patch.object(trading_copilot, "run_child", side_effect=fake_run_child), patch.object(
+            trading_copilot, "emit", side_effect=SystemExit
+        ) as emit:
+            with self.assertRaises(SystemExit):
+                trading_copilot.run_paper_order_replace(args)
+
+        command = calls[0]
+        self.assertEqual(command[0], "script/paper_order_replace.py")
+        self.assertIn("--state", command)
+        self.assertIn("--decisions", command)
+        self.assertIn("--replace-journal", command)
+        self.assertIn("--execute", command)
+        self.assertIn("--paper-execution-config", command)
+        payload = emit.call_args.args[0]
+        self.assertEqual(payload["workflow"], "paper-order-replace")
+        self.assertFalse(payload["dry_run"])
+        self.assertEqual(payload["summary"]["replaced"], 1)
+
+    def test_paper_event_ledger_wrapper_passes_replace_journal(self):
+        calls = []
+
+        def fake_run_child(command):
+            calls.append(command)
+            payload = {
+                "status": "success",
+                "date": "2026-05-26",
+                "output": "report/2026-05-26/paper-event-ledger.json",
+                "events_journal": "runtime/journal/events.jsonl",
+                "summary": {"events_written_for_date": 1},
+            }
+            return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
+
+        args = Namespace(
+            date="2026-05-26",
+            repo_root=str(ROOT),
+            orders_journal=None,
+            stops_journal=None,
+            take_profit_journal=None,
+            exits_journal=None,
+            replace_journal="runtime/paper/2026-05-26/custom-replace.jsonl",
+            execution_state=None,
+            events_journal=None,
+            output=None,
+        )
+
+        with patch.object(trading_copilot, "run_child", side_effect=fake_run_child), patch.object(
+            trading_copilot, "emit", side_effect=SystemExit
+        ) as emit:
+            with self.assertRaises(SystemExit):
+                trading_copilot.run_paper_event_ledger(args)
+
+        command = calls[0]
+        self.assertIn("--replace-journal", command)
+        self.assertEqual(command[command.index("--replace-journal") + 1], "runtime/paper/2026-05-26/custom-replace.jsonl")
+        payload = emit.call_args.args[0]
+        self.assertEqual(payload["workflow"], "paper-event-ledger")
+        self.assertEqual(payload["summary"]["events_written_for_date"], 1)
+
+    def test_paper_event_ledger_wrapper_passes_cancel_plan(self):
+        calls = []
+
+        def fake_run_child(command):
+            calls.append(command)
+            payload = {
+                "status": "success",
+                "date": "2026-05-26",
+                "output": "report/2026-05-26/paper-event-ledger.json",
+                "events_journal": "runtime/journal/events.jsonl",
+                "summary": {"events_written_for_date": 1},
+            }
+            return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
+
+        args = Namespace(
+            date="2026-05-26",
+            repo_root=str(ROOT),
+            orders_journal=None,
+            stops_journal=None,
+            take_profit_journal=None,
+            exits_journal=None,
+            replace_journal=None,
+            cancel_plan="report/2026-05-26/custom-cancel-plan.json",
+            execution_state=None,
+            events_journal=None,
+            output=None,
+        )
+
+        with patch.object(trading_copilot, "run_child", side_effect=fake_run_child), patch.object(
+            trading_copilot, "emit", side_effect=SystemExit
+        ) as emit:
+            with self.assertRaises(SystemExit):
+                trading_copilot.run_paper_event_ledger(args)
+
+        command = calls[0]
+        self.assertIn("--cancel-plan", command)
+        self.assertEqual(command[command.index("--cancel-plan") + 1], "report/2026-05-26/custom-cancel-plan.json")
+        payload = emit.call_args.args[0]
+        self.assertEqual(payload["workflow"], "paper-event-ledger")
+        self.assertEqual(payload["summary"]["events_written_for_date"], 1)
+
+    def test_paper_take_profit_wrapper_passes_stop_resize_options(self):
+        calls = []
+
+        def fake_run_child(command):
+            calls.append(command)
+            payload = {
+                "status": "success",
+                "date": "2026-05-26",
+                "output": "report/2026-05-26/paper-take-profit-plan.json",
+                "dry_run": False,
+                "summary": {"take_profit_candidates": 1, "resized_stops": 1, "submitted": 1},
+            }
+            return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
+
+        args = Namespace(
+            date="2026-05-26",
+            repo_root=str(ROOT),
+            state="runtime/paper/2026-05-26/paper-execution-state.json",
+            output="report/2026-05-26/paper-take-profit-plan.json",
+            take_profit_journal="runtime/paper/2026-05-26/paper-take-profit-orders.jsonl",
+            stops_journal="runtime/paper/2026-05-26/paper-stop-orders.jsonl",
+            exit_fraction=0.5,
+            tif="gtc",
+            resize_stop_before_submit=True,
+            longbridge_cli="/usr/local/bin/longbridge",
+            paper_execution_config="config/paper_execution.local.json",
+            execute=True,
+        )
+
+        with patch.object(trading_copilot, "run_child", side_effect=fake_run_child), patch.object(
+            trading_copilot, "emit", side_effect=SystemExit
+        ) as emit:
+            with self.assertRaises(SystemExit):
+                trading_copilot.run_paper_take_profit_plan(args)
+
+        command = calls[0]
+        self.assertEqual(command[0], "script/paper_take_profit_plan.py")
+        self.assertIn("--stops-journal", command)
+        self.assertEqual(
+            command[command.index("--stops-journal") + 1],
+            "runtime/paper/2026-05-26/paper-stop-orders.jsonl",
+        )
+        self.assertIn("--take-profit-journal", command)
+        self.assertIn("--resize-stop-before-submit", command)
+        self.assertIn("--execute", command)
+        self.assertIn("--paper-execution-config", command)
+        payload = emit.call_args.args[0]
+        self.assertEqual(payload["workflow"], "paper-take-profit-plan")
+        self.assertEqual(payload["summary"]["resized_stops"], 1)
+
+    def test_paper_break_even_wrapper_passes_execute_and_order_options(self):
+        calls = []
+
+        def fake_run_child(command):
+            calls.append(command)
+            payload = {
+                "status": "success",
+                "date": "2026-05-26",
+                "output": "report/2026-05-26/paper-break-even-stop-plan.json",
+                "dry_run": False,
+                "summary": {"move_candidates": 1, "moved": 1},
+            }
+            return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
+
+        args = Namespace(
+            date="2026-05-26",
+            repo_root=str(ROOT),
+            state="runtime/paper/2026-05-26/paper-execution-state.json",
+            stops_journal="runtime/paper/2026-05-26/paper-stop-orders.jsonl",
+            output="report/2026-05-26/paper-break-even-stop-plan.json",
+            buffer_pct=0.1,
+            order_type="LIT",
+            limit_price=100.0,
+            trigger_price=None,
+            trailing_amount=None,
+            trailing_percent=None,
+            limit_offset=None,
+            tif="gtd",
+            expire_date="2026-05-27",
+            outside_rth="false",
+            execute=True,
+            longbridge_cli="/usr/local/bin/longbridge",
+            paper_execution_config="config/paper_execution.local.json",
+        )
+
+        with patch.object(trading_copilot, "run_child", side_effect=fake_run_child), patch.object(
+            trading_copilot, "emit", side_effect=SystemExit
+        ) as emit:
+            with self.assertRaises(SystemExit):
+                trading_copilot.run_paper_break_even_stop_plan(args)
+
+        command = calls[0]
+        self.assertEqual(command[0], "script/paper_break_even_stop_plan.py")
+        self.assertEqual(command[command.index("--order-type") + 1], "LIT")
+        self.assertEqual(command[command.index("--limit-price") + 1], "100.0")
+        self.assertEqual(command[command.index("--tif") + 1], "gtd")
+        self.assertEqual(command[command.index("--expire-date") + 1], "2026-05-27")
+        self.assertIn("--execute", command)
+        self.assertIn("--paper-execution-config", command)
+        payload = emit.call_args.args[0]
+        self.assertEqual(payload["workflow"], "paper-break-even-stop-plan")
+        self.assertEqual(payload["summary"]["moved"], 1)
+
+    def test_paper_exit_plan_wrapper_passes_execute_and_order_options(self):
+        calls = []
+
+        def fake_run_child(command):
+            calls.append(command)
+            payload = {
+                "status": "success",
+                "date": "2026-05-26",
+                "output": "report/2026-05-26/paper-exit-plan.json",
+                "dry_run": False,
+                "summary": {"exit_candidates": 1, "submitted": 1},
+            }
+            return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
+
+        args = Namespace(
+            date="2026-05-26",
+            repo_root=str(ROOT),
+            state="runtime/paper/2026-05-26/paper-execution-state.json",
+            intraday_state="runtime/intraday/2026-05-26/state.json",
+            decisions="report/2026-05-26/paper-exit-decisions.json",
+            output="report/2026-05-26/paper-exit-plan.json",
+            exits_journal="runtime/paper/2026-05-26/paper-exit-orders.jsonl",
+            order_type="MIT",
+            limit_price=None,
+            trigger_price=95,
+            trailing_amount=None,
+            trailing_percent=None,
+            limit_offset=None,
+            tif="gtc",
+            expire_date=None,
+            outside_rth=None,
+            execute=True,
+            longbridge_cli="/usr/local/bin/longbridge",
+            paper_execution_config="config/paper_execution.local.json",
+        )
+
+        with patch.object(trading_copilot, "run_child", side_effect=fake_run_child), patch.object(
+            trading_copilot, "emit", side_effect=SystemExit
+        ) as emit:
+            with self.assertRaises(SystemExit):
+                trading_copilot.run_paper_exit_plan(args)
+
+        command = calls[0]
+        self.assertEqual(command[0], "script/paper_exit_plan.py")
+        self.assertIn("--intraday-state", command)
+        self.assertIn("--decisions", command)
+        self.assertIn("--exits-journal", command)
+        self.assertIn("--order-type", command)
+        self.assertEqual(command[command.index("--order-type") + 1], "MIT")
+        self.assertIn("--trigger-price", command)
+        self.assertIn("--execute", command)
+        self.assertIn("--paper-execution-config", command)
+        payload = emit.call_args.args[0]
+        self.assertEqual(payload["workflow"], "paper-exit-plan")
+        self.assertEqual(payload["summary"]["submitted"], 1)
+
+    def test_paper_lifecycle_wrapper_smoke_with_fixture_account(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            date = "2026-05-26"
+            paper_dir = root / "runtime" / "paper" / date
+            report_dir = root / "report" / date
+            setup_dir = root / "knowledge" / "refined" / "setups"
+            paper_dir.mkdir(parents=True)
+            report_dir.mkdir(parents=True)
+            setup_dir.mkdir(parents=True)
+            (setup_dir / "breakout_pullback_continuation.md").write_text(
+                "# Breakout Pullback Continuation\n", encoding="utf-8"
+            )
+            intent_id = f"{date}:pre-market:MU:abc123"
+            order = {
+                "kind": "paper_order",
+                "intent_id": intent_id,
+                "source_signal_id": "sig-1",
+                "date": date,
+                "session": "pre-market",
+                "symbol": "MU",
+                "longbridge_symbol": "MU.US",
+                "side": "buy",
+                "order_type": "LO",
+                "quantity": 200,
+                "limit_price": 100,
+                "trigger_price": 100,
+                "initial_stop": 95,
+                "take_profit": 112,
+                "setup": "Breakout Pullback Continuation",
+                "setup_files": ["breakout_pullback_continuation.md"],
+                "remark": f"tca:{intent_id}",
+                "broker_order_id": "paper-o-1",
+                "submit_status": "submitted",
+                "submitted_at": "2026-05-26T13:30:00+00:00",
+            }
+            (paper_dir / "paper-orders.jsonl").write_text(json.dumps(order, ensure_ascii=False) + "\n", encoding="utf-8")
+            preview = {
+                "date": date,
+                "session": "pre-market",
+                "dry_run": True,
+                "orders": [
+                    {
+                        "signal_id": "sig-1",
+                        "symbol": "MU",
+                        "longbridge_symbol": "MU.US",
+                        "setup": "Breakout Pullback Continuation",
+                        "side": "buy",
+                        "order_type": "LO",
+                        "quantity": 200,
+                        "entry_price": 100,
+                        "limit_price": 100,
+                        "stop_price": 95,
+                        "take_profit": 112,
+                        "status": "ready",
+                    }
+                ],
+                "summary": {"ready": 1, "blocked": 0},
+            }
+            (report_dir / "paper-trade-preview.json").write_text(json.dumps(preview, ensure_ascii=False), encoding="utf-8")
+            fixture = {
+                "auth": {"account": {"account_channel": "lb_papertrading"}, "token": {"status": "valid"}},
+                "account": {"net_liquidation": 100000, "cash": 25000},
+                "positions": [{"symbol": "MU.US", "quantity": 200, "cost_price": 100.2, "market_value": 20400}],
+                "orders": [
+                    {
+                        "order_id": "paper-o-1",
+                        "symbol": "MU.US",
+                        "market": "US",
+                        "side": "buy",
+                        "quantity": 200,
+                        "price": 100,
+                        "status": "filled",
+                        "raw": {"remark": f"tca:{intent_id}"},
+                    }
+                ],
+                "executions": [
+                    {
+                        "order_id": "paper-o-1",
+                        "symbol": "MU.US",
+                        "market": "US",
+                        "side": "buy",
+                        "quantity": 200,
+                        "price": 100.2,
+                        "raw": {"order_id": "paper-o-1"},
+                    }
+                ],
+            }
+            fixture_path = root / "paper-fixture.json"
+            fixture_path.write_text(json.dumps(fixture, ensure_ascii=False), encoding="utf-8")
+
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "script" / "trading_copilot.py"),
+                    "paper-lifecycle",
+                    "--repo-root",
+                    str(root),
+                    "--date",
+                    date,
+                    "--paper-account-input",
+                    str(fixture_path),
+                ],
+                cwd=ROOT,
+                check=False,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(proc.returncode, 0, msg=proc.stderr or proc.stdout)
+            payload = json.loads(proc.stdout)
+            self.assertEqual(payload["workflow"], "paper-lifecycle")
+            self.assertTrue(payload["dry_run"])
+            self.assertEqual(payload["summary"]["paper_order_sync"]["filled"], 1)
+            self.assertEqual(payload["summary"]["paper_execution_review"]["filled"], 1)
+            self.assertTrue((paper_dir / "paper-account-snapshot.json").exists())
+            self.assertTrue((paper_dir / "paper-execution-state.json").exists())
+            self.assertTrue((report_dir / "paper-protective-stop-plan.json").exists())
+            self.assertTrue((report_dir / "paper-take-profit-plan.json").exists())
+            self.assertTrue((report_dir / "paper-break-even-stop-plan.json").exists())
+            self.assertTrue((report_dir / "paper-execution-review.json").exists())
+
+    def test_intraday_paper_entry_uses_dedicated_script_and_execute_gate(self):
+        calls = []
+
+        def fake_run_child(command):
+            calls.append(command)
+            payload = {
+                "status": "success",
+                "date": "2026-05-26",
+                "output": "report/2026-05-26/intraday-paper-entry.json",
+                "dry_run": False,
+                "summary": {"submitted": 1},
+            }
+            return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
+
+        args = Namespace(
+            date="2026-05-26",
+            preview=None,
+            account_snapshot=None,
+            orders_journal=None,
+            signals=None,
+            output=None,
+            longbridge_cli=None,
+            require_validation=True,
+            execute=True,
+            max_daily_risk_pct=3.0,
+            max_daily_orders=1,
+            paper_execution_config=None,
+        )
+
+        with patch.object(trading_copilot, "run_child", side_effect=fake_run_child), patch.object(
+            trading_copilot, "emit", side_effect=SystemExit
+        ) as emit:
+            with self.assertRaises(SystemExit):
+                trading_copilot.run_intraday_paper_entry(args)
+
+        self.assertEqual(calls[0][0], "script/intraday_paper_entry.py")
+        self.assertIn("--execute", calls[0])
+        payload = emit.call_args.args[0]
+        self.assertEqual(payload["workflow"], "intraday-paper-entry")
+        self.assertFalse(payload["dry_run"])
+        self.assertEqual(payload["summary"]["submitted"], 1)
+
     def test_sync_longbridge_can_require_report_validation(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -657,6 +1575,9 @@ class TradingCopilotWrapperTest(unittest.TestCase):
 
         payload = emit.call_args.args[0]
         self.assertIn("report/2026-05-26/post-market-signals.json", payload["expected_agent_outputs"])
+        self.assertIn("report/2026-05-26/intraday.md", payload["next_agent_inputs"])
+        self.assertIn("runtime/intraday/2026-05-26/state.json", payload["next_agent_inputs"])
+        self.assertIn("runtime/intraday/2026-05-26/events.jsonl", payload["next_agent_inputs"])
 
     def test_post_market_include_agent_research_injects_artifacts_at_wrapper_layer(self):
         proc = subprocess.CompletedProcess(

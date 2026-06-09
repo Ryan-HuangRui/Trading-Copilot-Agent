@@ -8,6 +8,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from paper_order_models import (
+    PRICE_REQUIRED_ORDER_TYPES,
+    TRAILING_AMOUNT_REQUIRED_ORDER_TYPES,
+    TRAILING_PERCENT_REQUIRED_ORDER_TYPES,
+    TRIGGER_PRICE_REQUIRED_ORDER_TYPES,
+    normalize_order_type,
+    normalize_tif,
+    normalized_text,
+)
 from signal_artifacts import read_json, resolve_signals_path, sidecar_source, stable_signal_id
 from validate_trade_plan import validate as validate_trade_plan
 
@@ -55,7 +64,21 @@ def build_order_preview(
 ) -> dict[str, Any]:
     symbol = str(signal.get("symbol") or "").upper()
     direction = str(signal.get("direction") or "long").lower()
-    entry_price = as_float((signal.get("entry") or {}).get("trigger_price"))
+    entry = signal.get("entry") if isinstance(signal.get("entry"), dict) else {}
+    order_type = normalize_order_type(entry.get("order_type"))
+    order_tif = normalize_tif(entry.get("tif") or tif)
+    expire_date = normalized_text(entry.get("expire_date"))
+    outside_rth = normalized_text(entry.get("outside_rth"))
+    trigger_price = as_float(entry.get("trigger_price"))
+    entry_price = as_float(entry.get("limit_price"))
+    if entry_price is None:
+        entry_price = as_float(entry.get("price"))
+    if entry_price is None and order_type in PRICE_REQUIRED_ORDER_TYPES:
+        entry_price = trigger_price
+    reference_price = entry_price if entry_price is not None else trigger_price
+    trailing_amount = as_float(entry.get("trailing_amount"))
+    trailing_percent = as_float(entry.get("trailing_percent"))
+    limit_offset = as_float(entry.get("limit_offset"))
     stop_price = as_float((signal.get("stop") or {}).get("initial_stop"))
     tp1 = as_float((signal.get("take_profit") or {}).get("tp1"))
     risk = signal.get("risk") if isinstance(signal.get("risk"), dict) else {}
@@ -63,7 +86,6 @@ def build_order_preview(
     max_account_risk_pct = as_float(risk.get("max_account_risk_pct") or risk.get("max_risk_pct"))
     net_liquidation = as_float(account.get("net_liquidation"))
     cash = as_float(account.get("cash"))
-    order_type = str((signal.get("entry") or {}).get("order_type") or "LO").upper()
     side = "buy" if direction == "long" else "sell"
 
     reasons: list[str] = []
@@ -75,8 +97,16 @@ def build_order_preview(
         reasons.append("plan_type is not trade_plan")
     if direction != "long":
         reasons.append("only long buy previews are supported in the first paper-trading adapter")
-    if entry_price is None or entry_price <= 0:
-        reasons.append("entry.trigger_price must be > 0")
+    if reference_price is None or reference_price <= 0:
+        reasons.append("entry reference price must be > 0")
+    if order_type in PRICE_REQUIRED_ORDER_TYPES and (entry_price is None or entry_price <= 0):
+        reasons.append(f"entry limit_price must be > 0 for {order_type}")
+    if order_type in TRIGGER_PRICE_REQUIRED_ORDER_TYPES and (trigger_price is None or trigger_price <= 0):
+        reasons.append(f"entry trigger_price must be > 0 for {order_type}")
+    if order_type in TRAILING_AMOUNT_REQUIRED_ORDER_TYPES and (trailing_amount is None or trailing_amount <= 0):
+        reasons.append(f"entry trailing_amount must be > 0 for {order_type}")
+    if order_type in TRAILING_PERCENT_REQUIRED_ORDER_TYPES and (trailing_percent is None or trailing_percent <= 0):
+        reasons.append(f"entry trailing_percent must be > 0 for {order_type}")
     if stop_price is None:
         reasons.append("stop.initial_stop is required")
     if risk_per_share is None or risk_per_share <= 0:
@@ -85,14 +115,18 @@ def build_order_preview(
         reasons.append("risk.max_account_risk_pct must be > 0")
     if net_liquidation is None or net_liquidation <= 0:
         reasons.append("account.net_liquidation must be > 0")
+    if order_tif == "gtd" and not expire_date:
+        reasons.append("entry.expire_date is required when tif is gtd")
+    if outside_rth and outside_rth not in {"RTH_ONLY", "ANY_TIME", "OVERNIGHT"}:
+        reasons.append("entry.outside_rth must be RTH_ONLY, ANY_TIME, or OVERNIGHT")
 
     quantity = 0
     risk_budget = 0.0
     if not reasons:
         risk_budget = float(net_liquidation) * float(max_account_risk_pct) / 100
         quantity = math.floor(risk_budget / float(risk_per_share))
-        if cash is not None and entry_price:
-            quantity = min(quantity, math.floor(float(cash) / float(entry_price)))
+        if cash is not None and reference_price:
+            quantity = min(quantity, math.floor(float(cash) / float(reference_price)))
         if quantity <= 0:
             reasons.append("computed quantity is zero")
 
@@ -106,32 +140,50 @@ def build_order_preview(
         "status": "blocked" if reasons else "ready",
         "reasons": reasons,
         "quantity": quantity,
-        "entry_price": entry_price,
+        "entry_price": entry_price if entry_price is not None else reference_price,
+        "reference_price": reference_price,
+        "trigger_price": trigger_price,
+        "trailing_amount": trailing_amount,
+        "trailing_percent": trailing_percent,
+        "limit_offset": limit_offset,
         "stop_price": stop_price,
         "take_profit": tp1,
         "risk_per_share": risk_per_share,
         "max_account_risk_pct": max_account_risk_pct,
         "estimated_account_risk": round(quantity * float(risk_per_share or 0), 4),
-        "estimated_notional": round(quantity * float(entry_price or 0), 4),
+        "estimated_notional": round(quantity * float(reference_price or 0), 4),
         "order_type": order_type,
-        "tif": tif,
+        "tif": order_tif,
+        "expire_date": expire_date,
+        "outside_rth": outside_rth,
     }
     if not reasons:
-        preview["preview_command"] = [
+        command = [
             "longbridge",
             "order",
             side,
             lb_symbol,
             str(quantity),
-            "--price",
-            format_decimal(float(entry_price)),
             "--order-type",
             order_type,
-            "--tif",
-            tif,
-            "--format",
-            "json",
         ]
+        if order_type in PRICE_REQUIRED_ORDER_TYPES:
+            command.extend(["--price", format_decimal(float(entry_price))])
+        if order_type in TRIGGER_PRICE_REQUIRED_ORDER_TYPES:
+            command.extend(["--trigger-price", format_decimal(float(trigger_price))])
+        if order_type in TRAILING_AMOUNT_REQUIRED_ORDER_TYPES:
+            command.extend(["--trailing-amount", format_decimal(float(trailing_amount))])
+        if order_type in TRAILING_PERCENT_REQUIRED_ORDER_TYPES:
+            command.extend(["--trailing-percent", format_decimal(float(trailing_percent))])
+        if order_type.startswith("TSLP") and limit_offset is not None:
+            command.extend(["--limit-offset", format_decimal(float(limit_offset))])
+        command.extend(["--tif", order_tif])
+        if order_tif == "gtd":
+            command.extend(["--expire-date", str(expire_date)])
+        if outside_rth:
+            command.extend(["--outside-rth", outside_rth])
+        command.extend(["--format", "json"])
+        preview["preview_command"] = command
     return preview
 
 

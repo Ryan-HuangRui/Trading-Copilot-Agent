@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from paper_order_models import validate_order_shape
+
 
 PAPER_ACCOUNT_CHANNEL = "lb_papertrading"
 
@@ -60,12 +62,10 @@ def evaluate_order_intent(
         errors.append("account_channel must be lb_papertrading")
     if order_intent.get("status") != "ready":
         errors.append("intent status must be ready")
+    shape_errors = validate_order_shape(order_intent)
+    errors.extend(shape_errors)
     if order_intent.get("side") != "buy":
         errors.append("only buy side is supported")
-    if order_intent.get("order_type") != "LO":
-        errors.append("only LO limit orders are supported")
-    if int(order_intent.get("quantity") or 0) <= 0:
-        errors.append("quantity must be > 0")
     if order_intent.get("intent_id") in submitted_intent_ids:
         errors.append("intent_id was already submitted")
     if len(submitted_intent_ids) >= config.max_daily_orders:

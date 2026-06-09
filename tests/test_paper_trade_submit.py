@@ -239,6 +239,47 @@ class PaperTradeSubmitTest(unittest.TestCase):
 
             adapter.assert_not_called()
 
+    def test_intraday_entry_action_can_execute_monitor_preview_when_gate_enabled(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.seed_monitor_inputs(root)
+            preview = valid_preview()
+            preview["session"] = "monitor"
+            write_json(root / "report" / "2026-05-26" / "paper-trade-preview.json", preview)
+            config = root / "config" / "paper_execution.json"
+            write_json(
+                config,
+                {
+                    "paper_execution": {
+                        "broker_writes_enabled": True,
+                        "allow_entry_submit": False,
+                        "allow_intraday_entry_submit": True,
+                    }
+                },
+            )
+
+            with patch.object(paper_trade_submit, "LongbridgePaperOrderAdapter") as adapter:
+                adapter.return_value.submit_order.return_value = {
+                    "broker_order_id": "order-1",
+                    "raw_request": {"command": ["order", "buy"]},
+                    "raw_response": {"order_id": "order-1"},
+                    "account_channel": "lb_papertrading",
+                }
+                result = paper_trade_submit.run(
+                    self.args(
+                        root,
+                        session="monitor",
+                        execute=True,
+                        broker_action="intraday_entry_submit",
+                        paper_execution_config=str(config),
+                    )
+                )
+
+            self.assertFalse(result["dry_run"])
+            self.assertEqual(result["summary"]["submitted"], 1)
+            adapter.return_value.submit_order.assert_called_once()
+            self.assertEqual(adapter.return_value.submit_order.call_args.kwargs["action"], "intraday_entry_submit")
+
     def test_wrapper_exposes_paper_trade_submit(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -272,7 +313,7 @@ class PaperTradeSubmitTest(unittest.TestCase):
             root = Path(tmp)
             self.seed_inputs(root)
             adapter = unittest.mock.Mock()
-            adapter.submit_limit_order.return_value = {
+            adapter.submit_order.return_value = {
                 "broker": "longbridge",
                 "account_channel": "lb_papertrading",
                 "broker_order_id": "order-1",
@@ -286,10 +327,10 @@ class PaperTradeSubmitTest(unittest.TestCase):
             self.assertFalse(result["dry_run"])
             self.assertEqual(result["summary"]["submitted"], 1)
             self.assertEqual(result["summary"]["ready"], 0)
-            adapter.submit_limit_order.assert_called_once()
-            called_intent = adapter.submit_limit_order.call_args.args[0]
+            adapter.submit_order.assert_called_once()
+            called_intent = adapter.submit_order.call_args.args[0]
             self.assertEqual(called_intent["remark"], f"tca:{called_intent['intent_id']}")
-            self.assertEqual(adapter.submit_limit_order.call_args.kwargs["execute"], True)
+            self.assertEqual(adapter.submit_order.call_args.kwargs["execute"], True)
             orders_path = root / "runtime" / "paper" / "2026-05-26" / "paper-orders.jsonl"
             records = [json.loads(line) for line in orders_path.read_text(encoding="utf-8").splitlines()]
             self.assertEqual(len(records), 1)
@@ -314,7 +355,7 @@ class PaperTradeSubmitTest(unittest.TestCase):
             with patch.object(paper_trade_submit, "LongbridgePaperOrderAdapter", return_value=adapter):
                 result = paper_trade_submit.run(self.args(root, execute=True))
 
-            adapter.submit_limit_order.assert_not_called()
+            adapter.submit_order.assert_not_called()
             self.assertEqual(result["summary"]["skipped_duplicates"], 1)
             self.assertEqual(result["summary"]["submitted"], 0)
 
@@ -326,7 +367,7 @@ class PaperTradeSubmitTest(unittest.TestCase):
             preview["orders"].append(second_valid_order())
             write_json(root / "report" / "2026-05-26" / "paper-trade-preview.json", preview)
             adapter = unittest.mock.Mock()
-            adapter.submit_limit_order.side_effect = [
+            adapter.submit_order.side_effect = [
                 RuntimeError("broker rejected order"),
                 {
                     "broker": "longbridge",

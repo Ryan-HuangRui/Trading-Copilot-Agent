@@ -52,12 +52,15 @@ Review the paper execution config before enabling broker writes:
     "allow_intraday_entry_submit": false,
     "allow_cancel": false,
     "allow_protective_stop": false,
-    "allow_take_profit": false
+    "allow_take_profit": false,
+    "allow_order_replace": false,
+    "allow_break_even_stop_move": false,
+    "allow_auth_status_unknown_paper_channel": false
   }
 }
 ```
 
-The tracked default is intentionally all false. To enable a paper entry rollout on a deployment host, create an ignored host-local config such as `config/paper_execution.local.json`, set `broker_writes_enabled=true` and `allow_entry_submit=true`, and pass it with `--paper-execution-config`. Keep `allow_intraday_entry_submit`, cancel, protective-stop, and take-profit gates false during the initial rollout.
+The tracked default is intentionally all false. To enable a paper entry rollout on a deployment host, create an ignored host-local config such as `config/paper_execution.local.json`, set `broker_writes_enabled=true` and `allow_entry_submit=true`, and pass it with `--paper-execution-config`. Keep `allow_intraday_entry_submit`, cancel, protective-stop, and take-profit gates false during the initial rollout. If the Longbridge CLI `auth status` response omits `account_channel`, only set `allow_auth_status_unknown_paper_channel=true` on a host separately verified to use the paper account token; explicit non-paper channels still fail.
 
 Execution artifacts include `execution_policy` and `broker_capabilities` so operators can see which paper writes are enabled, disabled, or unsupported in the generated JSON without reading the local config file.
 
@@ -136,7 +139,7 @@ python3 script/trading_copilot.py paper-order-recover \
   --append
 ```
 
-`paper-order-recover` is a local journal recovery workflow. It does not submit, cancel, or replace broker orders, and it skips duplicate `intent_id` or `broker_order_id` records.
+`paper-order-recover` is a local journal recovery workflow. It does not submit, cancel, or replace broker orders, preserves the submitted order shape for supported long-buy entry orders, and skips duplicate `intent_id` or `broker_order_id` records.
 
 ## Intraday And Post-Market Sync
 
@@ -150,6 +153,8 @@ python3 script/trading_copilot.py paper-execution-review --date "$DATE"
 python3 script/trading_copilot.py paper-learning-lessons --date "$DATE" --append
 python3 script/trading_copilot.py paper-strategy-review
 ```
+
+`paper-event-ledger` reads entry, cancel-plan, replace, protective-stop, TP1, and full-exit artifacts by default. Successful pending-order replaces appear as deterministic `order_replaced` events, and executed/failed cancels appear as `order_cancel_executed` / `order_cancel_failed` events in `runtime/journal/events.jsonl`.
 
 Optional compatibility projection into `runtime/journal/trades.jsonl`:
 
@@ -168,24 +173,27 @@ These commands are useful as dry-run plans:
 
 ```bash
 python3 script/trading_copilot.py paper-order-cancel --date "$DATE"
+python3 script/trading_copilot.py paper-order-replace --date "$DATE"
 python3 script/trading_copilot.py paper-protective-stop-plan --date "$DATE"
 python3 script/trading_copilot.py paper-take-profit-plan --date "$DATE"
 python3 script/trading_copilot.py paper-break-even-stop-plan --date "$DATE"
 ```
 
-Do not enable these execution commands in the initial rollout:
+Do not enable these exit execution commands in the initial rollout:
 
 ```bash
 python3 script/trading_copilot.py paper-order-cancel --date "$DATE" --execute
 
+python3 script/trading_copilot.py paper-order-replace --date "$DATE" --execute
+
 python3 script/trading_copilot.py paper-protective-stop-plan --date "$DATE" --execute
 
 python3 script/trading_copilot.py paper-take-profit-plan --date "$DATE" --execute
+
+python3 script/trading_copilot.py paper-break-even-stop-plan --date "$DATE" --execute
 ```
 
-Reason: current protective-stop planning submits a stop for the full filled quantity, while TP1 planning submits a partial sell order. Until OCO, stop resize, and cancel/replace behavior are explicitly implemented, automatic exit execution can create oversell or state-drift risk.
-
-`paper-break-even-stop-plan` is plan-only. It does not cancel, replace, or submit broker orders.
+Reason: current protective-stop planning submits a stop for the full filled quantity, while TP1 planning submits a partial sell order. Break-even movement is implemented as cancel old stop plus submit a new MIT stop because Longbridge `order replace` cannot modify MIT trigger prices. `paper-order-replace` is limited to pending order quantity/limit-price changes from `report/<DATE>/paper-replace-decisions.json`; it must not be used for filled orders or stop trigger movement. Keep automatic exit execution disabled until the operator has reviewed OCO, stop resize, and cancel-then-submit state-drift risk.
 
 For cc-connect deployments, `ops/cc-connect/tca-paper-sync-review.sh` runs cancel planning in dry-run mode by default. It adds `--execute` to `paper-order-cancel` only when `TCA_PAPER_CANCEL_EXECUTE=1` is set for that task, and the selected config must still enable `broker_writes_enabled=true` plus `allow_cancel=true`.
 
@@ -201,7 +209,10 @@ Use a config file as the paper broker-write policy. The tracked `config/paper_ex
     "allow_intraday_entry_submit": false,
     "allow_cancel": false,
     "allow_protective_stop": false,
-    "allow_take_profit": false
+    "allow_take_profit": false,
+    "allow_order_replace": false,
+    "allow_break_even_stop_move": false,
+    "allow_auth_status_unknown_paper_channel": false
   }
 }
 ```
@@ -209,9 +220,11 @@ Use a config file as the paper broker-write policy. The tracked `config/paper_ex
 Interpretation:
 
 - If `broker_writes_enabled=true` and `allow_entry_submit=true`, the scheduler may run `paper-trade-submit --execute` after the dry-run artifact has no blocking errors.
-- `allow_intraday_entry_submit` is reserved for a future contract. `paper-trade-submit --session monitor --execute` is hard-disabled even if a local config sets this key to true.
+- If `broker_writes_enabled=true` and `allow_intraday_entry_submit=true`, a reviewed Codex intraday task may run `intraday-paper-entry --execute` after the monitor dry-run artifact has no blocking errors.
+- `paper-trade-submit --session monitor --execute` is still hard-disabled even if a local config sets `allow_intraday_entry_submit=true`; use `intraday-paper-entry` for the dedicated Phase 3 path.
 - If `allow_protective_stop=false` and `allow_take_profit=false`, the scheduler must run protective-stop and TP1 workflows without `--execute`.
 - If `allow_cancel=false`, the scheduler must run cancel planning without `--execute`.
+- If `allow_order_replace=false`, the scheduler must run pending order replace planning without `--execute`.
 - If `TCA_PAPER_CANCEL_EXECUTE` is unset or not `1`, the provided cc-connect sync script keeps `paper-order-cancel` dry-run even when the local config enables cancellation.
 - Every broker write still needs its own `--execute`; config alone never submits orders.
 

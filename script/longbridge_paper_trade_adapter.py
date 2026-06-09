@@ -52,7 +52,7 @@ def run_json(cli: str, args: list[str]) -> Any:
         raise RuntimeError(f"Longbridge CLI did not return JSON: {output[:200]}") from exc
 
 
-def ensure_paper_account(auth_status: dict[str, Any]) -> str:
+def ensure_paper_account(auth_status: dict[str, Any], paper_execution_config: dict[str, Any] | None = None) -> str:
     account = auth_status.get("account")
     if not isinstance(account, dict):
         raise ValueError("Longbridge auth status has no account object")
@@ -60,16 +60,18 @@ def ensure_paper_account(auth_status: dict[str, Any]) -> str:
     if isinstance(token, dict) and token.get("status") != "valid":
         raise ValueError(f"Longbridge token is not valid: {token.get('status')}")
     channel = str(account.get("account_channel") or "")
+    if not channel and (paper_execution_config or {}).get("allow_auth_status_unknown_paper_channel"):
+        return PAPER_ACCOUNT_CHANNEL
     if channel != PAPER_ACCOUNT_CHANNEL:
         raise ValueError(f"Longbridge account is not paper trading: {channel or 'unknown'}")
     return channel
 
 
-def fetch_paper_snapshot(cli: str) -> dict[str, Any]:
+def fetch_paper_snapshot(cli: str, paper_execution_config: dict[str, Any] | None = None) -> dict[str, Any]:
     auth = run_json(cli, ["auth", "status", "--format", "json"])
     if not isinstance(auth, dict):
         raise RuntimeError("Longbridge auth status did not return an object")
-    ensure_paper_account(auth)
+    ensure_paper_account(auth, paper_execution_config)
     return {
         "auth": auth,
         "account": run_json(cli, ["assets", "--format", "json"]),

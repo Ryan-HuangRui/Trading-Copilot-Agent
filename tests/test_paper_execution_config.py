@@ -64,6 +64,9 @@ class PaperExecutionConfigTest(unittest.TestCase):
             "allow_cancel": False,
             "allow_protective_stop": False,
             "allow_take_profit": False,
+            "allow_break_even_stop_move": False,
+            "allow_exit_cancel_replace": False,
+            "allow_exit_submit": False,
         }
 
         matrix = broker_capability_matrix(config)
@@ -74,10 +77,18 @@ class PaperExecutionConfigTest(unittest.TestCase):
         self.assertEqual(matrix["account_channel"], "lb_papertrading")
         self.assertEqual(actions["entry_submit"]["execution_status"], "enabled")
         self.assertEqual(actions["entry_submit"]["config_key"], "allow_entry_submit")
+        self.assertIn("MO", actions["entry_submit"]["order_type"])
         self.assertEqual(actions["cancel"]["execution_status"], "config_disabled")
-        self.assertEqual(actions["protective_stop"]["order_type"], "MIT")
+        self.assertIn("MIT", actions["protective_stop"]["order_type"])
+        self.assertIn("TSLPPCT", actions["protective_stop"]["order_type"])
+        self.assertEqual(actions["break_even_stop_move"]["config_key"], "allow_break_even_stop_move")
+        self.assertIn("LIT", actions["break_even_stop_move"]["order_type"])
+        self.assertIn("TSLPPCT", actions["break_even_stop_move"]["order_type"])
+        self.assertEqual(actions["take_profit_stop_resize"]["config_key"], "allow_take_profit_stop_resize")
+        self.assertEqual(actions["exit_cancel_replace"]["config_key"], "allow_exit_cancel_replace")
+        self.assertEqual(actions["exit_submit"]["config_key"], "allow_exit_submit")
         self.assertIn("native_oco", unsupported)
-        self.assertIn("market_entry", unsupported)
+        self.assertNotIn("market_entry", unsupported)
 
     def test_policy_summarizes_allowed_and_dry_run_only_actions(self):
         config = {
@@ -91,22 +102,87 @@ class PaperExecutionConfigTest(unittest.TestCase):
         self.assertEqual(policy["allowed_broker_writes"], ["entry_submit"])
         self.assertIn("cancel", policy["dry_run_only_actions"])
         self.assertIn("protective_stop", policy["dry_run_only_actions"])
+        self.assertIn("break_even_stop_move", policy["dry_run_only_actions"])
+        self.assertIn("exit_submit", policy["dry_run_only_actions"])
 
-    def test_intraday_entry_gate_is_disabled_and_separate_from_entry_submit(self):
+    def test_exit_submit_and_cancel_replace_have_separate_gates(self):
+        config = {
+            "broker_writes_enabled": True,
+            "allow_exit_cancel_replace": False,
+            "allow_exit_submit": False,
+        }
+
+        with self.assertRaises(PermissionError):
+            ensure_paper_write_allowed(config, execute=True, action="exit_cancel_replace")
+        with self.assertRaises(PermissionError):
+            ensure_paper_write_allowed(config, execute=True, action="exit_submit")
+
+        config["allow_exit_cancel_replace"] = True
+        config["allow_exit_submit"] = True
+        ensure_paper_write_allowed(config, execute=True, action="exit_cancel_replace")
+        ensure_paper_write_allowed(config, execute=True, action="exit_submit")
+
+    def test_break_even_stop_move_has_separate_gate(self):
+        config = {
+            "broker_writes_enabled": True,
+            "allow_cancel": True,
+            "allow_protective_stop": True,
+            "allow_break_even_stop_move": False,
+        }
+
+        with self.assertRaises(PermissionError):
+            ensure_paper_write_allowed(config, execute=True, action="break_even_stop_move")
+
+        config["allow_break_even_stop_move"] = True
+        ensure_paper_write_allowed(config, execute=True, action="break_even_stop_move")
+
+    def test_take_profit_stop_resize_has_separate_gate(self):
+        config = {
+            "broker_writes_enabled": True,
+            "allow_take_profit": True,
+            "allow_take_profit_stop_resize": False,
+        }
+
+        with self.assertRaises(PermissionError):
+            ensure_paper_write_allowed(config, execute=True, action="take_profit_stop_resize")
+
+        config["allow_take_profit_stop_resize"] = True
+        ensure_paper_write_allowed(config, execute=True, action="take_profit_stop_resize")
+
+    def test_intraday_entry_gate_is_supported_but_separate_from_entry_submit(self):
         config = {
             "broker_writes_enabled": True,
             "allow_entry_submit": True,
-            "allow_intraday_entry_submit": True,
+            "allow_intraday_entry_submit": False,
         }
 
         matrix = broker_capability_matrix(config)
-        intraday = {item["action"]: item for item in matrix["unsupported_actions"]}["intraday_entry_submit"]
+        actions = {item["action"]: item for item in matrix["actions"]}
         policy = paper_execution_policy(config)
 
-        self.assertEqual(intraday["execution_status"], "hard_disabled")
-        self.assertIn("intraday_entry_submit", policy["unsupported_actions"])
+        self.assertEqual(actions["entry_submit"]["execution_status"], "enabled")
+        self.assertEqual(actions["intraday_entry_submit"]["execution_status"], "config_disabled")
+        self.assertIn("intraday_entry_submit", policy["dry_run_only_actions"])
         with self.assertRaises(PermissionError):
             ensure_paper_write_allowed(config, execute=True, action="intraday_entry_submit")
+
+        config["allow_intraday_entry_submit"] = True
+        ensure_paper_write_allowed(config, execute=True, action="intraday_entry_submit")
+
+    def test_order_replace_has_separate_gate(self):
+        config = {
+            "broker_writes_enabled": True,
+            "allow_order_replace": False,
+        }
+
+        matrix = broker_capability_matrix(config)
+        actions = {item["action"]: item for item in matrix["actions"]}
+        self.assertEqual(actions["order_replace"]["execution_status"], "config_disabled")
+        with self.assertRaises(PermissionError):
+            ensure_paper_write_allowed(config, execute=True, action="order_replace")
+
+        config["allow_order_replace"] = True
+        ensure_paper_write_allowed(config, execute=True, action="order_replace")
 
 
 if __name__ == "__main__":

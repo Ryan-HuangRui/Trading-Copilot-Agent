@@ -9,9 +9,18 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from longbridge_paper_order_adapter import parse_json_output
+from longbridge_paper_order_adapter import LongbridgePaperOrderAdapter, parse_json_output
 from longbridge_paper_trade_adapter import PAPER_ACCOUNT_CHANNEL
-from paper_order_models import build_order_intent, paper_order_record
+from paper_order_models import (
+    PRICE_REQUIRED_ORDER_TYPES,
+    TRAILING_AMOUNT_REQUIRED_ORDER_TYPES,
+    TRAILING_PERCENT_REQUIRED_ORDER_TYPES,
+    TRIGGER_PRICE_REQUIRED_ORDER_TYPES,
+    build_order_intent,
+    normalize_order_type,
+    normalize_tif,
+    paper_order_record,
+)
 from paper_order_sync import load_order_records
 from signal_artifacts import read_json
 
@@ -114,6 +123,38 @@ def detail_price(detail: dict[str, Any]) -> Any:
     return detail.get("price") or detail.get("limit_price") or detail.get("submitted_price")
 
 
+def detail_value(detail: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        value = detail.get(key)
+        if value is not None and value != "":
+            return value
+    return None
+
+
+def preview_numeric_value(preview: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        value = preview.get(key)
+        if value is not None and value != "":
+            return value
+    return None
+
+
+def optional_numeric_matches(preview: dict[str, Any], detail: dict[str, Any], preview_keys: tuple[str, ...], detail_keys: tuple[str, ...]) -> bool:
+    detail_raw = detail_value(detail, *detail_keys)
+    if detail_raw is None:
+        return True
+    preview_raw = preview_numeric_value(preview, *preview_keys)
+    return price_equals(preview_raw, detail_raw)
+
+
+def optional_text_matches(preview_value: Any, detail_value_raw: Any, *, normalize: bool = False) -> bool:
+    if detail_value_raw is None or detail_value_raw == "":
+        return True
+    if normalize:
+        return normalize_tif(preview_value) == normalize_tif(detail_value_raw)
+    return str(preview_value or "").strip() == str(detail_value_raw or "").strip()
+
+
 def preview_matches_detail(preview: dict[str, Any], detail: dict[str, Any]) -> bool:
     preview_symbol = normalize_symbol(preview.get("longbridge_symbol") or preview.get("symbol"))
     broker_symbol = detail_symbol(detail)
@@ -124,9 +165,44 @@ def preview_matches_detail(preview: dict[str, Any], detail: dict[str, Any]) -> b
         return False
     if not quantity_equals(preview.get("quantity"), detail.get("quantity")):
         return False
-    if str(preview.get("order_type") or "").upper() != str(detail.get("order_type") or "").upper():
+    order_type = normalize_order_type(preview.get("order_type"))
+    if order_type != normalize_order_type(detail.get("order_type")):
         return False
-    if str(preview.get("order_type") or "").upper() == "LO" and not price_equals(preview.get("entry_price"), detail_price(detail)):
+    if order_type in PRICE_REQUIRED_ORDER_TYPES and not price_equals(preview_numeric_value(preview, "limit_price", "entry_price"), detail_price(detail)):
+        return False
+    if order_type in TRIGGER_PRICE_REQUIRED_ORDER_TYPES and not optional_numeric_matches(
+        preview,
+        detail,
+        ("trigger_price",),
+        ("trigger_price", "trigger", "submitted_trigger_price"),
+    ):
+        return False
+    if order_type in TRAILING_AMOUNT_REQUIRED_ORDER_TYPES and not optional_numeric_matches(
+        preview,
+        detail,
+        ("trailing_amount",),
+        ("trailing_amount", "submitted_trailing_amount"),
+    ):
+        return False
+    if order_type in TRAILING_PERCENT_REQUIRED_ORDER_TYPES and not optional_numeric_matches(
+        preview,
+        detail,
+        ("trailing_percent",),
+        ("trailing_percent", "submitted_trailing_percent"),
+    ):
+        return False
+    if order_type.startswith("TSLP") and not optional_numeric_matches(
+        preview,
+        detail,
+        ("limit_offset",),
+        ("limit_offset", "submitted_limit_offset"),
+    ):
+        return False
+    if not optional_text_matches(preview.get("tif"), detail_value(detail, "tif", "time_in_force"), normalize=True):
+        return False
+    if not optional_text_matches(preview.get("expire_date"), detail_value(detail, "expire_date", "expiry_date")):
+        return False
+    if not optional_text_matches(preview.get("outside_rth"), detail_value(detail, "outside_rth", "outside_regular_trading_hours")):
         return False
     return True
 
@@ -180,28 +256,12 @@ def build_recovered_record(
     detail: dict[str, Any],
 ) -> dict[str, Any]:
     intent = build_order_intent(date=date, session=session, preview=preview_order)
-    if intent.get("side") != "buy" or intent.get("order_type") != "LO":
-        raise ValueError("paper order recovery currently supports submitted entry buy LO orders only")
+    if intent.get("side") != "buy":
+        raise ValueError("paper order recovery currently supports submitted entry buy orders only")
     broker_order_id = detail_order_id(detail)
     if not broker_order_id:
         raise ValueError("broker order detail is missing order_id")
-    command = [
-        "order",
-        "buy" if intent["side"] == "buy" else "sell",
-        str(intent["longbridge_symbol"]),
-        str(int(intent["quantity"])),
-        "--price",
-        str(int(intent["limit_price"])) if intent["limit_price"] == int(intent["limit_price"]) else str(intent["limit_price"]),
-        "--order-type",
-        str(intent["order_type"]),
-        "--tif",
-        str(intent.get("tif") or "day"),
-        "--remark",
-        str(intent.get("remark") or f"tca:{intent['intent_id']}"),
-        "--format",
-        "json",
-        "-y",
-    ]
+    command = LongbridgePaperOrderAdapter().submit_order_command(intent)
     record = paper_order_record(
         intent=intent,
         submit_status="submitted",

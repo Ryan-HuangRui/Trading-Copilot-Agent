@@ -1,0 +1,4 @@
+{
+  "symbols": ["MU", "ORCL"],
+  "notes": "Manual intraday observation list. Keep this file as an example; use config/intraday_watchlist.json locally."
+}

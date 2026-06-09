@@ -460,6 +460,9 @@ def run_post_market(args: argparse.Namespace) -> None:
             "agent/post_market_analysis_prompt.md",
             "knowledge/refined/",
             stdout.get("snapshot_path"),
+            f"report/{stdout.get('snapshot_date')}/intraday.md",
+            f"runtime/intraday/{stdout.get('snapshot_date')}/state.json",
+            f"runtime/intraday/{stdout.get('snapshot_date')}/events.jsonl",
         ]
         response["expected_agent_outputs"] = [
             f"report/{stdout.get('snapshot_date')}/post-market.md",
@@ -512,6 +515,359 @@ def run_monitor(args: argparse.Namespace) -> None:
         args.output,
         "knowledge/refined/",
     ]
+    emit(response)
+
+
+def run_intraday_tracker(args: argparse.Namespace) -> None:
+    command = [
+        "script/intraday_tracker.py",
+        "--manual-watchlist",
+        args.manual_watchlist,
+        "--monitor",
+        args.monitor,
+        "--top-n",
+        str(args.top_n),
+        "--timezone",
+        args.timezone,
+    ]
+    if args.date:
+        command.extend(["--date", args.date])
+    if args.pre_market_signals:
+        command.extend(["--pre-market-signals", args.pre_market_signals])
+    if args.state:
+        command.extend(["--state", args.state])
+    if args.events:
+        command.extend(["--events", args.events])
+    if args.markdown:
+        command.extend(["--markdown", args.markdown])
+    if args.as_of:
+        command.extend(["--as-of", args.as_of])
+
+    proc = run_child(command)
+    stdout = parse_json_output(proc.stdout)
+    if proc.returncode != 0:
+        emit(failed_response("intraday-tracker", command, proc), 1)
+
+    response = base_response("intraday-tracker", command, stdout)
+    response["date"] = (stdout or {}).get("date") or args.date
+    response["artifacts"] = (stdout or {}).get("artifacts", [])
+    response["summary"] = (stdout or {}).get("summary", {})
+    response["events"] = (stdout or {}).get("events", [])
+    response["next_agent_inputs"] = [
+        f"report/{response['date']}/intraday.md" if response.get("date") else "report/<DATE>/intraday.md",
+        "knowledge/refined/",
+    ]
+    emit(response)
+
+
+def run_intraday_dry_run(args: argparse.Namespace) -> None:
+    extract_command: list[str] | None = None
+    extract_stdout: dict[str, Any] | None = None
+    if getattr(args, "signals", None):
+        signals_path = args.signals
+    else:
+        extract_command = [
+            "script/extract_monitor_signals.py",
+            "--monitor",
+            args.monitor,
+            "--date",
+            args.date,
+            "--max-signals",
+            str(args.max_signals),
+            "--timezone",
+            args.timezone,
+        ]
+        if args.signals_output:
+            extract_command.extend(["--signals-output", args.signals_output])
+        extract_proc = run_child(extract_command)
+        extract_stdout = parse_json_output(extract_proc.stdout)
+        if extract_proc.returncode != 0:
+            emit(failed_response("intraday-dry-run", extract_command, extract_proc), 1)
+        signals_path = (extract_stdout or {}).get("signals_path")
+        if not signals_path:
+            response = failed_response("intraday-dry-run", extract_command, extract_proc)
+            response["reason"] = "extract-monitor-signals did not return signals_path"
+            emit(response, 1)
+
+    validate_command = [
+        "script/validate_trade_plan.py",
+        "--date",
+        args.date,
+        "--session",
+        "monitor",
+        "--signals",
+        signals_path,
+    ]
+    validate_proc = run_child(validate_command)
+    validate_stdout = parse_json_output(validate_proc.stdout)
+    if validate_proc.returncode != 0:
+        emit(failed_response("intraday-dry-run", validate_command, validate_proc), 1)
+
+    preview_command = [
+        "script/paper_trade_preview.py",
+        "--date",
+        args.date,
+        "--session",
+        "monitor",
+        "--signals",
+        signals_path,
+        "--default-market",
+        args.default_market,
+        "--tif",
+        args.tif,
+        "--require-validation",
+    ]
+    if args.account_snapshot:
+        preview_command.extend(["--account-snapshot", args.account_snapshot])
+    if args.preview_output:
+        preview_command.extend(["--output", args.preview_output])
+    preview_proc = run_child(preview_command)
+    preview_stdout = parse_json_output(preview_proc.stdout)
+    if preview_proc.returncode != 0:
+        emit(failed_response("intraday-dry-run", preview_command, preview_proc), 1)
+    preview_path = (preview_stdout or {}).get("output") or args.preview_output
+
+    submit_command = [
+        "script/paper_trade_submit.py",
+        "--date",
+        args.date,
+        "--session",
+        "monitor",
+        "--signals",
+        signals_path,
+        "--max-daily-risk-pct",
+        str(args.max_daily_risk_pct),
+        "--max-daily-orders",
+        str(args.max_daily_orders),
+        "--require-validation",
+    ]
+    if preview_path:
+        submit_command.extend(["--preview", preview_path])
+    if args.account_snapshot:
+        submit_command.extend(["--account-snapshot", args.account_snapshot])
+    if args.submit_output:
+        submit_command.extend(["--output", args.submit_output])
+    submit_proc = run_child(submit_command)
+    submit_stdout = parse_json_output(submit_proc.stdout)
+    if submit_proc.returncode != 0:
+        emit(failed_response("intraday-dry-run", submit_command, submit_proc), 1)
+
+    summary_command = [
+        "script/feishu_summary.py",
+        "--date",
+        args.date,
+        "--session",
+        "monitor",
+        "--signals",
+        signals_path,
+        "--learning-dir",
+        args.learning_dir,
+    ]
+    if args.summary_output:
+        summary_command.extend(["--output", args.summary_output])
+    summary_proc = run_child(summary_command)
+    summary_stdout = parse_json_output(summary_proc.stdout)
+    if summary_proc.returncode != 0:
+        emit(failed_response("intraday-dry-run", summary_command, summary_proc), 1)
+
+    artifacts = [
+        signals_path,
+        (preview_stdout or {}).get("output"),
+        (submit_stdout or {}).get("output"),
+        (summary_stdout or {}).get("output"),
+    ]
+    response = base_response("intraday-dry-run", extract_command or validate_command, extract_stdout or {"status": "success"})
+    response["date"] = args.date
+    response["artifacts"] = [artifact for artifact in artifacts if artifact]
+    response["dry_run"] = bool((submit_stdout or {}).get("dry_run", True))
+    response["signals_path"] = signals_path
+    response["validation"] = validate_stdout
+    response["signals"] = (extract_stdout or {}).get("signals", [])
+    response["preview_summary"] = (preview_stdout or {}).get("summary", {})
+    response["submit_summary"] = (submit_stdout or {}).get("summary", {})
+    response["feishu_summary"] = (summary_stdout or {}).get("summary", {})
+    response["commands"] = {
+        "extract": extract_command,
+        "validate": validate_command,
+        "preview": preview_command,
+        "submit": submit_command,
+        "feishu": summary_command,
+    }
+    emit(response)
+
+
+def run_intraday_review_append(args: argparse.Namespace) -> None:
+    command = [
+        "script/intraday_review_append.py",
+        "--date",
+        args.date,
+        "--timezone",
+        args.timezone,
+        "--max-notes-chars",
+        str(args.max_notes_chars),
+    ]
+    if args.signals:
+        command.extend(["--signals", args.signals])
+    if args.submission:
+        command.extend(["--submission", args.submission])
+    if args.context:
+        command.extend(["--context", args.context])
+    if args.markdown:
+        command.extend(["--markdown", args.markdown])
+    if args.as_of:
+        command.extend(["--as-of", args.as_of])
+
+    proc = run_child(command)
+    stdout = parse_json_output(proc.stdout)
+    if proc.returncode != 0:
+        emit(failed_response("intraday-review-append", command, proc), 1)
+    response = base_response("intraday-review-append", command, stdout)
+    response["date"] = (stdout or {}).get("date") or args.date
+    response["artifacts"] = [(stdout or {}).get("markdown")] if (stdout or {}).get("markdown") else []
+    response["signals"] = (stdout or {}).get("signals")
+    response["summary"] = (stdout or {}).get("summary", {})
+    response["skipped"] = (stdout or {}).get("status") == "skipped"
+    response["reason"] = (stdout or {}).get("reason")
+    emit(response)
+
+
+def run_intraday_lifecycle_append(args: argparse.Namespace) -> None:
+    command = [
+        "script/intraday_lifecycle_append.py",
+        "--date",
+        args.date,
+        "--timezone",
+        args.timezone,
+    ]
+    if args.markdown:
+        command.extend(["--markdown", args.markdown])
+    if args.output:
+        command.extend(["--output", args.output])
+    if args.as_of:
+        command.extend(["--as-of", args.as_of])
+
+    proc = run_child(command)
+    stdout = parse_json_output(proc.stdout)
+    if proc.returncode != 0:
+        emit(failed_response("intraday-lifecycle-append", command, proc), 1)
+    response = base_response("intraday-lifecycle-append", command, stdout)
+    response["date"] = (stdout or {}).get("date") or args.date
+    response["artifacts"] = [
+        artifact
+        for artifact in [
+            (stdout or {}).get("markdown"),
+            (stdout or {}).get("output"),
+        ]
+        if artifact
+    ]
+    response["summary"] = (stdout or {}).get("summary", {})
+    response["should_notify"] = bool((stdout or {}).get("should_notify"))
+    response["skipped"] = (stdout or {}).get("status") == "skipped"
+    response["reason"] = (stdout or {}).get("reason")
+    emit(response)
+
+
+def run_intraday_opportunity_context(args: argparse.Namespace) -> None:
+    command = [
+        "script/intraday_opportunity_context.py",
+        "--date",
+        args.date,
+        "--monitor",
+        args.monitor,
+        "--max-candidates",
+        str(args.max_candidates),
+        "--max-observations",
+        str(args.max_observations),
+        "--markdown-chars",
+        str(args.markdown_chars),
+    ]
+    if args.pre_market_signals:
+        command.extend(["--pre-market-signals", args.pre_market_signals])
+    if args.intraday_state:
+        command.extend(["--intraday-state", args.intraday_state])
+    if args.intraday_markdown:
+        command.extend(["--intraday-markdown", args.intraday_markdown])
+    if args.paper_state:
+        command.extend(["--paper-state", args.paper_state])
+    if args.output:
+        command.extend(["--output", args.output])
+    if args.signals_output:
+        command.extend(["--signals-output", args.signals_output])
+
+    proc = run_child(command)
+    stdout = parse_json_output(proc.stdout)
+    if proc.returncode != 0:
+        emit(failed_response("intraday-opportunity-context", command, proc), 1)
+    response = base_response("intraday-opportunity-context", command, stdout)
+    response["date"] = (stdout or {}).get("date") or args.date
+    response["artifacts"] = [artifact for artifact in [(stdout or {}).get("output")] if artifact]
+    response["signals_output"] = (stdout or {}).get("signals_output")
+    response["summary"] = (stdout or {}).get("summary", {})
+    emit(response)
+
+
+def run_intraday_decision_coverage(args: argparse.Namespace) -> None:
+    command = [
+        "script/validate_intraday_decision_coverage.py",
+        "--date",
+        args.date,
+    ]
+    if args.context:
+        command.extend(["--context", args.context])
+    if args.signals:
+        command.extend(["--signals", args.signals])
+
+    proc = run_child(command)
+    stdout = parse_json_output(proc.stdout)
+    if proc.returncode != 0:
+        emit(failed_response("intraday-decision-coverage", command, proc), 1)
+    response = base_response("intraday-decision-coverage", command, stdout)
+    response["date"] = (stdout or {}).get("date") or args.date
+    response["summary"] = (stdout or {}).get("summary", {})
+    response["missing_symbols"] = (stdout or {}).get("missing_symbols", [])
+    emit(response)
+
+
+def run_intraday_paper_entry(args: argparse.Namespace) -> None:
+    command = [
+        "script/intraday_paper_entry.py",
+        "--date",
+        args.date,
+        "--max-daily-risk-pct",
+        str(args.max_daily_risk_pct),
+        "--max-daily-orders",
+        str(args.max_daily_orders),
+    ]
+    if args.preview:
+        command.extend(["--preview", args.preview])
+    if args.account_snapshot:
+        command.extend(["--account-snapshot", args.account_snapshot])
+    if args.orders_journal:
+        command.extend(["--orders-journal", args.orders_journal])
+    if args.signals:
+        command.extend(["--signals", args.signals])
+    if args.output:
+        command.extend(["--output", args.output])
+    if args.longbridge_cli:
+        command.extend(["--longbridge-cli", args.longbridge_cli])
+    if args.require_validation:
+        command.append("--require-validation")
+    if args.execute:
+        command.append("--execute")
+    if args.paper_execution_config:
+        command.extend(["--paper-execution-config", args.paper_execution_config])
+
+    proc = run_child(command)
+    stdout = parse_json_output(proc.stdout)
+    if proc.returncode != 0:
+        emit(failed_response("intraday-paper-entry", command, proc), 1)
+
+    response = base_response("intraday-paper-entry", command, stdout)
+    response["date"] = (stdout or {}).get("date") or args.date
+    response["artifacts"] = [(stdout or {}).get("output")] if (stdout or {}).get("output") else []
+    response["dry_run"] = bool((stdout or {}).get("dry_run", not args.execute))
+    response["summary"] = (stdout or {}).get("summary", {})
+    response["safety_note"] = (stdout or {}).get("safety_note")
     emit(response)
 
 
@@ -1786,6 +2142,8 @@ def run_extract_monitor_signals(args: argparse.Namespace) -> None:
         command.extend(["--date", args.date])
     if args.append:
         command.append("--append")
+    if args.signals_output:
+        command.extend(["--signals-output", args.signals_output])
 
     proc = run_child(command)
     stdout = parse_json_output(proc.stdout)
@@ -1844,6 +2202,8 @@ def run_paper_account_snapshot(args: argparse.Namespace) -> None:
         command.extend(["--output", args.output])
     if args.longbridge_cli:
         command.extend(["--longbridge-cli", args.longbridge_cli])
+    if args.paper_execution_config:
+        command.extend(["--paper-execution-config", args.paper_execution_config])
 
     proc = run_child(command)
     stdout = parse_json_output(proc.stdout)
@@ -2036,6 +2396,8 @@ def run_paper_order_sync(args: argparse.Namespace) -> None:
         command.extend(["--stops-journal", args.stops_journal])
     if args.take_profit_journal:
         command.extend(["--take-profit-journal", args.take_profit_journal])
+    if args.exits_journal:
+        command.extend(["--exits-journal", args.exits_journal])
     if args.paper_snapshot:
         command.extend(["--paper-snapshot", args.paper_snapshot])
     if args.output:
@@ -2067,6 +2429,12 @@ def run_paper_event_ledger(args: argparse.Namespace) -> None:
         command.extend(["--stops-journal", args.stops_journal])
     if args.take_profit_journal:
         command.extend(["--take-profit-journal", args.take_profit_journal])
+    if args.exits_journal:
+        command.extend(["--exits-journal", args.exits_journal])
+    if args.replace_journal:
+        command.extend(["--replace-journal", args.replace_journal])
+    if getattr(args, "cancel_plan", None):
+        command.extend(["--cancel-plan", args.cancel_plan])
     if args.execution_state:
         command.extend(["--execution-state", args.execution_state])
     if args.events_journal:
@@ -2183,6 +2551,416 @@ def run_paper_learning_lessons(args: argparse.Namespace) -> None:
     emit(response)
 
 
+def run_lifecycle_child(
+    command: list[str],
+    *,
+    workflow: str,
+    steps: dict[str, Any],
+    artifacts: list[str],
+    commands: dict[str, list[str]],
+) -> dict[str, Any]:
+    proc = run_child(command)
+    stdout = parse_json_output(proc.stdout)
+    commands[workflow] = command
+    if proc.returncode != 0:
+        raise RuntimeError(json.dumps(failed_response(workflow, command, proc), ensure_ascii=False))
+    payload = stdout or {}
+    steps[workflow] = payload
+    for key in ("output", "markdown", "events_journal"):
+        value = payload.get(key)
+        if value and value not in artifacts:
+            artifacts.append(value)
+    return payload
+
+
+def run_paper_lifecycle(args: argparse.Namespace) -> None:
+    steps: dict[str, Any] = {}
+    artifacts: list[str] = []
+    commands: dict[str, list[str]] = {}
+
+    def account_snapshot() -> dict[str, Any]:
+        command = [
+            "script/paper_account_snapshot.py",
+            "--date",
+            args.date,
+            "--repo-root",
+            args.repo_root,
+        ]
+        if args.paper_account_input:
+            command.extend(["--input", args.paper_account_input])
+        if args.longbridge_cli:
+            command.extend(["--longbridge-cli", args.longbridge_cli])
+        if args.paper_execution_config:
+            command.extend(["--paper-execution-config", args.paper_execution_config])
+        return run_lifecycle_child(command, workflow="paper_account_snapshot", steps=steps, artifacts=artifacts, commands=commands)
+
+    def order_sync() -> dict[str, Any]:
+        return run_lifecycle_child(
+            [
+                "script/paper_order_sync.py",
+                "--date",
+                args.date,
+                "--repo-root",
+                args.repo_root,
+            ],
+            workflow="paper_order_sync",
+            steps=steps,
+            artifacts=artifacts,
+            commands=commands,
+        )
+
+    def exit_plan(
+        *,
+        workflow: str,
+        script: str,
+        execute: bool,
+        extra: list[str],
+    ) -> dict[str, Any]:
+        command = [
+            script,
+            "--date",
+            args.date,
+            "--repo-root",
+            args.repo_root,
+            *extra,
+        ]
+        if args.longbridge_cli:
+            command.extend(["--longbridge-cli", args.longbridge_cli])
+        if args.paper_execution_config:
+            command.extend(["--paper-execution-config", args.paper_execution_config])
+        if execute:
+            command.append("--execute")
+        return run_lifecycle_child(command, workflow=workflow, steps=steps, artifacts=artifacts, commands=commands)
+
+    try:
+        account_snapshot()
+        first_sync = order_sync()
+        cancel = exit_plan(
+            workflow="paper_order_cancel",
+            script="script/paper_order_cancel.py",
+            execute=bool(args.execute_cancel),
+            extra=["--expire-after-minutes", str(args.expire_after_minutes)],
+        )
+        replace = exit_plan(
+            workflow="paper_order_replace",
+            script="script/paper_order_replace.py",
+            execute=bool(args.execute_order_replace),
+            extra=[
+                "--decisions",
+                f"report/{args.date}/paper-replace-decisions.json",
+            ],
+        )
+        account_snapshot()
+        second_sync = order_sync()
+        stop = exit_plan(
+            workflow="paper_protective_stop_plan",
+            script="script/paper_protective_stop_plan.py",
+            execute=bool(args.execute_protective_stop),
+            extra=[
+                "--order-type",
+                getattr(args, "stop_order_type", "MIT"),
+                "--tif",
+                args.stop_tif,
+                *(
+                    ["--limit-price", str(args.stop_limit_price)]
+                    if getattr(args, "stop_limit_price", None) is not None
+                    else []
+                ),
+                *(
+                    ["--trigger-price", str(args.stop_trigger_price)]
+                    if getattr(args, "stop_trigger_price", None) is not None
+                    else []
+                ),
+                *(
+                    ["--trailing-amount", str(args.stop_trailing_amount)]
+                    if getattr(args, "stop_trailing_amount", None) is not None
+                    else []
+                ),
+                *(
+                    ["--trailing-percent", str(args.stop_trailing_percent)]
+                    if getattr(args, "stop_trailing_percent", None) is not None
+                    else []
+                ),
+                *(
+                    ["--limit-offset", str(args.stop_limit_offset)]
+                    if getattr(args, "stop_limit_offset", None) is not None
+                    else []
+                ),
+                *(["--expire-date", args.stop_expire_date] if getattr(args, "stop_expire_date", None) else []),
+                *(["--outside-rth", args.stop_outside_rth] if getattr(args, "stop_outside_rth", None) else []),
+            ],
+        )
+        take_profit = exit_plan(
+            workflow="paper_take_profit_plan",
+            script="script/paper_take_profit_plan.py",
+            execute=bool(args.execute_take_profit),
+            extra=[
+                "--exit-fraction",
+                str(args.exit_fraction),
+                "--order-type",
+                getattr(args, "take_profit_order_type", "LO"),
+                "--tif",
+                args.take_profit_tif,
+                *(
+                    ["--limit-price", str(args.take_profit_limit_price)]
+                    if getattr(args, "take_profit_limit_price", None) is not None
+                    else []
+                ),
+                *(
+                    ["--trigger-price", str(args.take_profit_trigger_price)]
+                    if getattr(args, "take_profit_trigger_price", None) is not None
+                    else []
+                ),
+                *(
+                    ["--trailing-amount", str(args.take_profit_trailing_amount)]
+                    if getattr(args, "take_profit_trailing_amount", None) is not None
+                    else []
+                ),
+                *(
+                    ["--trailing-percent", str(args.take_profit_trailing_percent)]
+                    if getattr(args, "take_profit_trailing_percent", None) is not None
+                    else []
+                ),
+                *(
+                    ["--limit-offset", str(args.take_profit_limit_offset)]
+                    if getattr(args, "take_profit_limit_offset", None) is not None
+                    else []
+                ),
+                *(["--expire-date", args.take_profit_expire_date] if getattr(args, "take_profit_expire_date", None) else []),
+                *(["--outside-rth", args.take_profit_outside_rth] if getattr(args, "take_profit_outside_rth", None) else []),
+                *(["--resize-stop-before-submit"] if args.resize_stop_before_take_profit else []),
+            ],
+        )
+        exit_position = exit_plan(
+            workflow="paper_exit_plan",
+            script="script/paper_exit_plan.py",
+            execute=bool(args.execute_exit),
+            extra=[
+                "--order-type",
+                args.exit_order_type,
+                "--tif",
+                args.exit_tif,
+                *(
+                    ["--limit-price", str(args.exit_limit_price)]
+                    if getattr(args, "exit_limit_price", None) is not None
+                    else []
+                ),
+                *(
+                    ["--trigger-price", str(args.exit_trigger_price)]
+                    if getattr(args, "exit_trigger_price", None) is not None
+                    else []
+                ),
+                *(
+                    ["--trailing-amount", str(args.exit_trailing_amount)]
+                    if getattr(args, "exit_trailing_amount", None) is not None
+                    else []
+                ),
+                *(
+                    ["--trailing-percent", str(args.exit_trailing_percent)]
+                    if getattr(args, "exit_trailing_percent", None) is not None
+                    else []
+                ),
+                *(
+                    ["--limit-offset", str(args.exit_limit_offset)]
+                    if getattr(args, "exit_limit_offset", None) is not None
+                    else []
+                ),
+                *(["--expire-date", args.exit_expire_date] if getattr(args, "exit_expire_date", None) else []),
+                *(["--outside-rth", args.exit_outside_rth] if getattr(args, "exit_outside_rth", None) else []),
+                "--decisions",
+                f"report/{args.date}/paper-exit-decisions.json",
+            ],
+        )
+        break_even = exit_plan(
+            workflow="paper_break_even_stop_plan",
+            script="script/paper_break_even_stop_plan.py",
+            execute=bool(args.execute_break_even_stop),
+            extra=[
+                "--order-type",
+                getattr(args, "break_even_order_type", "MIT"),
+                "--tif",
+                args.break_even_tif,
+                *(
+                    ["--limit-price", str(args.break_even_limit_price)]
+                    if getattr(args, "break_even_limit_price", None) is not None
+                    else []
+                ),
+                *(
+                    ["--trigger-price", str(args.break_even_trigger_price)]
+                    if getattr(args, "break_even_trigger_price", None) is not None
+                    else []
+                ),
+                *(
+                    ["--trailing-amount", str(args.break_even_trailing_amount)]
+                    if getattr(args, "break_even_trailing_amount", None) is not None
+                    else []
+                ),
+                *(
+                    ["--trailing-percent", str(args.break_even_trailing_percent)]
+                    if getattr(args, "break_even_trailing_percent", None) is not None
+                    else []
+                ),
+                *(
+                    ["--limit-offset", str(args.break_even_limit_offset)]
+                    if getattr(args, "break_even_limit_offset", None) is not None
+                    else []
+                ),
+                *(["--expire-date", args.break_even_expire_date] if getattr(args, "break_even_expire_date", None) else []),
+                *(["--outside-rth", args.break_even_outside_rth] if getattr(args, "break_even_outside_rth", None) else []),
+            ],
+        )
+        account_snapshot()
+        final_sync = order_sync()
+        ledger = run_lifecycle_child(
+            [
+                "script/paper_event_ledger.py",
+                "--date",
+                args.date,
+                "--repo-root",
+                args.repo_root,
+            ],
+            workflow="paper_event_ledger",
+            steps=steps,
+            artifacts=artifacts,
+            commands=commands,
+        )
+        review = run_lifecycle_child(
+            [
+                "script/paper_execution_review.py",
+                "--date",
+                args.date,
+                "--repo-root",
+                args.repo_root,
+            ],
+            workflow="paper_execution_review",
+            steps=steps,
+            artifacts=artifacts,
+            commands=commands,
+        )
+        lessons = None
+        if args.append_lessons:
+            lessons_command = [
+                "script/paper_learning_lessons.py",
+                "--date",
+                args.date,
+                "--repo-root",
+                args.repo_root,
+                "--learning-dir",
+                args.learning_dir,
+                "--append",
+            ]
+            lessons = run_lifecycle_child(
+                lessons_command,
+                workflow="paper_learning_lessons",
+                steps=steps,
+                artifacts=artifacts,
+                commands=commands,
+            )
+        strategy = None
+        if args.strategy_review:
+            strategy = run_lifecycle_child(
+                [
+                    "script/paper_strategy_review.py",
+                    "--repo-root",
+                    args.repo_root,
+                ],
+                workflow="paper_strategy_review",
+                steps=steps,
+                artifacts=artifacts,
+                commands=commands,
+            )
+    except RuntimeError as exc:
+        try:
+            payload = json.loads(str(exc))
+        except json.JSONDecodeError:
+            payload = {"status": "failed", "workflow": "paper-lifecycle", "reason": str(exc)}
+        emit(payload, 1)
+
+    summary = {
+        "paper_order_sync": (final_sync or second_sync or first_sync or {}).get("summary", {}),
+        "paper_order_cancel": (cancel or {}).get("summary", {}),
+        "paper_order_replace": (replace or {}).get("summary", {}),
+        "paper_protective_stop_plan": (stop or {}).get("summary", {}),
+        "paper_take_profit_plan": (take_profit or {}).get("summary", {}),
+        "paper_exit_plan": (exit_position or {}).get("summary", {}),
+        "paper_break_even_stop_plan": (break_even or {}).get("summary", {}),
+        "paper_event_ledger": (ledger or {}).get("summary", {}),
+        "paper_execution_review": (review or {}).get("summary", {}),
+    }
+    if lessons:
+        summary["paper_learning_lessons"] = lessons.get("summary", {})
+    if strategy:
+        summary["paper_strategy_review"] = strategy.get("summary", {})
+
+    response = {
+        "status": "success",
+        "workflow": "paper-lifecycle",
+        "date": args.date,
+        "artifacts": artifacts,
+        "skipped": False,
+        "reason": None,
+        "dry_run": not any(
+            [
+                args.execute_cancel,
+                args.execute_protective_stop,
+                args.execute_take_profit,
+                args.execute_exit,
+                args.execute_break_even_stop,
+                args.execute_order_replace,
+            ]
+        ),
+        "execute_requested": {
+            "cancel": bool(args.execute_cancel),
+            "order_replace": bool(args.execute_order_replace),
+            "protective_stop": bool(args.execute_protective_stop),
+            "take_profit": bool(args.execute_take_profit),
+            "exit": bool(args.execute_exit),
+            "break_even_stop": bool(args.execute_break_even_stop),
+        },
+        "steps": steps,
+        "summary": summary,
+        "commands": commands,
+        "safety_note": "Paper lifecycle orchestration only; broker writes require per-action --execute flags and matching config gates.",
+    }
+    emit(response)
+
+
+def run_paper_order_replace(args: argparse.Namespace) -> None:
+    command = [
+        "script/paper_order_replace.py",
+        "--date",
+        args.date,
+        "--repo-root",
+        args.repo_root,
+    ]
+    if args.state:
+        command.extend(["--state", args.state])
+    if args.decisions:
+        command.extend(["--decisions", args.decisions])
+    if args.output:
+        command.extend(["--output", args.output])
+    if args.replace_journal:
+        command.extend(["--replace-journal", args.replace_journal])
+    if args.longbridge_cli:
+        command.extend(["--longbridge-cli", args.longbridge_cli])
+    if args.paper_execution_config:
+        command.extend(["--paper-execution-config", args.paper_execution_config])
+    if args.execute:
+        command.append("--execute")
+
+    proc = run_child(command)
+    stdout = parse_json_output(proc.stdout)
+    if proc.returncode != 0:
+        emit(failed_response("paper-order-replace", command, proc), 1)
+
+    response = base_response("paper-order-replace", command, stdout)
+    response["date"] = (stdout or {}).get("date") or args.date
+    response["artifacts"] = [stdout["output"]] if stdout and stdout.get("output") else []
+    response["dry_run"] = (stdout or {}).get("dry_run")
+    response["summary"] = (stdout or {}).get("summary")
+    emit(response)
+
+
 def run_paper_order_cancel(args: argparse.Namespace) -> None:
     command = [
         "script/paper_order_cancel.py",
@@ -2226,6 +3004,8 @@ def run_paper_protective_stop_plan(args: argparse.Namespace) -> None:
         args.date,
         "--repo-root",
         args.repo_root,
+        "--order-type",
+        getattr(args, "order_type", "MIT"),
         "--tif",
         args.tif,
     ]
@@ -2235,6 +3015,20 @@ def run_paper_protective_stop_plan(args: argparse.Namespace) -> None:
         command.extend(["--output", args.output])
     if args.stops_journal:
         command.extend(["--stops-journal", args.stops_journal])
+    optional_prices = [
+        ("--limit-price", getattr(args, "limit_price", None)),
+        ("--trigger-price", getattr(args, "trigger_price", None)),
+        ("--trailing-amount", getattr(args, "trailing_amount", None)),
+        ("--trailing-percent", getattr(args, "trailing_percent", None)),
+        ("--limit-offset", getattr(args, "limit_offset", None)),
+    ]
+    for flag, value in optional_prices:
+        if value is not None:
+            command.extend([flag, str(value)])
+    if getattr(args, "expire_date", None):
+        command.extend(["--expire-date", args.expire_date])
+    if getattr(args, "outside_rth", None):
+        command.extend(["--outside-rth", args.outside_rth])
     if args.longbridge_cli:
         command.extend(["--longbridge-cli", args.longbridge_cli])
     if args.paper_execution_config:
@@ -2264,6 +3058,8 @@ def run_paper_take_profit_plan(args: argparse.Namespace) -> None:
         args.repo_root,
         "--exit-fraction",
         str(args.exit_fraction),
+        "--order-type",
+        getattr(args, "order_type", "LO"),
         "--tif",
         args.tif,
     ]
@@ -2273,6 +3069,24 @@ def run_paper_take_profit_plan(args: argparse.Namespace) -> None:
         command.extend(["--output", args.output])
     if args.take_profit_journal:
         command.extend(["--take-profit-journal", args.take_profit_journal])
+    if args.stops_journal:
+        command.extend(["--stops-journal", args.stops_journal])
+    optional_prices = [
+        ("--limit-price", getattr(args, "limit_price", None)),
+        ("--trigger-price", getattr(args, "trigger_price", None)),
+        ("--trailing-amount", getattr(args, "trailing_amount", None)),
+        ("--trailing-percent", getattr(args, "trailing_percent", None)),
+        ("--limit-offset", getattr(args, "limit_offset", None)),
+    ]
+    for flag, value in optional_prices:
+        if value is not None:
+            command.extend([flag, str(value)])
+    if getattr(args, "expire_date", None):
+        command.extend(["--expire-date", args.expire_date])
+    if getattr(args, "outside_rth", None):
+        command.extend(["--outside-rth", args.outside_rth])
+    if args.resize_stop_before_submit:
+        command.append("--resize-stop-before-submit")
     if args.longbridge_cli:
         command.extend(["--longbridge-cli", args.longbridge_cli])
     if args.paper_execution_config:
@@ -2293,6 +3107,62 @@ def run_paper_take_profit_plan(args: argparse.Namespace) -> None:
     emit(response)
 
 
+def run_paper_exit_plan(args: argparse.Namespace) -> None:
+    command = [
+        "script/paper_exit_plan.py",
+        "--date",
+        args.date,
+        "--repo-root",
+        args.repo_root,
+        "--order-type",
+        args.order_type,
+        "--tif",
+        args.tif,
+    ]
+    if args.state:
+        command.extend(["--state", args.state])
+    if args.intraday_state:
+        command.extend(["--intraday-state", args.intraday_state])
+    if args.decisions:
+        command.extend(["--decisions", args.decisions])
+    if args.output:
+        command.extend(["--output", args.output])
+    if args.exits_journal:
+        command.extend(["--exits-journal", args.exits_journal])
+    optional_prices = [
+        ("--limit-price", args.limit_price),
+        ("--trigger-price", args.trigger_price),
+        ("--trailing-amount", args.trailing_amount),
+        ("--trailing-percent", args.trailing_percent),
+        ("--limit-offset", args.limit_offset),
+    ]
+    for flag, value in optional_prices:
+        if value is not None:
+            command.extend([flag, str(value)])
+    if args.expire_date:
+        command.extend(["--expire-date", args.expire_date])
+    if args.outside_rth:
+        command.extend(["--outside-rth", args.outside_rth])
+    if args.longbridge_cli:
+        command.extend(["--longbridge-cli", args.longbridge_cli])
+    if args.paper_execution_config:
+        command.extend(["--paper-execution-config", args.paper_execution_config])
+    if args.execute:
+        command.append("--execute")
+
+    proc = run_child(command)
+    stdout = parse_json_output(proc.stdout)
+    if proc.returncode != 0:
+        emit(failed_response("paper-exit-plan", command, proc), 1)
+
+    response = base_response("paper-exit-plan", command, stdout)
+    response["date"] = (stdout or {}).get("date") or args.date
+    response["artifacts"] = [stdout["output"]] if stdout and stdout.get("output") else []
+    response["dry_run"] = (stdout or {}).get("dry_run")
+    response["summary"] = (stdout or {}).get("summary")
+    emit(response)
+
+
 def run_paper_break_even_stop_plan(args: argparse.Namespace) -> None:
     command = [
         "script/paper_break_even_stop_plan.py",
@@ -2302,6 +3172,8 @@ def run_paper_break_even_stop_plan(args: argparse.Namespace) -> None:
         args.repo_root,
         "--buffer-pct",
         str(args.buffer_pct),
+        "--order-type",
+        args.order_type,
         "--tif",
         args.tif,
     ]
@@ -2311,6 +3183,26 @@ def run_paper_break_even_stop_plan(args: argparse.Namespace) -> None:
         command.extend(["--stops-journal", args.stops_journal])
     if args.output:
         command.extend(["--output", args.output])
+    optional_prices = [
+        ("--limit-price", args.limit_price),
+        ("--trigger-price", args.trigger_price),
+        ("--trailing-amount", args.trailing_amount),
+        ("--trailing-percent", args.trailing_percent),
+        ("--limit-offset", args.limit_offset),
+    ]
+    for flag, value in optional_prices:
+        if value is not None:
+            command.extend([flag, str(value)])
+    if args.expire_date:
+        command.extend(["--expire-date", args.expire_date])
+    if args.outside_rth:
+        command.extend(["--outside-rth", args.outside_rth])
+    if args.longbridge_cli:
+        command.extend(["--longbridge-cli", args.longbridge_cli])
+    if args.paper_execution_config:
+        command.extend(["--paper-execution-config", args.paper_execution_config])
+    if args.execute:
+        command.append("--execute")
 
     proc = run_child(command)
     stdout = parse_json_output(proc.stdout)
@@ -2559,6 +3451,91 @@ def build_parser() -> argparse.ArgumentParser:
     monitor.add_argument("--longbridge-default-market", default="US")
     monitor.set_defaults(func=run_monitor)
 
+    intraday_tracker = sub.add_parser("intraday-tracker", help="Track pre-market plans against intraday monitor state")
+    intraday_tracker.add_argument("--date")
+    intraday_tracker.add_argument("--pre-market-signals")
+    intraday_tracker.add_argument("--manual-watchlist", default="config/intraday_watchlist.json")
+    intraday_tracker.add_argument("--monitor", default="report/latest-monitor.json")
+    intraday_tracker.add_argument("--top-n", type=int, default=5)
+    intraday_tracker.add_argument("--state")
+    intraday_tracker.add_argument("--events")
+    intraday_tracker.add_argument("--markdown")
+    intraday_tracker.add_argument("--timezone", default="America/New_York")
+    intraday_tracker.add_argument("--as-of")
+    intraday_tracker.set_defaults(func=run_intraday_tracker)
+
+    intraday_dry_run = sub.add_parser("intraday-dry-run", help="Run monitor candidates through dry-run paper checks")
+    intraday_dry_run.add_argument("--date", required=True)
+    intraday_dry_run.add_argument("--signals")
+    intraday_dry_run.add_argument("--monitor", default="report/latest-monitor.json")
+    intraday_dry_run.add_argument("--max-signals", type=int, default=5)
+    intraday_dry_run.add_argument("--timezone", default="America/New_York")
+    intraday_dry_run.add_argument("--signals-output")
+    intraday_dry_run.add_argument("--account-snapshot")
+    intraday_dry_run.add_argument("--preview-output")
+    intraday_dry_run.add_argument("--submit-output")
+    intraday_dry_run.add_argument("--summary-output")
+    intraday_dry_run.add_argument("--default-market", default="US")
+    intraday_dry_run.add_argument("--tif", default="day")
+    intraday_dry_run.add_argument("--max-daily-risk-pct", type=float, default=3.0)
+    intraday_dry_run.add_argument("--max-daily-orders", type=int, default=3)
+    intraday_dry_run.add_argument("--learning-dir", default="runtime/learning")
+    intraday_dry_run.set_defaults(func=run_intraday_dry_run)
+
+    intraday_review = sub.add_parser("intraday-review-append", help="Append Codex intraday opportunity review into intraday.md")
+    intraday_review.add_argument("--date", required=True)
+    intraday_review.add_argument("--signals")
+    intraday_review.add_argument("--submission")
+    intraday_review.add_argument("--context")
+    intraday_review.add_argument("--markdown")
+    intraday_review.add_argument("--timezone", default="America/New_York")
+    intraday_review.add_argument("--as-of")
+    intraday_review.add_argument("--max-notes-chars", type=int, default=160)
+    intraday_review.set_defaults(func=run_intraday_review_append)
+
+    intraday_lifecycle = sub.add_parser("intraday-lifecycle-append", help="Append paper lifecycle status into intraday.md")
+    intraday_lifecycle.add_argument("--date", required=True)
+    intraday_lifecycle.add_argument("--markdown")
+    intraday_lifecycle.add_argument("--output")
+    intraday_lifecycle.add_argument("--timezone", default="America/New_York")
+    intraday_lifecycle.add_argument("--as-of")
+    intraday_lifecycle.set_defaults(func=run_intraday_lifecycle_append)
+
+    intraday_context = sub.add_parser("intraday-opportunity-context", help="Build Codex review context for intraday opportunities")
+    intraday_context.add_argument("--date", required=True)
+    intraday_context.add_argument("--monitor", default="report/latest-monitor.json")
+    intraday_context.add_argument("--pre-market-signals")
+    intraday_context.add_argument("--intraday-state")
+    intraday_context.add_argument("--intraday-markdown")
+    intraday_context.add_argument("--paper-state")
+    intraday_context.add_argument("--output")
+    intraday_context.add_argument("--signals-output")
+    intraday_context.add_argument("--max-candidates", type=int, default=3)
+    intraday_context.add_argument("--max-observations", type=int, default=30)
+    intraday_context.add_argument("--markdown-chars", type=int, default=6000)
+    intraday_context.set_defaults(func=run_intraday_opportunity_context)
+
+    intraday_coverage = sub.add_parser("intraday-decision-coverage", help="Validate monitor sidecar covers the intraday observation universe")
+    intraday_coverage.add_argument("--date", required=True)
+    intraday_coverage.add_argument("--context")
+    intraday_coverage.add_argument("--signals")
+    intraday_coverage.set_defaults(func=run_intraday_decision_coverage)
+
+    intraday_entry = sub.add_parser("intraday-paper-entry", help="Run standalone gated intraday paper entry")
+    intraday_entry.add_argument("--date", required=True)
+    intraday_entry.add_argument("--preview")
+    intraday_entry.add_argument("--account-snapshot")
+    intraday_entry.add_argument("--orders-journal")
+    intraday_entry.add_argument("--signals")
+    intraday_entry.add_argument("--output")
+    intraday_entry.add_argument("--longbridge-cli")
+    intraday_entry.add_argument("--require-validation", action="store_true")
+    intraday_entry.add_argument("--execute", action="store_true")
+    intraday_entry.add_argument("--max-daily-risk-pct", type=float, default=3.0)
+    intraday_entry.add_argument("--max-daily-orders", type=int, default=1)
+    intraday_entry.add_argument("--paper-execution-config")
+    intraday_entry.set_defaults(func=run_intraday_paper_entry)
+
     agent_context = sub.add_parser("agent-research-context", help="Write a Phase 0 agent research context skeleton")
     agent_context.add_argument("--date", required=True)
     agent_context.add_argument("--session", choices=["pre-market", "post-market", "monitor", "research"], default="research")
@@ -2772,6 +3749,7 @@ def build_parser() -> argparse.ArgumentParser:
     paper_account.add_argument("--input")
     paper_account.add_argument("--output")
     paper_account.add_argument("--longbridge-cli")
+    paper_account.add_argument("--paper-execution-config")
     paper_account.add_argument("--repo-root", default=str(ROOT))
     paper_account.set_defaults(func=run_paper_account_snapshot)
 
@@ -2837,6 +3815,7 @@ def build_parser() -> argparse.ArgumentParser:
     paper_sync.add_argument("--orders-journal")
     paper_sync.add_argument("--stops-journal")
     paper_sync.add_argument("--take-profit-journal")
+    paper_sync.add_argument("--exits-journal")
     paper_sync.add_argument("--paper-snapshot")
     paper_sync.add_argument("--output")
     paper_sync.add_argument("--repo-root", default=str(ROOT))
@@ -2847,6 +3826,9 @@ def build_parser() -> argparse.ArgumentParser:
     paper_events.add_argument("--orders-journal")
     paper_events.add_argument("--stops-journal")
     paper_events.add_argument("--take-profit-journal")
+    paper_events.add_argument("--exits-journal")
+    paper_events.add_argument("--replace-journal")
+    paper_events.add_argument("--cancel-plan")
     paper_events.add_argument("--execution-state")
     paper_events.add_argument("--events-journal")
     paper_events.add_argument("--output")
@@ -2878,6 +3860,74 @@ def build_parser() -> argparse.ArgumentParser:
     paper_lessons.add_argument("--repo-root", default=str(ROOT))
     paper_lessons.set_defaults(func=run_paper_learning_lessons)
 
+    paper_lifecycle = sub.add_parser("paper-lifecycle", help="Run paper order lifecycle sync, exit planning, ledger, and review")
+    paper_lifecycle.add_argument("--date", required=True)
+    paper_lifecycle.add_argument("--paper-account-input")
+    paper_lifecycle.add_argument("--paper-execution-config")
+    paper_lifecycle.add_argument("--longbridge-cli")
+    paper_lifecycle.add_argument("--execute-cancel", action="store_true")
+    paper_lifecycle.add_argument("--execute-protective-stop", action="store_true")
+    paper_lifecycle.add_argument("--execute-take-profit", action="store_true")
+    paper_lifecycle.add_argument("--execute-exit", action="store_true")
+    paper_lifecycle.add_argument("--execute-break-even-stop", action="store_true")
+    paper_lifecycle.add_argument("--execute-order-replace", action="store_true")
+    paper_lifecycle.add_argument("--resize-stop-before-take-profit", action="store_true")
+    paper_lifecycle.add_argument("--expire-after-minutes", type=int, default=90)
+    paper_lifecycle.add_argument("--stop-tif", default="gtc")
+    paper_lifecycle.add_argument("--stop-order-type", default="MIT")
+    paper_lifecycle.add_argument("--stop-limit-price", type=float)
+    paper_lifecycle.add_argument("--stop-trigger-price", type=float)
+    paper_lifecycle.add_argument("--stop-trailing-amount", type=float)
+    paper_lifecycle.add_argument("--stop-trailing-percent", type=float)
+    paper_lifecycle.add_argument("--stop-limit-offset", type=float)
+    paper_lifecycle.add_argument("--stop-expire-date")
+    paper_lifecycle.add_argument("--stop-outside-rth")
+    paper_lifecycle.add_argument("--take-profit-tif", default="gtc")
+    paper_lifecycle.add_argument("--take-profit-order-type", default="LO")
+    paper_lifecycle.add_argument("--take-profit-limit-price", type=float)
+    paper_lifecycle.add_argument("--take-profit-trigger-price", type=float)
+    paper_lifecycle.add_argument("--take-profit-trailing-amount", type=float)
+    paper_lifecycle.add_argument("--take-profit-trailing-percent", type=float)
+    paper_lifecycle.add_argument("--take-profit-limit-offset", type=float)
+    paper_lifecycle.add_argument("--take-profit-expire-date")
+    paper_lifecycle.add_argument("--take-profit-outside-rth")
+    paper_lifecycle.add_argument("--exit-order-type", default="MO")
+    paper_lifecycle.add_argument("--exit-tif", default="day")
+    paper_lifecycle.add_argument("--exit-limit-price", type=float)
+    paper_lifecycle.add_argument("--exit-trigger-price", type=float)
+    paper_lifecycle.add_argument("--exit-trailing-amount", type=float)
+    paper_lifecycle.add_argument("--exit-trailing-percent", type=float)
+    paper_lifecycle.add_argument("--exit-limit-offset", type=float)
+    paper_lifecycle.add_argument("--exit-expire-date")
+    paper_lifecycle.add_argument("--exit-outside-rth")
+    paper_lifecycle.add_argument("--break-even-tif", default="gtc")
+    paper_lifecycle.add_argument("--break-even-order-type", default="MIT")
+    paper_lifecycle.add_argument("--break-even-limit-price", type=float)
+    paper_lifecycle.add_argument("--break-even-trigger-price", type=float)
+    paper_lifecycle.add_argument("--break-even-trailing-amount", type=float)
+    paper_lifecycle.add_argument("--break-even-trailing-percent", type=float)
+    paper_lifecycle.add_argument("--break-even-limit-offset", type=float)
+    paper_lifecycle.add_argument("--break-even-expire-date")
+    paper_lifecycle.add_argument("--break-even-outside-rth")
+    paper_lifecycle.add_argument("--exit-fraction", type=float, default=0.5)
+    paper_lifecycle.add_argument("--append-lessons", action="store_true")
+    paper_lifecycle.add_argument("--strategy-review", action="store_true")
+    paper_lifecycle.add_argument("--learning-dir", default="runtime/learning")
+    paper_lifecycle.add_argument("--repo-root", default=str(ROOT))
+    paper_lifecycle.set_defaults(func=run_paper_lifecycle)
+
+    paper_replace = sub.add_parser("paper-order-replace", help="Build or execute guarded replace plans for pending paper orders")
+    paper_replace.add_argument("--date", required=True)
+    paper_replace.add_argument("--state")
+    paper_replace.add_argument("--decisions")
+    paper_replace.add_argument("--output")
+    paper_replace.add_argument("--replace-journal")
+    paper_replace.add_argument("--longbridge-cli")
+    paper_replace.add_argument("--execute", action="store_true")
+    paper_replace.add_argument("--paper-execution-config")
+    paper_replace.add_argument("--repo-root", default=str(ROOT))
+    paper_replace.set_defaults(func=run_paper_order_replace)
+
     paper_cancel = sub.add_parser("paper-order-cancel", help="Build a dry-run cancel plan for expired paper entry orders")
     paper_cancel.add_argument("--date", required=True)
     paper_cancel.add_argument("--state")
@@ -2895,7 +3945,15 @@ def build_parser() -> argparse.ArgumentParser:
     paper_stop.add_argument("--state")
     paper_stop.add_argument("--output")
     paper_stop.add_argument("--stops-journal")
+    paper_stop.add_argument("--order-type", default="MIT")
+    paper_stop.add_argument("--limit-price", type=float)
+    paper_stop.add_argument("--trigger-price", type=float)
+    paper_stop.add_argument("--trailing-amount", type=float)
+    paper_stop.add_argument("--trailing-percent", type=float)
+    paper_stop.add_argument("--limit-offset", type=float)
     paper_stop.add_argument("--tif", default="gtc")
+    paper_stop.add_argument("--expire-date")
+    paper_stop.add_argument("--outside-rth")
     paper_stop.add_argument("--longbridge-cli")
     paper_stop.add_argument("--execute", action="store_true")
     paper_stop.add_argument("--paper-execution-config")
@@ -2907,13 +3965,45 @@ def build_parser() -> argparse.ArgumentParser:
     paper_tp.add_argument("--state")
     paper_tp.add_argument("--output")
     paper_tp.add_argument("--take-profit-journal")
+    paper_tp.add_argument("--stops-journal")
     paper_tp.add_argument("--exit-fraction", type=float, default=0.5)
+    paper_tp.add_argument("--order-type", default="LO")
+    paper_tp.add_argument("--limit-price", type=float)
+    paper_tp.add_argument("--trigger-price", type=float)
+    paper_tp.add_argument("--trailing-amount", type=float)
+    paper_tp.add_argument("--trailing-percent", type=float)
+    paper_tp.add_argument("--limit-offset", type=float)
     paper_tp.add_argument("--tif", default="gtc")
+    paper_tp.add_argument("--expire-date")
+    paper_tp.add_argument("--outside-rth")
+    paper_tp.add_argument("--resize-stop-before-submit", action="store_true")
     paper_tp.add_argument("--longbridge-cli")
     paper_tp.add_argument("--execute", action="store_true")
     paper_tp.add_argument("--paper-execution-config")
     paper_tp.add_argument("--repo-root", default=str(ROOT))
     paper_tp.set_defaults(func=run_paper_take_profit_plan)
+
+    paper_exit = sub.add_parser("paper-exit-plan", help="Build or submit guarded paper exits for invalidated intraday plans")
+    paper_exit.add_argument("--date", required=True)
+    paper_exit.add_argument("--state")
+    paper_exit.add_argument("--intraday-state")
+    paper_exit.add_argument("--decisions")
+    paper_exit.add_argument("--output")
+    paper_exit.add_argument("--exits-journal")
+    paper_exit.add_argument("--order-type", default="MO")
+    paper_exit.add_argument("--limit-price", type=float)
+    paper_exit.add_argument("--trigger-price", type=float)
+    paper_exit.add_argument("--trailing-amount", type=float)
+    paper_exit.add_argument("--trailing-percent", type=float)
+    paper_exit.add_argument("--limit-offset", type=float)
+    paper_exit.add_argument("--tif", default="day")
+    paper_exit.add_argument("--expire-date")
+    paper_exit.add_argument("--outside-rth")
+    paper_exit.add_argument("--longbridge-cli")
+    paper_exit.add_argument("--execute", action="store_true")
+    paper_exit.add_argument("--paper-execution-config")
+    paper_exit.add_argument("--repo-root", default=str(ROOT))
+    paper_exit.set_defaults(func=run_paper_exit_plan)
 
     paper_be = sub.add_parser("paper-break-even-stop-plan", help="Build a dry-run break-even stop movement plan")
     paper_be.add_argument("--date", required=True)
@@ -2921,7 +4011,18 @@ def build_parser() -> argparse.ArgumentParser:
     paper_be.add_argument("--stops-journal")
     paper_be.add_argument("--output")
     paper_be.add_argument("--buffer-pct", type=float, default=0.0)
+    paper_be.add_argument("--order-type", default="MIT")
+    paper_be.add_argument("--limit-price", type=float)
+    paper_be.add_argument("--trigger-price", type=float)
+    paper_be.add_argument("--trailing-amount", type=float)
+    paper_be.add_argument("--trailing-percent", type=float)
+    paper_be.add_argument("--limit-offset", type=float)
     paper_be.add_argument("--tif", default="gtc")
+    paper_be.add_argument("--expire-date")
+    paper_be.add_argument("--outside-rth")
+    paper_be.add_argument("--longbridge-cli")
+    paper_be.add_argument("--execute", action="store_true")
+    paper_be.add_argument("--paper-execution-config")
     paper_be.add_argument("--repo-root", default=str(ROOT))
     paper_be.set_defaults(func=run_paper_break_even_stop_plan)
 

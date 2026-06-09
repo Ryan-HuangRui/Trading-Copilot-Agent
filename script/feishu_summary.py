@@ -91,6 +91,62 @@ def focus_selection(repo_root: Path, date: str) -> dict[str, Any]:
         return {}
 
 
+def read_jsonl_records(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    records: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            records.append(payload)
+    return records
+
+
+def intraday_review(repo_root: Path, date: str) -> dict[str, Any]:
+    intraday_md = repo_root / "report" / date / "intraday.md"
+    state_path = repo_root / "runtime" / "intraday" / date / "state.json"
+    events_path = repo_root / "runtime" / "intraday" / date / "events.jsonl"
+    sent_path = repo_root / "runtime" / "intraday" / date / "sent-events.json"
+
+    state = artifact_json(repo_root, str(state_path), state_path)
+    events = read_jsonl_records(events_path)
+    sent = artifact_json(repo_root, str(sent_path), sent_path)
+    sent_ids = sent.get("sent_event_ids") if isinstance(sent.get("sent_event_ids"), list) else []
+
+    symbols = state.get("symbols") if isinstance(state.get("symbols"), dict) else {}
+    state_counts: dict[str, int] = {}
+    current_states: list[str] = []
+    for symbol, payload in symbols.items():
+        if not isinstance(payload, dict):
+            continue
+        state_name = str(payload.get("state") or "unknown")
+        state_counts[state_name] = state_counts.get(state_name, 0) + 1
+        current_states.append(f"{symbol}:{state_name}")
+
+    artifacts = [
+        str(path.relative_to(repo_root))
+        for path in (intraday_md, state_path, events_path)
+        if path.exists()
+    ]
+    return {
+        "available": bool(artifacts or state or events),
+        "artifacts": artifacts,
+        "focus_symbols": state.get("focus_symbols") if isinstance(state.get("focus_symbols"), list) else [],
+        "generated_at": state.get("generated_at"),
+        "state_counts": state_counts,
+        "current_states": current_states,
+        "event_count": len(events),
+        "notify_event_count": len([event for event in events if event.get("notify")]),
+        "sent_event_count": len(sent_ids),
+        "latest_events": events[-3:],
+    }
+
+
 def session_title(session: str) -> str:
     if session == "monitor":
         return "盘中"
@@ -153,6 +209,7 @@ def build_markdown(
     lessons: list[dict[str, Any]],
     signal_source_summary: dict[str, Any] | None = None,
     focus_selection_payload: dict[str, Any] | None = None,
+    intraday_payload: dict[str, Any] | None = None,
 ) -> str:
     title_prefix = session_title(session)
     executable, watch, no_trade = split_signals(signals)
@@ -299,6 +356,36 @@ def build_markdown(
             ]
         )
 
+    if session == "post-market":
+        intraday = intraday_payload or {}
+        lines.extend(["", "【盘中监控回顾】"])
+        if not intraday.get("available"):
+            lines.append("- 今日无盘中监控产物；盘后报告只能基于日线 snapshot 和已记录 journal 复盘。")
+        else:
+            focus_symbols = intraday.get("focus_symbols") if isinstance(intraday.get("focus_symbols"), list) else []
+            state_counts = intraday.get("state_counts") if isinstance(intraday.get("state_counts"), dict) else {}
+            current_states = intraday.get("current_states") if isinstance(intraday.get("current_states"), list) else []
+            artifacts = intraday.get("artifacts") if isinstance(intraday.get("artifacts"), list) else []
+            lines.append(f"- 关注池：{', '.join(focus_symbols) if focus_symbols else '无'}")
+            lines.append(
+                "- 状态分布："
+                + (
+                    ", ".join(f"{key}={value}" for key, value in sorted(state_counts.items()))
+                    if state_counts
+                    else "无"
+                )
+            )
+            lines.append(
+                f"- 重要事件：{intraday.get('event_count', 0)}；"
+                f"notify={intraday.get('notify_event_count', 0)}；"
+                f"已发送={intraday.get('sent_event_count', 0)}"
+            )
+            if current_states:
+                lines.append(f"- 最新状态：{', '.join(current_states[:8])}")
+            if artifacts:
+                lines.append(f"- artifacts：{', '.join(artifacts)}")
+            lines.append("- 盘中监控只用于复盘和提醒，不作为交易指令。")
+
     lines.extend(
         [
             "",
@@ -357,6 +444,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         run_manifest.setdefault("repo_root", str(repo_root))
     lessons = lessons_for_date(repo_root, args.date, args.learning_dir)
     focus_payload = focus_selection(repo_root, args.date)
+    intraday_payload = intraday_review(repo_root, args.date) if args.session == "post-market" else {}
     output = output_path(repo_root, args.date, args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(
@@ -372,6 +460,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             lessons=lessons,
             signal_source_summary=signal_source_summary,
             focus_selection_payload=focus_payload,
+            intraday_payload=intraday_payload,
         ),
         encoding="utf-8",
     )
@@ -397,6 +486,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "focus_selected": len(focus_payload.get("selected", []))
             if isinstance(focus_payload.get("selected"), list)
             else 0,
+            "intraday_available": bool(intraday_payload.get("available")),
+            "intraday_events": intraday_payload.get("event_count", 0),
+            "intraday_notify_events": intraday_payload.get("notify_event_count", 0),
         },
     }
 

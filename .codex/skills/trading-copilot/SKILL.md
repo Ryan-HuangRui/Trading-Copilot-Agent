@@ -1,6 +1,6 @@
 ---
 name: trading-copilot
-description: Use this repo-local skill for Trading-Copilot-Agent market research workflows, including pre-market planning, post-market review, symbol analysis, monitor brief generation, research notes, rule validation, and paper-trading readiness review. The skill prepares or reviews trading research artifacts, and may run explicitly gated Longbridge paper-account workflows only when requested; it must not place real trades or output deterministic buy/sell instructions.
+description: Use this repo-local skill for Trading-Copilot-Agent market research workflows, including pre-market planning, post-market review, intraday tracking, monitor brief generation, symbol analysis, research notes, rule validation, and paper-trading readiness review. It must not place real trades or output deterministic buy/sell instructions.
 ---
 
 # Trading Copilot
@@ -68,7 +68,7 @@ Every workflow run should return or report the same status fields:
 ### Post-Market Review
 
 1. Run `python3 script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day --include-journal-signals --include-position-symbols`.
-2. Read `agent/post_market_analysis_prompt.md`, `knowledge/refined/`, and `report/<DATE>/daily-snapshot.json`.
+2. Read `agent/post_market_analysis_prompt.md`, `knowledge/refined/`, `report/<DATE>/daily-snapshot.json`, and optional intraday artifacts `report/<DATE>/intraday.md`, `runtime/intraday/<DATE>/state.json`, and `runtime/intraday/<DATE>/events.jsonl`.
 3. Write `report/<DATE>/post-market.md` and `report/<DATE>/post-market-signals.json`.
 4. Validate the generated report:
    `python3 script/trading_copilot.py validate-report --session post-market --date <DATE>`.
@@ -85,7 +85,7 @@ Every workflow run should return or report the same status fields:
    `python3 script/trading_copilot.py plan-review --date <DATE> --append-lessons`.
 10. Generate the daily self-review:
    `python3 script/trading_copilot.py daily-self-review --date <DATE> --append`.
-11. Build the Feishu execution summary:
+11. Build the Feishu execution summary, including a deterministic intraday-monitor recap when artifacts exist:
    `python3 script/trading_copilot.py feishu-summary --session post-market --date <DATE>`.
 12. Fully replace Longbridge `今日关注` from the post-market focus list:
    `python3 script/trading_copilot.py sync-longbridge-watchlist --session post-market --date <DATE> --group-name 今日关注 --sync-mode replace --require-validation --execute --no-create`.
@@ -109,6 +109,38 @@ Use `python3 script/trading_copilot.py learning-review --lookback-days 20` to ag
 4. If the user wants monitor observations in the journal, run:
    `python3 script/trading_copilot.py extract-monitor-signals --append`.
 
+### Intraday Tracker
+
+Use this for Phase 1 read-only pre-market plan tracking.
+
+1. Run `python3 script/trading_copilot.py intraday-tracker --date <DATE> --top-n 5`.
+2. Read `report/<DATE>/intraday.md`, `runtime/intraday/<DATE>/state.json`, and `runtime/intraday/<DATE>/events.jsonl` after the run.
+3. Treat `report/<DATE>/intraday.md` as the human-readable rolling log.
+4. Treat `runtime/intraday/<DATE>/state.json` as the machine-readable prior state.
+5. Treat `runtime/intraday/<DATE>/events.jsonl` as notification candidates only, not broker instructions.
+6. To build and deduplicate an active notification, run:
+   `python3 script/intraday_event_notify.py --date <DATE> --mark-sent`.
+7. To send through cc-connect, run:
+   `bash ops/cc-connect/tca-intraday-notify.sh <DATE>`.
+
+The tracker reads `report/<DATE>/pre-market-signals.json`, optional `config/intraday_watchlist.json`, and `report/latest-monitor.json`.
+
+### Intraday Dry-Run
+
+Use this for Phase 2 Codex-reviewed intraday decisions before any paper execution.
+
+1. For LLM-reviewed opportunities, first run `python3 script/trading_copilot.py intraday-opportunity-context --date <DATE>` and read `report/<DATE>/intraday-opportunity-context.json`.
+2. Treat `observation_scans` and `sidecar_template.signals` as the primary all-symbol decision input. `observation_scans` include `price_evidence` with 5m up to 78 bars, 15m 40 bars, daily 60 bars, key levels, and derived distances. `candidate_scans` are deterministic highlights only and must not limit Codex opportunity discovery.
+3. Codex may write `report/<DATE>/monitor-signals.json` from the context. Keep symbols `watch_only`/`no_trade` unless a complete Trade Plan Card independently satisfies `knowledge/refined/`, risk, invalidation, and RR >= 2.
+4. Run `python3 script/trading_copilot.py intraday-decision-coverage --date <DATE> --context report/<DATE>/intraday-opportunity-context.json --signals report/<DATE>/monitor-signals.json` to verify Codex wrote one decision per observation symbol.
+5. Run `python3 script/trading_copilot.py intraday-dry-run --date <DATE> --signals report/<DATE>/monitor-signals.json`.
+6. If no LLM-reviewed sidecar is available, run `python3 script/trading_copilot.py intraday-dry-run --date <DATE>` to generate watch-only monitor candidates from deterministic extraction.
+7. Run `python3 script/trading_copilot.py intraday-review-append --date <DATE> --signals report/<DATE>/monitor-signals.json --submission report/<DATE>/paper-trade-submission.json --context report/<DATE>/intraday-opportunity-context.json` to append the Codex review, input scope, and dry-run counts into `report/<DATE>/intraday.md`.
+8. Confirm `paper_trade_preview.py` and `paper_trade_submit.py` ran for `session=monitor` without `--execute`.
+9. Read the Feishu summary artifact for candidate, blocked, and skipped counts.
+
+This workflow must not submit broker orders.
+
 ### Weekly Review
 
 1. Run `python3 script/trading_copilot.py weekly-review --week <YYYY-Www> --append`.
@@ -123,24 +155,53 @@ Use `python3 script/trading_copilot.py learning-review --lookback-days 20` to ag
 
 ### Paper Trading Readiness
 
-1. Run `python3 script/trading_copilot.py paper-account-snapshot --date <DATE>` to write a read-only paper account, order, and execution snapshot.
+1. Run `python3 script/trading_copilot.py paper-account-snapshot --date <DATE> --paper-execution-config config/paper_execution.local.json` to write a read-only paper account, order, and execution snapshot on deployment hosts that use a local paper execution config.
 2. Run `python3 script/trading_copilot.py paper-trade-preview --date <DATE> --session pre-market --require-validation` to convert complete Trade Plan Cards into dry-run order previews.
 3. Run `python3 script/trading_copilot.py paper-trade-submit --date <DATE> --session pre-market --require-validation` to prepare a dry-run controlled submission artifact.
 4. Only when the user explicitly wants simulated order submission and `config/paper_execution.json` enables `paper_execution.broker_writes_enabled=true` plus `paper_execution.allow_entry_submit=true`, run `python3 script/trading_copilot.py paper-trade-submit --date <DATE> --session pre-market --require-validation --execute`.
-5. Run `python3 script/trading_copilot.py paper-order-sync --date <DATE>` after refreshing the paper account snapshot to sync submitted entry, stop, and TP1 order state.
-6. Run `python3 script/trading_copilot.py paper-event-ledger --date <DATE>` to project submitted and observed paper execution facts into `runtime/journal/events.jsonl`.
+5. Run `python3 script/trading_copilot.py paper-order-sync --date <DATE>` after refreshing the paper account snapshot to sync submitted entry, stop, TP1, and plan-invalidated exit order state.
+6. Run `python3 script/trading_copilot.py paper-event-ledger --date <DATE>` to project submitted, cancelled, replaced, and observed paper execution facts into `runtime/journal/events.jsonl`.
 7. Run `python3 script/trading_copilot.py paper-execution-review --date <DATE>` to generate paper execution quality JSON/Markdown without promoting lessons.
 8. Run `python3 script/trading_copilot.py paper-learning-lessons --date <DATE> --append` to append paper execution candidate lessons into the runtime learning queue.
 9. Run `python3 script/trading_copilot.py paper-strategy-review` to aggregate paper execution reviews by setup and symbol.
 10. Run `python3 script/trading_copilot.py paper-order-cancel --date <DATE>` to prepare a dry-run cancel plan for expired unfilled entry orders.
 11. Only when the user explicitly wants simulated cancellation and `config/paper_execution.json` enables `paper_execution.allow_cancel=true`, run `python3 script/trading_copilot.py paper-order-cancel --date <DATE> --execute`.
-12. Run `python3 script/trading_copilot.py paper-protective-stop-plan --date <DATE>` to prepare a dry-run protective stop plan for filled long entries.
-13. Only when the user explicitly wants simulated protective stop submission and `config/paper_execution.json` enables `paper_execution.allow_protective_stop=true`, run `python3 script/trading_copilot.py paper-protective-stop-plan --date <DATE> --execute`.
-14. Run `python3 script/trading_copilot.py paper-take-profit-plan --date <DATE>` to prepare a dry-run TP1 partial-exit plan for filled long entries.
-15. Only when the user explicitly wants simulated TP1 submission and `config/paper_execution.json` enables `paper_execution.allow_take_profit=true`, run `python3 script/trading_copilot.py paper-take-profit-plan --date <DATE> --execute`.
-16. Run `python3 script/trading_copilot.py paper-break-even-stop-plan --date <DATE>` to prepare a dry-run break-even stop movement plan after TP1 fill evidence exists. This workflow is plan-only and must not cancel, replace, or submit broker orders.
-17. Run `python3 script/trading_copilot.py paper-trade-review --date <DATE> --session pre-market --append` only after paper executions exist and should be recorded.
-18. Treat paper results as execution feedback. Do not promote paper P/L directly into `knowledge/refined/`.
+12. Run `python3 script/trading_copilot.py paper-order-replace --date <DATE>` to prepare a dry-run replace plan for pending paper entry orders from `report/<DATE>/paper-replace-decisions.json`. This only supports Longbridge quantity/limit-price replace for unfilled pending orders; stop trigger movement still uses cancel+submit workflows.
+13. Only when the user explicitly wants simulated pending-order replace and `config/paper_execution.json` enables `paper_execution.allow_order_replace=true`, run `python3 script/trading_copilot.py paper-order-replace --date <DATE> --execute`.
+14. Run `python3 script/trading_copilot.py paper-protective-stop-plan --date <DATE>` to prepare a dry-run protective stop plan for filled long entries. The default stop order is `sell MIT`; alternative Longbridge order types may use `--order-type` with the matching price, trigger, trailing, `gtd`, and session fields.
+15. Only when the user explicitly wants simulated protective stop submission and `config/paper_execution.json` enables `paper_execution.allow_protective_stop=true`, run `python3 script/trading_copilot.py paper-protective-stop-plan --date <DATE> --execute`.
+16. Run `python3 script/trading_copilot.py paper-take-profit-plan --date <DATE>` to prepare a dry-run TP1 partial-exit plan for filled long entries. The default TP1 order is `sell LO`; alternative Longbridge order types may use `--order-type` with the matching price, trigger, trailing, `gtd`, and session fields.
+17. Only when the user explicitly wants simulated TP1 submission and `config/paper_execution.json` enables `paper_execution.allow_take_profit=true`, run `python3 script/trading_copilot.py paper-take-profit-plan --date <DATE> --execute`.
+18. Run `python3 script/trading_copilot.py paper-exit-plan --date <DATE>` to prepare a full/remaining-position exit plan when `runtime/intraday/<DATE>/state.json` marks an open paper position as `invalidated` or when `report/<DATE>/paper-exit-decisions.json` contains a complete LLM-reviewed `action=exit_remaining` and `execution_status=conditional_executable` decision. It defaults to dry-run; only when the user explicitly wants simulated plan-invalidated exits and `config/paper_execution.json` enables both `paper_execution.allow_exit_cancel_replace=true` and `paper_execution.allow_exit_submit=true`, run `python3 script/trading_copilot.py paper-exit-plan --date <DATE> --execute`.
+19. Run `python3 script/trading_copilot.py paper-break-even-stop-plan --date <DATE>` to prepare a break-even stop movement plan after TP1 fill evidence exists. The default replacement stop is `sell MIT`; alternative Longbridge order types may use `--order-type` with matching price, trigger, trailing, `gtd`, and session fields. It defaults to dry-run; only when the user explicitly wants simulated stop movement and `config/paper_execution.json` enables `paper_execution.allow_break_even_stop_move=true`, run `python3 script/trading_copilot.py paper-break-even-stop-plan --date <DATE> --execute`.
+20. Run `python3 script/trading_copilot.py paper-trade-review --date <DATE> --session pre-market --append` only after paper executions exist and should be recorded.
+21. Treat paper results as execution feedback. Do not promote paper P/L directly into `knowledge/refined/`.
+
+For repeated lifecycle management, prefer the unified wrapper:
+
+```bash
+python3 script/trading_copilot.py paper-lifecycle --date <DATE>
+python3 script/trading_copilot.py intraday-lifecycle-append --date <DATE>
+```
+
+Use `--execute-cancel`, `--execute-order-replace`, `--execute-protective-stop`, `--execute-take-profit`, `--execute-exit`, or `--execute-break-even-stop` only with the matching paper execution config gates enabled.
+
+After lifecycle runs, append the lifecycle audit section to `report/<DATE>/intraday.md` with `intraday-lifecycle-append`. It reads existing paper lifecycle artifacts only, writes `report/<DATE>/intraday-lifecycle-summary.json`, and can be used for Feishu filtering without calling broker APIs.
+
+For lifecycle-managed plan-invalidated exits, use the `--exit-*` shape flags when the exit order is not the default market order: `--exit-order-type`, `--exit-limit-price`, `--exit-trigger-price`, `--exit-trailing-amount`, `--exit-trailing-percent`, `--exit-limit-offset`, `--exit-expire-date`, and `--exit-outside-rth`.
+
+For lifecycle-managed break-even stop movement, use the `--break-even-*` shape flags when the replacement stop is not the default `MIT`: `--break-even-order-type`, `--break-even-limit-price`, `--break-even-trigger-price`, `--break-even-trailing-amount`, `--break-even-trailing-percent`, `--break-even-limit-offset`, `--break-even-expire-date`, and `--break-even-outside-rth`.
+
+### Intraday Paper Entry
+
+Use this only for Phase 3 after reviewed monitor dry-run evidence exists.
+
+1. Dry-run first:
+   `python3 script/trading_copilot.py intraday-paper-entry --date <DATE> --require-validation`.
+2. Only when the user explicitly wants simulated intraday paper entry submission and `config/paper_execution.local.json` enables `broker_writes_enabled=true` plus `allow_intraday_entry_submit=true`, run:
+   `python3 script/trading_copilot.py intraday-paper-entry --date <DATE> --require-validation --execute --paper-execution-config config/paper_execution.local.json`.
+3. Never use `paper-trade-submit --session monitor --execute`; that path must remain hard-rejected.
+4. Treat the output `report/<DATE>/intraday-paper-entry.json` as paper execution evidence for follow-up sync/review, not as investment advice.
 
 ### Symbol Analysis
 
@@ -167,6 +228,7 @@ Use `python3 script/trading_copilot.py learning-review --lookback-days 20` to ag
 - Wrapper smoke test without market-data access: `python3 script/trading_copilot.py trading-day-check --date 2026-05-06`.
 - Review smoke test without market-data access: `python3 script/trading_copilot.py weekly-review --week 2026-W22`.
 - Fixture workflow smoke test: `python3 script/workflow_smoke_test.py --date 2026-05-26 --week 2026-W22`.
+- Full paper lifecycle fixture smoke test: `python3 script/workflow_smoke_test.py --date 2026-05-26 --week 2026-W22 --paper-input <fixture.json> --paper-lifecycle-smoke`.
 - Data-quality smoke test after a snapshot exists: `python3 script/trading_copilot.py data-quality --date 2026-05-26`.
 - Data-fetch smoke tests use Longbridge CLI by default. Twelve Data fallback tests require `.env` with `TWELVE_DATA_API_KEY`.
 

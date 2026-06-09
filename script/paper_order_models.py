@@ -6,11 +6,50 @@ from datetime import datetime, timezone
 from typing import Any
 
 
+SUPPORTED_ORDER_TYPES = {
+    "LO",
+    "ELO",
+    "MO",
+    "AO",
+    "ALO",
+    "ODD",
+    "SLO",
+    "LIT",
+    "MIT",
+    "TSLPAMT",
+    "TSLPPCT",
+}
+PRICE_REQUIRED_ORDER_TYPES = {"LO", "ELO", "ALO", "ODD", "SLO", "LIT"}
+TRIGGER_PRICE_REQUIRED_ORDER_TYPES = {"MIT", "LIT"}
+TRAILING_AMOUNT_REQUIRED_ORDER_TYPES = {"TSLPAMT"}
+TRAILING_PERCENT_REQUIRED_ORDER_TYPES = {"TSLPPCT"}
+VALID_TIFS = {"day", "gtc", "gtd"}
+VALID_SIDES = {"buy", "sell"}
+VALID_OUTSIDE_RTH = {"RTH_ONLY", "ANY_TIME", "OVERNIGHT"}
+
+
 def as_float(value: Any) -> float | None:
     try:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def normalized_text(value: Any) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
+def normalize_order_type(value: Any) -> str:
+    return str(value or "LO").strip().upper()
+
+
+def normalize_tif(value: Any) -> str:
+    return str(value or "day").strip().lower()
+
+
+def normalize_side(value: Any) -> str:
+    return str(value or "").strip().lower()
 
 
 def stable_intent_id(date: str, session: str, source_signal_id: str, symbol: str) -> str:
@@ -31,7 +70,19 @@ def build_order_intent(*, date: str, session: str, preview: dict[str, Any]) -> d
         raise ValueError("paper preview missing symbol")
 
     intent_id = str(preview.get("intent_id") or stable_intent_id(date, session, source_signal_id, symbol))
-    limit_price = as_float(preview.get("entry_price"))
+    order_type = normalize_order_type(preview.get("order_type"))
+    entry_price = as_float(preview.get("entry_price"))
+    explicit_limit_price = as_float(preview.get("limit_price"))
+    limit_price = explicit_limit_price
+    if limit_price is None and order_type in PRICE_REQUIRED_ORDER_TYPES:
+        limit_price = entry_price
+    trigger_price = as_float(preview.get("trigger_price"))
+    reference_price = as_float(preview.get("reference_price"))
+    if reference_price is None:
+        reference_price = entry_price or limit_price or trigger_price
+    trailing_amount = as_float(preview.get("trailing_amount"))
+    trailing_percent = as_float(preview.get("trailing_percent"))
+    limit_offset = as_float(preview.get("limit_offset"))
     stop_price = as_float(preview.get("stop_price"))
     take_profit = as_float(preview.get("take_profit"))
     estimated_account_risk = as_float(preview.get("estimated_account_risk"))
@@ -51,22 +102,65 @@ def build_order_intent(*, date: str, session: str, preview: dict[str, Any]) -> d
         "symbol": symbol,
         "longbridge_symbol": str(preview.get("longbridge_symbol") or "").upper(),
         "setup": preview.get("setup"),
-        "side": str(preview.get("side") or "").lower(),
-        "order_type": str(preview.get("order_type") or "").upper(),
+        "side": normalize_side(preview.get("side")),
+        "order_type": order_type,
         "quantity": quantity,
         "limit_price": limit_price,
+        "reference_price": reference_price,
+        "trigger_price": trigger_price,
+        "trailing_amount": trailing_amount,
+        "trailing_percent": trailing_percent,
+        "limit_offset": limit_offset,
         "stop_price": stop_price,
         "take_profit": take_profit,
         "risk_per_share": risk_per_share,
         "max_account_risk_pct": max_account_risk_pct,
         "estimated_account_risk": estimated_account_risk,
         "estimated_notional": estimated_notional,
-        "tif": preview.get("tif"),
+        "tif": normalize_tif(preview.get("tif")),
+        "expire_date": normalized_text(preview.get("expire_date")),
+        "outside_rth": normalized_text(preview.get("outside_rth")),
         "remark": remark,
         "client_order_id": None,
         "status": "ready",
         "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
+
+
+def validate_order_shape(intent: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    side = normalize_side(intent.get("side"))
+    order_type = normalize_order_type(intent.get("order_type"))
+    tif = normalize_tif(intent.get("tif"))
+    outside_rth = normalized_text(intent.get("outside_rth"))
+    quantity = int(as_float(intent.get("quantity")) or 0)
+
+    if side not in VALID_SIDES:
+        errors.append("side must be buy or sell")
+    if order_type not in SUPPORTED_ORDER_TYPES:
+        errors.append(f"unsupported order_type: {order_type}")
+    if quantity <= 0:
+        errors.append("quantity must be > 0")
+    if not intent.get("longbridge_symbol"):
+        errors.append("longbridge_symbol is required")
+    if tif not in VALID_TIFS:
+        errors.append("tif must be day, gtc, or gtd")
+    if tif == "gtd" and not normalized_text(intent.get("expire_date")):
+        errors.append("expire_date is required when tif is gtd")
+    if outside_rth and outside_rth not in VALID_OUTSIDE_RTH:
+        errors.append("outside_rth must be RTH_ONLY, ANY_TIME, or OVERNIGHT")
+
+    if order_type in PRICE_REQUIRED_ORDER_TYPES and float(intent.get("limit_price") or 0) <= 0:
+        errors.append(f"limit_price must be > 0 for {order_type}")
+    if order_type in TRIGGER_PRICE_REQUIRED_ORDER_TYPES and float(intent.get("trigger_price") or 0) <= 0:
+        errors.append(f"trigger_price must be > 0 for {order_type}")
+    if order_type in TRAILING_AMOUNT_REQUIRED_ORDER_TYPES and float(intent.get("trailing_amount") or 0) <= 0:
+        errors.append(f"trailing_amount must be > 0 for {order_type}")
+    if order_type in TRAILING_PERCENT_REQUIRED_ORDER_TYPES and float(intent.get("trailing_percent") or 0) <= 0:
+        errors.append(f"trailing_percent must be > 0 for {order_type}")
+    if order_type.startswith("TSLP") and intent.get("limit_offset") is not None and float(intent.get("limit_offset") or 0) <= 0:
+        errors.append(f"limit_offset must be > 0 for {order_type}")
+    return errors
 
 
 def paper_order_record(
@@ -91,6 +185,14 @@ def paper_order_record(
         "order_type": intent["order_type"],
         "quantity": intent["quantity"],
         "limit_price": intent["limit_price"],
+        "reference_price": intent.get("reference_price"),
+        "trigger_price": intent.get("trigger_price"),
+        "trailing_amount": intent.get("trailing_amount"),
+        "trailing_percent": intent.get("trailing_percent"),
+        "limit_offset": intent.get("limit_offset"),
+        "tif": intent.get("tif"),
+        "expire_date": intent.get("expire_date"),
+        "outside_rth": intent.get("outside_rth"),
         "stop_price": intent["stop_price"],
         "take_profit": intent["take_profit"],
         "estimated_account_risk": intent["estimated_account_risk"],

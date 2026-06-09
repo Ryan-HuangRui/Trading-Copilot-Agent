@@ -1,6 +1,6 @@
 # Longbridge Account Snapshot Setup
 
-This runbook covers the read-only account snapshot, paper account snapshot, paper order preview/submit/cancel/protective-stop/review, and position review workflows. Production account workflows remain read-only. Paper writes are limited to guarded Longbridge paper-account entry orders, expired unfilled entry-order cancellation, and protective stop submission.
+This runbook covers the read-only account snapshot, paper account snapshot, paper order preview/submit/cancel/replace/protective-stop/review, and position review workflows. Production account workflows remain read-only. Paper writes are limited to guarded Longbridge paper-account entry orders, expired unfilled entry-order cancellation, pending order quantity/limit replace, protective stop submission, TP1 partial exits, plan-invalidated exits, and break-even stop movement.
 
 ## Safety Boundary
 
@@ -8,7 +8,7 @@ This runbook covers the read-only account snapshot, paper account snapshot, pape
 - Allowed operations are read-only account, assets, positions, portfolio, quote, and market lookups.
 - Order, cancel, replace, modify, trade, buy, sell, submit, and watchlist write tokens are rejected by the adapter.
 - `script/longbridge_paper_trade_adapter.py` is separate and only supports Longbridge paper accounts. It may read paper order and execution lists after verifying `account_channel=lb_papertrading`.
-- `script/longbridge_paper_order_adapter.py` is the only broker-write adapter. It requires `account_channel=lb_papertrading`, `--execute`, and the matching `config/paper_execution.json` action gate, and currently supports simulated limit buy entry orders, expired unfilled entry-order cancellation, protective stop submission, and TP1 partial-exit submission.
+- `script/longbridge_paper_order_adapter.py` is the only broker-write adapter. It requires `account_channel=lb_papertrading`, `--execute`, and the matching `config/paper_execution.json` action gate, and currently supports simulated long entry orders across Longbridge-supported order types, expired unfilled entry-order cancellation, pending order quantity/limit replace, protective stop submission, TP1 partial-exit submission, plan-invalidated exit submission, and break-even stop movement.
 - Downstream scripts read `runtime/account/<DATE>/account-snapshot.json` instead of calling Longbridge directly.
 
 ## Longbridge CLI Commands
@@ -110,6 +110,8 @@ Build a dry-run protective stop plan for filled long paper entries:
 python3 script/trading_copilot.py paper-protective-stop-plan --date <DATE>
 ```
 
+The default protective stop is a Longbridge `sell MIT` at `stop_price`. Alternative paper stop order types can be dry-run with the shared shape flags, for example `--order-type LIT --limit-price <LIMIT>` or `--order-type TSLPPCT --trailing-percent 2.5 --limit-offset 0.3`.
+
 Submit guarded paper protective stops for filled long entries:
 
 ```bash
@@ -124,6 +126,8 @@ Build a dry-run TP1 partial-exit plan for filled long paper entries:
 python3 script/trading_copilot.py paper-take-profit-plan --date <DATE>
 ```
 
+The default TP1 order is a Longbridge `sell LO` at `take_profit`. Alternative paper TP1 order types can be dry-run with the shared shape flags, for example `--order-type MIT` or `--order-type TSLPPCT --trailing-percent 2.5 --limit-offset 0.3`.
+
 Submit guarded paper TP1 partial exits for filled long entries:
 
 ```bash
@@ -132,10 +136,18 @@ python3 script/trading_copilot.py paper-take-profit-plan --date <DATE> --execute
 
 This requires `paper_execution.allow_take_profit=true`; keep it false during the initial rollout.
 
-Build a dry-run break-even stop movement plan after TP1 fill evidence exists:
+Build a break-even stop movement plan after TP1 fill evidence exists:
 
 ```bash
 python3 script/trading_copilot.py paper-break-even-stop-plan --date <DATE>
+```
+
+The default replacement stop is a Longbridge `sell MIT` at the computed break-even price. Alternative replacement stop order types can be dry-run with the shared shape flags, for example `--order-type LIT --limit-price <LIMIT>` or `--order-type TSLPPCT --trailing-percent 2.5 --limit-offset 0.3`.
+
+Execute a guarded break-even stop movement after enabling `paper_execution.allow_break_even_stop_move=true`:
+
+```bash
+python3 script/trading_copilot.py paper-break-even-stop-plan --date <DATE> --execute
 ```
 
 Review observed paper executions against the preview and append matched paper fills:
@@ -255,6 +267,7 @@ Full fixture smoke test:
 
 ```bash
 python3 script/workflow_smoke_test.py --date <DATE> --week <YYYY-Www> --account-input path/to/account-fixture.json
+python3 script/workflow_smoke_test.py --date <DATE> --week <YYYY-Www> --paper-input path/to/paper-fixture.json --paper-lifecycle-smoke
 ```
 
 ## cc connect Handling

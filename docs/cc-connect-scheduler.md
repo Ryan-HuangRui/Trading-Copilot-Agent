@@ -64,7 +64,7 @@ Update the configured cc connect prompts so they require the new artifacts and g
 - `promote-lesson --apply` must not be scheduled automatically; run it only after human approval of a specific `pattern_id`.
 - Paper execution must be scheduled as separate execution tasks. Do not add broker write operations to the pre-market or post-market report-generation tasks.
 - Initial paper rollout should execute entries only. Keep paper cancel, protective-stop, and TP1 workflows in dry-run mode until exit-management safety is explicitly upgraded.
-- Monitor paper flow is dry-run only. `paper-trade-submit --session monitor --execute` is hard-disabled even if local config contains `allow_intraday_entry_submit=true`.
+- Monitor paper flow is dry-run only in cc connect. `paper-trade-submit --session monitor --execute` is hard-disabled even if local config contains `allow_intraday_entry_submit=true`; any Phase 3 intraday paper entry must be a separate reviewed Codex task using `intraday-paper-entry`.
 
 ### 3. Update Failure Policy
 
@@ -112,14 +112,17 @@ Confirm paper execution config stays explicit and defaults to no broker writes. 
     "allow_intraday_entry_submit": false,
     "allow_cancel": false,
     "allow_protective_stop": false,
-    "allow_take_profit": false
+    "allow_take_profit": false,
+    "allow_order_replace": false,
+    "allow_break_even_stop_move": false,
+    "allow_auth_status_unknown_paper_channel": false
   }
 }
 ```
 
 Only enable the specific action gate on the deployment host after the dry-run workflow is accepted. Do not use environment variables as the paper execution gate.
 
-`allow_intraday_entry_submit` is reserved for a future intraday execution contract. The current monitor session supports sidecar generation, validation, preview, submit dry-run, and Feishu summary only.
+`allow_intraday_entry_submit` belongs to the standalone `intraday-paper-entry` contract. The monitor session itself supports sidecar generation, validation, preview, submit dry-run, and Feishu summary only.
 
 ### 5. Server Acceptance Check
 
@@ -140,7 +143,7 @@ Do not add `--append` or `--execute` during the acceptance check unless you inte
 For paper execution acceptance, run the dry-run checks only:
 
 ```bash
-python3 script/trading_copilot.py paper-account-snapshot --date <DATE>
+python3 script/trading_copilot.py paper-account-snapshot --date <DATE> --paper-execution-config config/paper_execution.local.json
 python3 script/trading_copilot.py paper-trade-preview --date <DATE> --session pre-market --require-validation
 python3 script/trading_copilot.py paper-trade-submit --date <DATE> --session pre-market --require-validation
 ```
@@ -253,6 +256,7 @@ Recommended cc connect instruction:
 ```text
 Run Trading-Copilot-Agent post-market close workflow for today:
 prepare the completed daily snapshot, generate post-market.md and post-market-signals.json,
+summarize same-day intraday monitor artifacts when present,
 validate artifacts and Trade Plan Cards, backfill signal outcomes, extract post-market observation signals,
 generate plan-review lessons, optionally run read-only account snapshot and position review, generate daily self-review,
 and return a Feishu-ready summary.
@@ -265,7 +269,7 @@ Repository workflow stages:
 python3 script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day --include-journal-signals --include-position-symbols
 # Or replace the previous line with this optional evidence-enhanced wrapper call:
 python3 script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day --include-journal-signals --include-position-symbols --include-agent-research
-# Codex generates report/<DATE>/post-market.md and report/<DATE>/post-market-signals.json
+# Codex reads optional report/<DATE>/intraday.md and runtime/intraday/<DATE>/{state.json,events.jsonl}, then generates report/<DATE>/post-market.md and report/<DATE>/post-market-signals.json
 python3 script/trading_copilot.py llm-generation-manifest --session post-market --date <DATE> --model <MODEL> --prompt agent/post_market_analysis_prompt.md --input report/<DATE>/daily-snapshot.json --generated-output report/<DATE>/post-market.md --generated-output report/<DATE>/post-market-signals.json
 python3 script/trading_copilot.py post-market-deliver --date <DATE> --sync-longbridge --execute-sync --append-outcomes --append-lessons --append-self-review
 ```
@@ -304,7 +308,7 @@ Repository workflow stages:
 ```bash
 python3 script/trading_copilot.py validate-report --session pre-market --date <DATE>
 python3 script/trading_copilot.py validate-trade-plan --session pre-market --date <DATE>
-python3 script/trading_copilot.py paper-account-snapshot --date <DATE>
+python3 script/trading_copilot.py paper-account-snapshot --date <DATE> --paper-execution-config config/paper_execution.local.json
 python3 script/trading_copilot.py paper-trade-preview --date <DATE> --session pre-market --require-validation
 python3 script/trading_copilot.py paper-trade-submit --date <DATE> --session pre-market --require-validation
 ```
@@ -327,7 +331,7 @@ Recommended cc connect instruction:
 ```text
 Run Trading-Copilot-Agent paper entry execution for <DATE> only if the paper dry-run artifact was reviewed
 or the scheduler's paper-entry policy allows automatic paper entry execution.
-Submit only ready long limit-buy entry intents to the Longbridge paper account.
+Submit only ready long entry intents to the Longbridge paper account.
 Do not run cancel, protective-stop, TP1, break-even, or real-account operations.
 ```
 
@@ -370,23 +374,16 @@ Recommended cc connect instruction:
 Run Trading-Copilot-Agent paper order sync and execution review for <DATE>:
 refresh the Longbridge paper account snapshot, sync submitted order state, project paper events,
 generate execution review, append paper learning candidates, and refresh strategy-level paper review.
-Run cancel/protective-stop/TP1 workflows in dry-run mode only.
+Run cancel/pending-order-replace/protective-stop/TP1 workflows in dry-run mode only.
 ```
 
 Repository workflow stages:
 
 ```bash
-python3 script/trading_copilot.py paper-account-snapshot --date <DATE>
-python3 script/trading_copilot.py paper-order-sync --date <DATE>
-python3 script/trading_copilot.py paper-order-cancel --date <DATE>
-python3 script/trading_copilot.py paper-protective-stop-plan --date <DATE>
-python3 script/trading_copilot.py paper-take-profit-plan --date <DATE>
-python3 script/trading_copilot.py paper-break-even-stop-plan --date <DATE>
-python3 script/trading_copilot.py paper-event-ledger --date <DATE>
-python3 script/trading_copilot.py paper-execution-review --date <DATE>
-python3 script/trading_copilot.py paper-learning-lessons --date <DATE> --append
-python3 script/trading_copilot.py paper-strategy-review
+python3 script/trading_copilot.py paper-lifecycle --date <DATE> --append-lessons --strategy-review
 ```
+
+The wrapper expands to account snapshot, order sync, cancel/pending-order-replace/protective-stop/TP1/full-exit/break-even planning, a post-plan resync, event ledger, execution review, optional learning append, and optional strategy review.
 
 Keep these execution switches disabled in the initial rollout:
 
@@ -394,31 +391,97 @@ Keep these execution switches disabled in the initial rollout:
 {
   "paper_execution": {
     "allow_cancel": false,
+    "allow_order_replace": false,
     "allow_protective_stop": false,
-    "allow_take_profit": false
+    "allow_take_profit": false,
+    "allow_break_even_stop_move": false,
+    "allow_auth_status_unknown_paper_channel": false
   }
 }
 ```
 
-Do not add `--execute` to `paper-order-cancel`, `paper-protective-stop-plan`, or `paper-take-profit-plan` while those config gates are false. Current exit-management execution is intentionally dry-run because protective stops use the full filled quantity while TP1 uses a partial exit quantity; automatic execution needs OCO or stop resize/cancel-replace safety before rollout.
+Do not add `--execute` to `paper-order-cancel`, `paper-order-replace`, `paper-protective-stop-plan`, `paper-take-profit-plan`, or `paper-break-even-stop-plan` while those config gates are false. `paper-order-replace` is limited to pending order quantity/limit-price changes from `paper-replace-decisions.json`; stop trigger movement stays cancel+submit. Current exit-management execution is intentionally dry-run because protective stops use the full filled quantity while TP1 uses a partial exit quantity; automatic execution needs OCO or stop resize/cancel-then-submit safety before rollout. If the Longbridge CLI omits `account_channel` from `auth status`, `allow_auth_status_unknown_paper_channel=true` may be used only in ignored host-local config after the host token has been separately verified as paper trading; explicit non-paper channels still fail.
 
-The provided `ops/cc-connect/tca-paper-sync-review.sh` keeps `paper-order-cancel` dry-run unless `TCA_PAPER_CANCEL_EXECUTE=1` is set for that task. Even with that environment switch, cancellation still requires the selected `config/paper_execution.local.json` to enable both `paper_execution.broker_writes_enabled=true` and `paper_execution.allow_cancel=true`.
+The provided `ops/cc-connect/tca-paper-sync-review.sh` calls `paper-lifecycle`. It keeps each exit action dry-run unless the matching environment switch is set (`TCA_PAPER_CANCEL_EXECUTE=1`, `TCA_PAPER_ORDER_REPLACE_EXECUTE=1`, `TCA_PAPER_PROTECTIVE_STOP_EXECUTE=1`, `TCA_PAPER_TAKE_PROFIT_EXECUTE=1`, or `TCA_PAPER_BREAK_EVEN_STOP_EXECUTE=1`). Even with those switches, the selected `config/paper_execution.local.json` must enable `broker_writes_enabled=true` and the matching action gate.
 
 ## Optional Monitor Journal Task
 
-If intraday monitoring is enabled, keep scan generation, sidecar generation, dry-run paper checks, and journal append separate:
+If intraday monitoring is enabled, keep scan generation, sidecar generation, dry-run paper checks, and journal append separate. The tracked Codex wrapper is:
 
 ```bash
-python3 script/trading_copilot.py monitor-brief --state config/monitor_state.json --interval 5min
-python3 script/trading_copilot.py extract-monitor-signals --date <DATE>
-python3 script/trading_copilot.py validate-trade-plan --session monitor --date <DATE>
-python3 script/trading_copilot.py paper-trade-preview --date <DATE> --session monitor --require-validation
-python3 script/trading_copilot.py paper-trade-submit --date <DATE> --session monitor --require-validation
-python3 script/trading_copilot.py feishu-summary --session monitor --date <DATE>
-python3 script/trading_copilot.py extract-monitor-signals --append
+bash ops/cc-connect/tca-intraday-codex-monitor.sh <DATE>
 ```
 
-Use monitor sidecar and journal entries as observation records only. They are not execution instructions. cc connect must never schedule `paper-trade-submit --session monitor --execute`.
+Default wrapper behavior is read-only: run `tca-intraday-notify.sh`, append `report/<DATE>/intraday.md`, update `runtime/intraday/<DATE>/state.json`, and send Feishu only when the notification filter has an unsent important event.
+
+Current NAS production cron enables opportunity-review dry-run, guarded intraday paper entry execution, and lifecycle management. Exit broker writes are controlled by separate switches so TP1 is not accidentally enabled together with a full-size protective stop:
+
+```bash
+TCA_INTRADAY_ENABLE_PAPER_DRY_RUN=1 \
+TCA_INTRADAY_ENABLE_PAPER_LIFECYCLE=1 \
+TCA_INTRADAY_PAPER_EXECUTE=1 \
+TCA_INTRADAY_EXIT_EXECUTE=0 \
+TCA_INTRADAY_CANCEL_EXECUTE=1 \
+TCA_INTRADAY_ORDER_REPLACE_EXECUTE=0 \
+TCA_INTRADAY_PROTECTIVE_STOP_EXECUTE=1 \
+TCA_INTRADAY_TAKE_PROFIT_EXECUTE=0 \
+TCA_INTRADAY_RESIZE_STOP_BEFORE_TAKE_PROFIT=0 \
+TCA_INTRADAY_PLAN_EXIT_EXECUTE=0 \
+TCA_INTRADAY_BREAK_EVEN_STOP_EXECUTE=0 \
+bash ops/cc-connect/tca-intraday-codex-monitor.sh <DATE>
+```
+
+This requires the ignored NAS-local `config/paper_execution.local.json` to set `broker_writes_enabled=true`, `allow_intraday_entry_submit=true`, `allow_cancel=true`, and `allow_protective_stop=true`. The wrapper still submits only when Codex writes a validated monitor sidecar and `intraday-dry-run` reports ready orders. Pending order replace, TP1, plan-invalidated full exit, and break-even stop movement stay disabled in NAS cron by default. Pending order replace requires both `TCA_INTRADAY_ORDER_REPLACE_EXECUTE=1` and local gate `allow_order_replace=true`; it only updates unfilled pending order quantity/limit price. TP1 execution is blocked in code when an active protective stop quantity exceeds the post-TP1 remaining quantity unless `--resize-stop-before-submit` is explicitly used with the separate stop-resize gate. Plan-invalidated full exit requires both `TCA_INTRADAY_PLAN_EXIT_EXECUTE=1` and local gates `allow_exit_cancel_replace=true` plus `allow_exit_submit=true`.
+
+Optional dry-run paper checks:
+
+```bash
+TCA_INTRADAY_ENABLE_PAPER_DRY_RUN=1 \
+bash ops/cc-connect/tca-intraday-codex-monitor.sh <DATE>
+
+python3 script/trading_copilot.py monitor-brief --state config/monitor_state.json --interval 5min
+python3 script/trading_copilot.py intraday-opportunity-context --date <DATE>
+# Codex reads observation_scans / sidecar_template.signals for the full observation universe,
+# including price_evidence with 5m up to 78 bars, 15m 40 bars, daily 60 bars, key levels,
+# and writes reviewed report/<DATE>/monitor-signals.json from the opportunity context.
+python3 script/trading_copilot.py intraday-decision-coverage --date <DATE> --context report/<DATE>/intraday-opportunity-context.json --signals report/<DATE>/monitor-signals.json
+python3 script/trading_copilot.py validate-trade-plan --session monitor --date <DATE> --signals report/<DATE>/monitor-signals.json
+python3 script/trading_copilot.py paper-account-snapshot --date <DATE> --paper-execution-config config/paper_execution.local.json
+python3 script/trading_copilot.py intraday-dry-run --date <DATE> --signals report/<DATE>/monitor-signals.json
+python3 script/trading_copilot.py intraday-review-append --date <DATE> --signals report/<DATE>/monitor-signals.json --submission report/<DATE>/paper-trade-submission.json --context report/<DATE>/intraday-opportunity-context.json
+```
+
+If Codex writes a reviewed `report/<DATE>/monitor-signals.json` from `intraday-opportunity-context`, use:
+
+```bash
+python3 script/trading_copilot.py intraday-dry-run --date <DATE> --signals report/<DATE>/monitor-signals.json
+python3 script/trading_copilot.py intraday-review-append --date <DATE> --signals report/<DATE>/monitor-signals.json --submission report/<DATE>/paper-trade-submission.json --context report/<DATE>/intraday-opportunity-context.json
+```
+
+Optional guarded intraday paper entry:
+
+```bash
+TCA_INTRADAY_ENABLE_PAPER_DRY_RUN=1 \
+TCA_INTRADAY_PAPER_EXECUTE=1 \
+TCA_PAPER_EXECUTION_CONFIG=config/paper_execution.local.json \
+bash ops/cc-connect/tca-intraday-codex-monitor.sh <DATE>
+```
+
+The wrapper must use `intraday-paper-entry --execute`, never `paper-trade-submit --session monitor --execute`.
+
+Optional guarded lifecycle planning:
+
+```bash
+TCA_INTRADAY_ENABLE_PAPER_LIFECYCLE=1 \
+bash ops/cc-connect/tca-intraday-codex-monitor.sh <DATE>
+
+python3 script/trading_copilot.py paper-lifecycle --date <DATE> --paper-execution-config config/paper_execution.local.json --append-lessons --strategy-review
+python3 script/trading_copilot.py intraday-lifecycle-append --date <DATE>
+```
+
+After lifecycle planning or execution, read `report/<DATE>/intraday-lifecycle-summary.json`; send a Feishu lifecycle status only when the lifecycle wrapper reports actual executed/submitted/cancelled/replaced/moved actions, protective stop/exit risk actions, or critical errors. Do not send command execution traces, dry-run summaries, skipped/blocked states, artifact-only status, or candidate lessons as separate Feishu messages.
+
+Use monitor sidecar and journal entries as observation records unless Codex writes a validated monitor Trade Plan Card and the explicit paper gates are enabled.
 
 ## Feishu Message Shape
 

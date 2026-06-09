@@ -71,6 +71,22 @@ class PaperTradingWorkflowTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             ensure_paper_account({"account": {"account_channel": "lb_live"}, "token": {"status": "valid"}})
 
+    def test_ensure_paper_account_allows_explicit_unknown_channel_fallback(self):
+        auth = {"account": {"account_channel": None}, "token": {"status": "valid"}}
+
+        with self.assertRaises(ValueError):
+            ensure_paper_account(auth)
+        self.assertEqual(
+            ensure_paper_account(auth, {"allow_auth_status_unknown_paper_channel": True}),
+            "lb_papertrading",
+        )
+
+    def test_ensure_paper_account_fallback_still_rejects_explicit_live_channel(self):
+        auth = {"account": {"account_channel": "lb_live"}, "token": {"status": "valid"}}
+
+        with self.assertRaises(ValueError):
+            ensure_paper_account(auth, {"allow_auth_status_unknown_paper_channel": True})
+
     def test_paper_adapter_rejects_write_commands(self):
         self.assertEqual(ensure_paper_read_command(["order", "--format", "json"]), None)
         self.assertEqual(ensure_paper_read_command(["order", "executions", "--format", "json"]), None)
@@ -100,16 +116,86 @@ class PaperTradingWorkflowTest(unittest.TestCase):
                 "buy",
                 "MU.US",
                 "200",
-                "--price",
-                "100",
                 "--order-type",
                 "LO",
+                "--price",
+                "100",
                 "--tif",
                 "day",
                 "--format",
                 "json",
             ],
         )
+
+    def test_build_order_preview_supports_market_order_without_price_flag(self):
+        signal = valid_signals()["signals"][0]
+        signal = {
+            **signal,
+            "entry": {"trigger_price": 100, "order_type": "MO"},
+        }
+
+        preview = build_order_preview(
+            signal=signal,
+            account=paper_snapshot()["account"],
+            default_market="US",
+            tif="day",
+        )
+
+        self.assertEqual(preview["status"], "ready")
+        self.assertEqual(preview["order_type"], "MO")
+        self.assertEqual(preview["entry_price"], 100.0)
+        self.assertNotIn("--price", preview["preview_command"])
+        self.assertEqual(preview["preview_command"][5:7], ["--order-type", "MO"])
+
+    def test_build_order_preview_supports_lit_price_and_trigger(self):
+        signal = valid_signals()["signals"][0]
+        signal = {
+            **signal,
+            "entry": {"limit_price": 100, "trigger_price": 101, "order_type": "LIT"},
+        }
+
+        preview = build_order_preview(
+            signal=signal,
+            account=paper_snapshot()["account"],
+            default_market="US",
+            tif="day",
+        )
+
+        self.assertEqual(preview["status"], "ready")
+        self.assertEqual(preview["order_type"], "LIT")
+        self.assertEqual(preview["entry_price"], 100.0)
+        self.assertEqual(preview["trigger_price"], 101.0)
+        self.assertEqual(preview["preview_command"][preview["preview_command"].index("--price") + 1], "100")
+        self.assertEqual(preview["preview_command"][preview["preview_command"].index("--trigger-price") + 1], "101")
+
+    def test_build_order_preview_preserves_time_in_force_and_session_fields(self):
+        signal = valid_signals()["signals"][0]
+        signal = {
+            **signal,
+            "entry": {
+                "limit_price": 100,
+                "trigger_price": 101,
+                "order_type": "LIT",
+                "tif": "gtd",
+                "expire_date": "2026-06-19",
+                "outside_rth": "RTH_ONLY",
+            },
+        }
+
+        preview = build_order_preview(
+            signal=signal,
+            account=paper_snapshot()["account"],
+            default_market="US",
+            tif="day",
+        )
+
+        self.assertEqual(preview["status"], "ready")
+        self.assertEqual(preview["tif"], "gtd")
+        self.assertEqual(preview["expire_date"], "2026-06-19")
+        self.assertEqual(preview["outside_rth"], "RTH_ONLY")
+        self.assertEqual(preview["preview_command"][preview["preview_command"].index("--tif") + 1], "gtd")
+        self.assertEqual(preview["preview_command"][preview["preview_command"].index("--expire-date") + 1], "2026-06-19")
+        self.assertEqual(preview["preview_command"][preview["preview_command"].index("--outside-rth") + 1], "RTH_ONLY")
 
     def test_paper_account_snapshot_from_fixture_writes_orders_and_executions(self):
         with tempfile.TemporaryDirectory() as tmp:

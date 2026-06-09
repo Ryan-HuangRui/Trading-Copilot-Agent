@@ -60,7 +60,7 @@ Acceptance:
 
 ## Milestone 1: Controlled Paper Entry Submission
 
-Goal: automatically submit Longbridge paper entry limit buy orders from validated plans.
+Goal: automatically submit guarded Longbridge paper long entry orders from validated plans.
 
 Implementation status: order models, risk guard, dry-run submission, guarded Longbridge paper order adapter, `paper-trade-submit --execute` integration, and fixture smoke coverage are implemented.
 
@@ -68,14 +68,13 @@ Scope:
 
 - Long only
 - Buy only
-- Limit orders only
+- Longbridge-supported entry order types only
 - Paper account only
 - Entry orders only
 
 Out of scope:
 
 - Short selling
-- Market orders
 - Stop-loss orders
 - Take-profit orders
 - OCO
@@ -104,8 +103,8 @@ Adapter boundary:
 
 - `longbridge_paper_trade_adapter.py` remains read-only.
 - `longbridge_paper_order_adapter.py` is the only paper broker-write adapter.
-- The first adapter write capability is limited to `long buy` `LO` entry orders.
-- Cancel, replace, stop, take-profit, OCO, market orders, short selling, and real-money orders remain out of scope for Milestone 1.
+- The adapter write capability supports Longbridge order types `LO`, `ELO`, `MO`, `AO`, `ALO`, `ODD`, `SLO`, `LIT`, `MIT`, `TSLPAMT`, and `TSLPPCT`, with command-shape validation for required price, trigger, and trailing fields.
+- Replace, OCO, short selling, and real-money orders remain out of scope for Milestone 1.
 
 Idempotency:
 
@@ -160,7 +159,7 @@ Recommended sequence:
 3. Add TP1 partial exits.
 4. Add break-even stop movement or trailing logic only after basic exits are stable.
 
-Implementation status: `paper-order-cancel` now generates a dry-run cancel plan for expired unfilled entry orders and can execute those cancels through the guarded paper adapter when `--execute` and the cancel gate in `config/paper_execution.json` are both enabled. `paper-protective-stop-plan` now generates a `sell MIT --trigger-price <stop>` plan for filled long entries and can submit those protective stops through the guarded paper adapter under the same config-driven execution gates. `paper-take-profit-plan` now generates a default 50% TP1 partial-exit `sell LO --price <tp1>` plan for filled long entries and can submit those take-profit orders through the guarded paper adapter under the same config-driven execution gates. `paper-break-even-stop-plan` now generates a dry-run-only plan to move existing protective stops to break-even after TP1 fill evidence exists; it does not execute cancel/replace.
+Implementation status: `paper-order-cancel` now generates a dry-run cancel plan for expired unfilled entry orders and can execute those cancels through the guarded paper adapter when `--execute` and the cancel gate in `config/paper_execution.json` are both enabled. `paper-order-replace` now generates a dry-run replace plan for pending unfilled paper entry orders from `paper-replace-decisions.json` and can execute Longbridge quantity/limit-price replace when `allow_order_replace=true`; it must not be used for stop trigger movement. `paper-protective-stop-plan` now generates a default `sell MIT --trigger-price <stop>` plan for filled long entries, can use the shared Longbridge order shape for alternative protective-stop order types, and can submit those protective stops through the guarded paper adapter under the same config-driven execution gates. `paper-take-profit-plan` now generates a default 50% TP1 partial-exit `sell LO --price <tp1>` plan for filled long entries, can use the shared Longbridge order shape for alternative TP1 order types, and can submit those take-profit orders through the guarded paper adapter under the same config-driven execution gates. `paper-break-even-stop-plan` now generates a break-even stop movement plan after TP1 fill evidence exists, defaults to a new MIT stop, can use the shared Longbridge order shape for alternative replacement stop order types, and can execute it as guarded cancel old stop plus submit new stop when `allow_break_even_stop_move=true`.
 
 All exit actions must use the same paper-account, config gate, execute flag, idempotency, and audit-log gates as entry submission.
 
@@ -169,7 +168,7 @@ The default scheduler posture remains dry-run for exit management. Deployment au
 - `TCA_PAPER_CANCEL_EXECUTE=1` is set for the cc-connect sync task.
 - The selected paper execution config enables both `broker_writes_enabled=true` and `allow_cancel=true`.
 
-Protective-stop and TP1 broker writes should remain manual or dry-run until bracket/OCO or cancel-replace safety is designed.
+Protective-stop, TP1, and break-even broker writes should remain manual or dry-run until bracket/OCO and cancel-then-submit state-drift risk are operationally accepted.
 
 ## Milestone 3.5: Broker Capability Matrix
 
@@ -181,14 +180,17 @@ Current supported guarded write actions:
 
 - `entry_submit`: long buy `LO` entry, initial rollout action.
 - `cancel`: expired unfilled entry cancel, disabled by default.
-- `protective_stop`: sell `MIT` protective stop, dry-run-first.
-- `take_profit`: sell `LO` TP1 partial exit, dry-run-first.
+- `order_replace`: pending unfilled entry quantity/limit-price replace, disabled by default.
+- `protective_stop`: sell protective stop, default `MIT` and shared Longbridge order types when complete shape fields are supplied, dry-run-first.
+- `take_profit`: sell TP1 partial exit, default `LO` and shared Longbridge order types when complete shape fields are supplied, dry-run-first.
+- `exit_submit`: plan-invalidated full/remaining exit after open exits are cancelled, dry-run-first.
+- `break_even_stop_move`: cancel old stop plus submit new break-even stop after TP1 fill evidence, dry-run-first.
 
 Explicitly unsupported actions:
 
 - market entry
 - native OCO/bracket order
-- cancel/replace stop movement
+- native replace of MIT stop trigger movement
 - short entry
 
 ## Milestone 7: Market Intelligence Layer
@@ -230,7 +232,7 @@ Initial constraints:
 - Only symbols already in the pre-market/post-market focus pool or configured monitor state.
 - Per-day and per-symbol cooldown gates.
 - Separate action gate such as `allow_intraday_entry_submit`, disabled by default.
-- `paper-trade-submit --session monitor --execute` is hard-disabled regardless of config until a future intraday execution contract is explicitly implemented.
+- `paper-trade-submit --session monitor --execute` remains hard-disabled regardless of config; Phase 3 execution must use the standalone `intraday-paper-entry` contract.
 - Feishu delivery of candidate, skipped, and blocked reasons before any execution rollout.
 
 ## Milestone 9: Bracket/OCO And Advanced Order Types
@@ -271,7 +273,7 @@ Example event types:
 
 Existing files such as `signals.jsonl`, `trades.jsonl`, and `reviews.jsonl` can remain as projections or compatibility views.
 
-Implementation status: `paper-event-ledger` projects paper entry, stop, and TP1 submit/status facts into `runtime/journal/events.jsonl` with deterministic event ids, while preserving existing events from other dates/workflows.
+Implementation status: `paper-event-ledger` projects paper entry, cancel, pending-order replace, protective stop, TP1, and full-exit submit/status facts into `runtime/journal/events.jsonl` with deterministic event ids, while preserving existing events from other dates/workflows.
 
 Milestone 1 should already preserve fields needed for future replay: `intent_id`, `source_signal_id`, `broker_order_id`, `remark`, `submitted_at`, `raw_request`, `raw_response`, and `idempotency_key`.
 

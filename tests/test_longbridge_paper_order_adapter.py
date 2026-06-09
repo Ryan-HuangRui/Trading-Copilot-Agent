@@ -49,6 +49,32 @@ def order_intent() -> dict:
     )
 
 
+def market_order_intent() -> dict:
+    payload = order_intent()
+    payload.update({"order_type": "MO", "limit_price": None, "estimated_notional": 20000})
+    return payload
+
+
+def lit_order_intent() -> dict:
+    payload = order_intent()
+    payload.update({"order_type": "LIT", "limit_price": 100, "trigger_price": 101, "outside_rth": "RTH_ONLY"})
+    return payload
+
+
+def trailing_percent_intent() -> dict:
+    payload = order_intent()
+    payload.update(
+        {
+            "order_type": "TSLPPCT",
+            "limit_price": None,
+            "trailing_percent": 2.5,
+            "limit_offset": 0.3,
+            "tif": "gtc",
+        }
+    )
+    return payload
+
+
 def stop_intent() -> dict:
     return {
         "intent_id": "intent-1",
@@ -62,6 +88,25 @@ def stop_intent() -> dict:
     }
 
 
+def lit_stop_intent() -> dict:
+    payload = stop_intent()
+    payload.update({"order_type": "LIT", "limit_price": 94.5, "trigger_price": 95})
+    return payload
+
+
+def trailing_stop_intent() -> dict:
+    payload = stop_intent()
+    payload.update(
+        {
+            "order_type": "TSLPPCT",
+            "trigger_price": None,
+            "trailing_percent": 2.5,
+            "limit_offset": 0.3,
+        }
+    )
+    return payload
+
+
 def take_profit_intent() -> dict:
     return {
         "intent_id": "intent-1",
@@ -73,6 +118,25 @@ def take_profit_intent() -> dict:
         "tif": "gtc",
         "remark": "tca-tp1:intent-1",
     }
+
+
+def mit_take_profit_intent() -> dict:
+    payload = take_profit_intent()
+    payload.update({"order_type": "MIT", "limit_price": None, "trigger_price": 112})
+    return payload
+
+
+def trailing_take_profit_intent() -> dict:
+    payload = take_profit_intent()
+    payload.update(
+        {
+            "order_type": "TSLPPCT",
+            "limit_price": None,
+            "trailing_percent": 2.5,
+            "limit_offset": 0.3,
+        }
+    )
+    return payload
 
 
 class LongbridgePaperOrderAdapterTest(unittest.TestCase):
@@ -105,6 +169,28 @@ class LongbridgePaperOrderAdapterTest(unittest.TestCase):
                     execute=True,
                 )
 
+    def test_submit_allows_explicit_unknown_channel_fallback(self):
+        adapter = LongbridgePaperOrderAdapter(
+            cli="/bin/longbridge",
+            paper_execution_config={**write_config(), "allow_auth_status_unknown_paper_channel": True},
+        )
+
+        def fake_run(args):
+            if args[:2] == ["auth", "status"]:
+                return {"account": {"account_channel": None}, "token": {"status": "valid"}}
+            if args[:2] == ["order", "buy"]:
+                return {"order_id": "order-1", "status": "submitted"}
+            raise AssertionError(args)
+
+        with patch.object(adapter, "run_json", side_effect=fake_run):
+            result = adapter.submit_limit_order(
+                order_intent(),
+                execute=True,
+            )
+
+        self.assertEqual(result["account_channel"], "lb_papertrading")
+        self.assertEqual(result["broker_order_id"], "order-1")
+
     def test_submit_limit_order_builds_safe_command_and_records_raw_response(self):
         adapter = LongbridgePaperOrderAdapter(cli="/bin/longbridge", paper_execution_config=write_config())
         calls = []
@@ -132,10 +218,10 @@ class LongbridgePaperOrderAdapterTest(unittest.TestCase):
                 "buy",
                 "MU.US",
                 "200",
-                "--price",
-                "100",
                 "--order-type",
                 "LO",
+                "--price",
+                "100",
                 "--tif",
                 "day",
                 "--remark",
@@ -145,6 +231,136 @@ class LongbridgePaperOrderAdapterTest(unittest.TestCase):
                 "-y",
             ],
         )
+
+    def test_submit_order_builds_market_order_without_price(self):
+        adapter = LongbridgePaperOrderAdapter(cli="/bin/longbridge", paper_execution_config=write_config())
+        calls = []
+
+        def fake_run(args):
+            calls.append(args)
+            if args[:2] == ["auth", "status"]:
+                return {"account": {"account_channel": "lb_papertrading"}, "token": {"status": "valid"}}
+            if args[:2] == ["order", "buy"]:
+                return {"order_id": "mo-1", "status": "submitted"}
+            raise AssertionError(args)
+
+        with patch.object(adapter, "run_json", side_effect=fake_run):
+            result = adapter.submit_order(market_order_intent(), execute=True)
+
+        self.assertEqual(result["broker_order_id"], "mo-1")
+        self.assertNotIn("--price", calls[1])
+        self.assertEqual(calls[1][0:5], ["order", "buy", "MU.US", "200", "--order-type"])
+        self.assertEqual(calls[1][5], "MO")
+
+    def test_replace_order_requires_execute_and_config_gate(self):
+        adapter = LongbridgePaperOrderAdapter(cli="/bin/longbridge", paper_execution_config=write_config())
+
+        with self.assertRaises(PermissionError):
+            adapter.replace_order("order-1", quantity=150, limit_price=99.5, execute=False)
+        with self.assertRaises(PermissionError):
+            adapter.replace_order("order-1", quantity=150, limit_price=99.5, execute=True)
+
+    def test_replace_order_builds_safe_command_and_records_response(self):
+        adapter = LongbridgePaperOrderAdapter(
+            cli="/bin/longbridge",
+            paper_execution_config=write_config(allow_order_replace=True),
+        )
+        calls = []
+
+        def fake_run(args):
+            calls.append(args)
+            if args[:2] == ["auth", "status"]:
+                return {"account": {"account_channel": "lb_papertrading"}, "token": {"status": "valid"}}
+            if args[:2] == ["order", "replace"]:
+                return {"order_id": "order-1", "status": "replaced"}
+            raise AssertionError(args)
+
+        with patch.object(adapter, "run_json", side_effect=fake_run):
+            result = adapter.replace_order("order-1", quantity=150, limit_price=99.5, execute=True)
+
+        self.assertEqual(result["broker_order_id"], "order-1")
+        self.assertEqual(
+            calls[1],
+            [
+                "order",
+                "replace",
+                "order-1",
+                "--qty",
+                "150",
+                "--price",
+                "99.5",
+                "--format",
+                "json",
+                "-y",
+            ],
+        )
+        self.assertEqual(result["raw_response"], {"order_id": "order-1", "status": "replaced"})
+
+    def test_replace_order_allows_quantity_only(self):
+        adapter = LongbridgePaperOrderAdapter(
+            cli="/bin/longbridge",
+            paper_execution_config=write_config(allow_order_replace=True),
+        )
+        calls = []
+
+        def fake_run(args):
+            calls.append(args)
+            if args[:2] == ["auth", "status"]:
+                return {"account": {"account_channel": "lb_papertrading"}, "token": {"status": "valid"}}
+            if args[:2] == ["order", "replace"]:
+                return {"order_id": "order-1", "status": "replaced"}
+            raise AssertionError(args)
+
+        with patch.object(adapter, "run_json", side_effect=fake_run):
+            adapter.replace_order("order-1", quantity=100, limit_price=None, execute=True)
+
+        self.assertNotIn("--price", calls[1])
+        self.assertEqual(calls[1][calls[1].index("--qty") + 1], "100")
+
+    def test_submit_order_builds_lit_order_with_price_and_trigger(self):
+        adapter = LongbridgePaperOrderAdapter(cli="/bin/longbridge", paper_execution_config=write_config())
+        calls = []
+
+        def fake_run(args):
+            calls.append(args)
+            if args[:2] == ["auth", "status"]:
+                return {"account": {"account_channel": "lb_papertrading"}, "token": {"status": "valid"}}
+            if args[:2] == ["order", "buy"]:
+                return {"order_id": "lit-1", "status": "submitted"}
+            raise AssertionError(args)
+
+        with patch.object(adapter, "run_json", side_effect=fake_run):
+            result = adapter.submit_order(lit_order_intent(), execute=True)
+
+        self.assertEqual(result["broker_order_id"], "lit-1")
+        self.assertIn("--price", calls[1])
+        self.assertIn("--trigger-price", calls[1])
+        self.assertIn("--outside-rth", calls[1])
+        self.assertEqual(calls[1][calls[1].index("--order-type") + 1], "LIT")
+        self.assertEqual(calls[1][calls[1].index("--price") + 1], "100")
+        self.assertEqual(calls[1][calls[1].index("--trigger-price") + 1], "101")
+        self.assertEqual(calls[1][calls[1].index("--outside-rth") + 1], "RTH_ONLY")
+
+    def test_submit_order_builds_trailing_percent_order(self):
+        adapter = LongbridgePaperOrderAdapter(cli="/bin/longbridge", paper_execution_config=write_config())
+        calls = []
+
+        def fake_run(args):
+            calls.append(args)
+            if args[:2] == ["auth", "status"]:
+                return {"account": {"account_channel": "lb_papertrading"}, "token": {"status": "valid"}}
+            if args[:2] == ["order", "buy"]:
+                return {"order_id": "trail-1", "status": "submitted"}
+            raise AssertionError(args)
+
+        with patch.object(adapter, "run_json", side_effect=fake_run):
+            result = adapter.submit_order(trailing_percent_intent(), execute=True)
+
+        self.assertEqual(result["broker_order_id"], "trail-1")
+        self.assertEqual(calls[1][calls[1].index("--order-type") + 1], "TSLPPCT")
+        self.assertEqual(calls[1][calls[1].index("--trailing-percent") + 1], "2.5")
+        self.assertEqual(calls[1][calls[1].index("--limit-offset") + 1], "0.3")
+        self.assertNotIn("--price", calls[1])
 
     def test_submit_rejects_unsupported_order_shape(self):
         adapter = LongbridgePaperOrderAdapter(cli="/bin/longbridge", paper_execution_config=write_config())
@@ -229,7 +445,7 @@ class LongbridgePaperOrderAdapterTest(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             adapter.submit_protective_stop_order(
-                {**stop_intent(), "order_type": "LO"},
+                {**stop_intent(), "order_type": "BOGUS"},
                 execute=True,
             )
 
@@ -274,6 +490,45 @@ class LongbridgePaperOrderAdapterTest(unittest.TestCase):
             ],
         )
 
+    def test_protective_stop_builds_lit_command(self):
+        adapter = LongbridgePaperOrderAdapter(cli="/bin/longbridge", paper_execution_config=write_config())
+        calls = []
+
+        def fake_run(args):
+            calls.append(args)
+            if args[:2] == ["auth", "status"]:
+                return {"account": {"account_channel": "lb_papertrading"}, "token": {"status": "valid"}}
+            if args[:2] == ["order", "sell"]:
+                return {"order_id": "stop-o-1", "status": "submitted"}
+            raise AssertionError(args)
+
+        with patch.object(adapter, "run_json", side_effect=fake_run):
+            adapter.submit_protective_stop_order(lit_stop_intent(), execute=True)
+
+        self.assertEqual(calls[1][calls[1].index("--order-type") + 1], "LIT")
+        self.assertEqual(calls[1][calls[1].index("--price") + 1], "94.5")
+        self.assertEqual(calls[1][calls[1].index("--trigger-price") + 1], "95")
+
+    def test_protective_stop_builds_trailing_percent_command(self):
+        adapter = LongbridgePaperOrderAdapter(cli="/bin/longbridge", paper_execution_config=write_config())
+        calls = []
+
+        def fake_run(args):
+            calls.append(args)
+            if args[:2] == ["auth", "status"]:
+                return {"account": {"account_channel": "lb_papertrading"}, "token": {"status": "valid"}}
+            if args[:2] == ["order", "sell"]:
+                return {"order_id": "stop-o-1", "status": "submitted"}
+            raise AssertionError(args)
+
+        with patch.object(adapter, "run_json", side_effect=fake_run):
+            adapter.submit_protective_stop_order(trailing_stop_intent(), execute=True)
+
+        self.assertEqual(calls[1][calls[1].index("--order-type") + 1], "TSLPPCT")
+        self.assertEqual(calls[1][calls[1].index("--trailing-percent") + 1], "2.5")
+        self.assertEqual(calls[1][calls[1].index("--limit-offset") + 1], "0.3")
+        self.assertNotIn("--trigger-price", calls[1])
+
     def test_take_profit_requires_execute_flag(self):
         adapter = LongbridgePaperOrderAdapter(cli="/bin/longbridge", paper_execution_config=write_config())
 
@@ -294,7 +549,7 @@ class LongbridgePaperOrderAdapterTest(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             adapter.submit_take_profit_order(
-                {**take_profit_intent(), "order_type": "MIT"},
+                {**take_profit_intent(), "order_type": "BOGUS"},
                 execute=True,
             )
 
@@ -325,10 +580,10 @@ class LongbridgePaperOrderAdapterTest(unittest.TestCase):
                 "sell",
                 "MU.US",
                 "100",
-                "--price",
-                "112",
                 "--order-type",
                 "LO",
+                "--price",
+                "112",
                 "--tif",
                 "gtc",
                 "--remark",
@@ -338,6 +593,45 @@ class LongbridgePaperOrderAdapterTest(unittest.TestCase):
                 "-y",
             ],
         )
+
+    def test_take_profit_builds_mit_command(self):
+        adapter = LongbridgePaperOrderAdapter(cli="/bin/longbridge", paper_execution_config=write_config())
+        calls = []
+
+        def fake_run(args):
+            calls.append(args)
+            if args[:2] == ["auth", "status"]:
+                return {"account": {"account_channel": "lb_papertrading"}, "token": {"status": "valid"}}
+            if args[:2] == ["order", "sell"]:
+                return {"order_id": "tp-o-1", "status": "submitted"}
+            raise AssertionError(args)
+
+        with patch.object(adapter, "run_json", side_effect=fake_run):
+            adapter.submit_take_profit_order(mit_take_profit_intent(), execute=True)
+
+        self.assertEqual(calls[1][calls[1].index("--order-type") + 1], "MIT")
+        self.assertEqual(calls[1][calls[1].index("--trigger-price") + 1], "112")
+        self.assertNotIn("--price", calls[1])
+
+    def test_take_profit_builds_trailing_percent_command(self):
+        adapter = LongbridgePaperOrderAdapter(cli="/bin/longbridge", paper_execution_config=write_config())
+        calls = []
+
+        def fake_run(args):
+            calls.append(args)
+            if args[:2] == ["auth", "status"]:
+                return {"account": {"account_channel": "lb_papertrading"}, "token": {"status": "valid"}}
+            if args[:2] == ["order", "sell"]:
+                return {"order_id": "tp-o-1", "status": "submitted"}
+            raise AssertionError(args)
+
+        with patch.object(adapter, "run_json", side_effect=fake_run):
+            adapter.submit_take_profit_order(trailing_take_profit_intent(), execute=True)
+
+        self.assertEqual(calls[1][calls[1].index("--order-type") + 1], "TSLPPCT")
+        self.assertEqual(calls[1][calls[1].index("--trailing-percent") + 1], "2.5")
+        self.assertEqual(calls[1][calls[1].index("--limit-offset") + 1], "0.3")
+        self.assertNotIn("--price", calls[1])
 
 
 if __name__ == "__main__":

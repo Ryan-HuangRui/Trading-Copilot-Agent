@@ -3,6 +3,7 @@
 ## Scope and layout
 - `daily_analysis_prompt.md`: daily report contract for context-driven pre-market analysis.
 - `post_market_analysis_prompt.md`: post-market review contract for context-driven close analysis.
+- `intraday_opportunity_prompt.md`: Codex-reviewed monitor opportunity contract for writing `monitor-signals.json` from `intraday-opportunity-context.json`.
 - Legacy OpenClaw/general coaching prompts live under `docs/legacy-prompts/` and are not loaded by Codex App automation.
 
 ## Conventions
@@ -14,6 +15,8 @@
 - Pre-market analysis should read `report/<DATE>/pre-market-context.json`, which references the previous trading day's `daily-snapshot.json`.
 - Post-market analysis should read `report/<SNAPSHOT_DATE>/daily-snapshot.json` directly.
 - Every executable candidate needs setup file, trigger, invalidation, and risk constraint.
+- For monitor-session opportunities, read `report/<DATE>/intraday-opportunity-context.json` first. `observation_scans` / `sidecar_template.signals` are the all-symbol decision inputs and include multi-timeframe `price_evidence`; deterministic `candidate_scans` are evidence only. Only the Codex review prompt may write a `conditional_executable` monitor Trade Plan Card.
+- After writing monitor-session `monitor-signals.json`, run `intraday-decision-coverage` before trade-plan validation so every observation symbol has an explicit Codex decision.
 - Use `NO TRADE` when regime is unclear, Barb Wire/Tight Trading Range, data is insufficient, or global rules fail.
 - For scheduled pre/post-market analysis, run the trading-day guard first and stop on non-trading days.
 

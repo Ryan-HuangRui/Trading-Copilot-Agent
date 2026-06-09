@@ -12,6 +12,7 @@
 - `docs/`：Codex App automation 与人工操作 runbook
 - `config/`：watchlist 与策略参数
 - `.codex/skills/trading-copilot/`：repo-local skill 入口，供 Codex/Claude/OpenClaw 类 agent 识别本仓库能力
+- `.codex/skills/intraday-tracker/`：盘中只读追踪 skill，供 Codex 定时任务记录盘前计划状态变化
 
 ## 快速开始
 
@@ -55,6 +56,8 @@ python3 script/trading_copilot.py pre-market-plan --watchlist config/watchlist.j
 python3 script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day --include-journal-signals --include-position-symbols
 python3 script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day --include-journal-signals --include-position-symbols --include-agent-research
 python3 script/trading_copilot.py monitor-brief --state config/monitor_state.json --interval 5min
+python3 script/trading_copilot.py intraday-tracker --date <DATE> --top-n 5
+python3 script/trading_copilot.py intraday-dry-run --date <DATE>
 python3 script/trading_copilot.py agent-research-context --date <DATE> --symbol <SYMBOL>
 python3 script/trading_copilot.py agent-research-reports --date <DATE> --symbol <SYMBOL>
 python3 script/trading_copilot.py validate-agent-reports --date <DATE> --symbol <SYMBOL>
@@ -84,6 +87,8 @@ python3 script/trading_copilot.py paper-trade-preview --date <DATE> --session mo
 python3 script/trading_copilot.py paper-trade-submit --date <DATE> --session pre-market --require-validation
 python3 script/trading_copilot.py paper-trade-submit --date <DATE> --session pre-market --require-validation --execute
 python3 script/trading_copilot.py paper-trade-submit --date <DATE> --session monitor --require-validation
+python3 script/trading_copilot.py intraday-paper-entry --date <DATE> --require-validation
+python3 script/trading_copilot.py intraday-paper-entry --date <DATE> --require-validation --execute
 python3 script/trading_copilot.py paper-order-sync --date <DATE>
 python3 script/trading_copilot.py paper-event-ledger --date <DATE>
 python3 script/trading_copilot.py paper-execution-review --date <DATE>
@@ -238,7 +243,7 @@ Memory 只能降低置信度、增加限制或触发人工 review，不能提高
 - 模拟盘演进路线见 `docs/paper-execution-roadmap.md`：当前优先强化执行状态和 broker capability matrix，后续再接入新闻/财报情绪、盘中 dry-run 候选和 OCO/高级订单。
 - 模拟盘接入当前支持快照、订单预览、受控提交、订单同步、保护/退出计划和复盘：
   - 配置：`config/paper_execution.json` 默认关闭所有 broker 写入；部署时可用 ignored 的 `config/paper_execution.local.json` 并通过 `--paper-execution-config` 指定，执行入场需同时设置 `paper_execution.broker_writes_enabled=true` 与 `paper_execution.allow_entry_submit=true`
-  - `paper_execution.allow_intraday_entry_submit` 当前只是预留门禁；monitor session 的 `--execute` 仍然硬禁用
+  - `paper_execution.allow_intraday_entry_submit` 是独立的盘中模拟盘入场门禁；普通 `paper-trade-submit --session monitor --execute` 仍然硬禁用，必须通过 `intraday-paper-entry --execute` 才能进入该门禁
   - `python3 script/trading_copilot.py paper-account-snapshot --date YYYY-MM-DD`
   - `python3 script/trading_copilot.py paper-trade-preview --date YYYY-MM-DD --session pre-market --require-validation`
   - `python3 script/trading_copilot.py paper-trade-submit --date YYYY-MM-DD --session pre-market --require-validation`
@@ -265,17 +270,38 @@ Memory 只能降低置信度、增加限制或触发人工 review，不能提高
 - 持仓：输出 R 值与风险动作（减仓/止损上移/退出）
 - 执行脚本：`python3 script/monitor_scan.py --state config/monitor_state.json --interval 5min`
 - 输出文件：`report/latest-monitor.json`
+- Phase 1 盘中计划追踪：
+  ```bash
+  python3 script/trading_copilot.py intraday-tracker --date YYYY-MM-DD --top-n 5
+  ```
+- `intraday-tracker` 读取盘前 `pre-market-signals.json` 的 topN、可选 `config/intraday_watchlist.json` 人工观察列表、上一轮 `report/<DATE>/intraday.md` 和结构化 state。
+- `intraday-tracker` 追加 `report/<DATE>/intraday.md`，更新 `runtime/intraday/<DATE>/state.json`，仅在重要状态变化时追加 `runtime/intraday/<DATE>/events.jsonl`。
+- `events.jsonl` 是 cc connect 或其他通知层的候选输入，不是执行指令。
+- 主动飞书通知：
+  ```bash
+  TCA_INTRADAY_SKIP_MONITOR=1 bash ops/cc-connect/tca-intraday-notify.sh YYYY-MM-DD
+  # 生产轮询时去掉 TCA_INTRADAY_SKIP_MONITOR=1，让脚本先跑 monitor-brief 再跑 intraday-tracker
+  ```
+- `tca-intraday-notify.sh` 只会发送尚未发送过的 `notify=true` 事件，并把已发送事件记录到 `runtime/intraday/<DATE>/sent-events.json`。
 - 可选生成 monitor sidecar：`python3 script/trading_copilot.py extract-monitor-signals --date YYYY-MM-DD`
 - 可选写入 journal：`python3 script/trading_copilot.py extract-monitor-signals --append`
 - monitor scan 原生输出 setup/risk_quality/journal_appendable；journal 记录仍只是观察，不是执行指令
 - monitor dry-run 闭环：
   ```bash
+  python3 script/trading_copilot.py intraday-dry-run --date YYYY-MM-DD
+  # 等价拆解如下：
   python3 script/trading_copilot.py validate-trade-plan --session monitor --date YYYY-MM-DD
   python3 script/trading_copilot.py paper-trade-preview --date YYYY-MM-DD --session monitor --require-validation
   python3 script/trading_copilot.py paper-trade-submit --date YYYY-MM-DD --session monitor --require-validation
   python3 script/trading_copilot.py feishu-summary --session monitor --date YYYY-MM-DD
   ```
 - `paper-trade-submit --session monitor --execute` 会被硬拒绝；盘中候选目前只支持 dry-run 和人工观察。
+- Phase 3 独立模拟盘盘中入场：
+  ```bash
+  python3 script/trading_copilot.py intraday-paper-entry --date YYYY-MM-DD --require-validation
+  python3 script/trading_copilot.py intraday-paper-entry --date YYYY-MM-DD --require-validation --execute --paper-execution-config config/paper_execution.local.json
+  ```
+- `intraday-paper-entry --execute` 只面向 `lb_papertrading`，且要求 `broker_writes_enabled=true` 和 `allow_intraday_entry_submit=true`；不要用它替代普通 monitor dry-run。
 
 ## cc connect 定时任务
 
@@ -287,6 +313,7 @@ Memory 只能降低置信度、增加限制或触发人工 review，不能提高
 - **盘后复盘**：`post-market-review` → Agent 生成 `post-market.md` / `post-market-signals.json` → `validate-report` → `validate-trade-plan` → outcome backfill → journal append → position review → `plan-review` / `learning-review` / `daily-self-review` → `data-quality` → `feishu-summary`
 - **可选 Agent Research 增强**：把盘前/盘后的准备命令替换为带 `--include-agent-research` 的 wrapper 命令，cc connect 需要把 `validate-agent-reports` / `validate-agent-decision` 失败作为阻断状态展示。
 - **Monitor dry-run**：`monitor-brief` → `extract-monitor-signals --date <DATE>` → `validate-trade-plan --session monitor` → `paper-trade-preview --session monitor` → `paper-trade-submit --session monitor` → `feishu-summary --session monitor`
+- **盘中模拟盘入场**：必须是单独 Codex 任务，只能在 monitor dry-run 已验收、`config/paper_execution.local.json` 明确开启 `broker_writes_enabled=true` 和 `allow_intraday_entry_submit=true` 后，使用 `intraday-paper-entry --execute`。
 - **模拟盘入场执行**：必须是单独任务，只能在 dry-run 已验收、`config/paper_execution.local.json` 明确开启 `broker_writes_enabled=true` 和 `allow_entry_submit=true` 后，对 `pre-market` 使用 `paper-trade-submit --execute`。
 
 cc connect 禁止事项：
