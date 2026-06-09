@@ -292,6 +292,37 @@ class TradingCopilotWrapperTest(unittest.TestCase):
         self.assertEqual(payload["submit_summary"], {"ready": 1})
         self.assertEqual(payload["artifacts"][-1], "report/2026-05-26/monitor-feishu-summary.md")
 
+    def test_intraday_decision_coverage_wraps_validator(self):
+        calls = []
+
+        def fake_run_child(command):
+            calls.append(command)
+            payload = {
+                "status": "pass",
+                "date": "2026-05-26",
+                "summary": {"required_symbols": 2, "covered_symbols": 2},
+            }
+            return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
+
+        args = Namespace(
+            date="2026-05-26",
+            context="report/2026-05-26/intraday-opportunity-context.json",
+            signals="report/2026-05-26/monitor-signals.json",
+        )
+
+        with patch.object(trading_copilot, "run_child", side_effect=fake_run_child), patch.object(
+            trading_copilot, "emit", side_effect=SystemExit
+        ) as emit:
+            with self.assertRaises(SystemExit):
+                trading_copilot.run_intraday_decision_coverage(args)
+
+        self.assertEqual(calls[0][0], "script/validate_intraday_decision_coverage.py")
+        self.assertEqual(calls[0][calls[0].index("--context") + 1], "report/2026-05-26/intraday-opportunity-context.json")
+        self.assertEqual(calls[0][calls[0].index("--signals") + 1], "report/2026-05-26/monitor-signals.json")
+        payload = emit.call_args.args[0]
+        self.assertEqual(payload["workflow"], "intraday-decision-coverage")
+        self.assertEqual(payload["summary"]["covered_symbols"], 2)
+
     def test_intraday_review_append_wraps_markdown_appender(self):
         calls = []
 

@@ -444,6 +444,7 @@ python3 script/trading_copilot.py intraday-opportunity-context --date <DATE>
 # Codex reads observation_scans / sidecar_template.signals for the full observation universe,
 # including latest_bar / recent_bars price evidence,
 # and writes reviewed report/<DATE>/monitor-signals.json from the opportunity context.
+python3 script/trading_copilot.py intraday-decision-coverage --date <DATE> --context report/<DATE>/intraday-opportunity-context.json --signals report/<DATE>/monitor-signals.json
 python3 script/trading_copilot.py validate-trade-plan --session monitor --date <DATE> --signals report/<DATE>/monitor-signals.json
 python3 script/trading_copilot.py paper-account-snapshot --date <DATE> --paper-execution-config config/paper_execution.local.json
 python3 script/trading_copilot.py intraday-dry-run --date <DATE> --signals report/<DATE>/monitor-signals.json

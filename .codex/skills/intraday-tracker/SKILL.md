@@ -51,6 +51,7 @@ bash ops/cc-connect/tca-intraday-notify.sh <DATE>
 ## Phase 2 Dry-Run Command
 
 ```bash
+python3 script/trading_copilot.py intraday-decision-coverage --date <DATE> --context report/<DATE>/intraday-opportunity-context.json --signals report/<DATE>/monitor-signals.json
 python3 script/trading_copilot.py intraday-dry-run --date <DATE>
 python3 script/trading_copilot.py intraday-review-append --date <DATE>
 ```

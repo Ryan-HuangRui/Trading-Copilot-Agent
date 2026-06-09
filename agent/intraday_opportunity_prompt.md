@@ -48,10 +48,11 @@
 写出 sidecar 后必须运行：
 
 ```bash
+python3 script/trading_copilot.py intraday-decision-coverage --date <DATE> --context report/<DATE>/intraday-opportunity-context.json --signals report/<DATE>/monitor-signals.json
 python3 script/trading_copilot.py validate-trade-plan --session monitor --date <DATE> --signals report/<DATE>/monitor-signals.json
 ```
 
-通过后才允许进入：
+两项验证都通过后才允许进入：
 
 ```bash
 python3 script/trading_copilot.py intraday-dry-run --date <DATE> --signals report/<DATE>/monitor-signals.json

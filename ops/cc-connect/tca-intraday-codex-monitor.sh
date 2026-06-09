@@ -120,6 +120,7 @@ PROMPT="你是 Trading-Copilot-Agent 的 cc-connect 盘中 Codex 盯盘定时任
 - 如果没有高质量条件化机会，逐标的保持 watch_only/no_trade，并运行 dry-run 或说明没有 ready 订单。
 - 若要升级为 conditional_executable，必须由你基于全观察池 context、knowledge/refined 和完整 Trade Plan Card 主观判断；不得由 extract-monitor-signals 或 monitor_scan 自动升级。
 - 写出 report/$DATE/monitor-signals.json 后，必须随后运行：
+  python3 script/trading_copilot.py intraday-decision-coverage --date $DATE --context report/$DATE/intraday-opportunity-context.json --signals report/$DATE/monitor-signals.json
   python3 script/trading_copilot.py validate-trade-plan --session monitor --date $DATE --signals report/$DATE/monitor-signals.json
   python3 script/trading_copilot.py paper-account-snapshot --date $DATE --paper-execution-config $PAPER_CONFIG
   python3 script/trading_copilot.py intraday-dry-run --date $DATE --signals report/$DATE/monitor-signals.json

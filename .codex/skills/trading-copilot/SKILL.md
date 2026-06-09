@@ -132,11 +132,12 @@ Use this for Phase 2 Codex-reviewed intraday decisions before any paper executio
 1. For LLM-reviewed opportunities, first run `python3 script/trading_copilot.py intraday-opportunity-context --date <DATE>` and read `report/<DATE>/intraday-opportunity-context.json`.
 2. Treat `observation_scans` and `sidecar_template.signals` as the primary all-symbol decision input. `observation_scans` include `latest_bar` / `recent_bars` price evidence. `candidate_scans` are deterministic highlights only and must not limit Codex opportunity discovery.
 3. Codex may write `report/<DATE>/monitor-signals.json` from the context. Keep symbols `watch_only`/`no_trade` unless a complete Trade Plan Card independently satisfies `knowledge/refined/`, risk, invalidation, and RR >= 2.
-4. Run `python3 script/trading_copilot.py intraday-dry-run --date <DATE> --signals report/<DATE>/monitor-signals.json`.
-5. If no LLM-reviewed sidecar is available, run `python3 script/trading_copilot.py intraday-dry-run --date <DATE>` to generate watch-only monitor candidates from deterministic extraction.
-6. Run `python3 script/trading_copilot.py intraday-review-append --date <DATE> --signals report/<DATE>/monitor-signals.json --submission report/<DATE>/paper-trade-submission.json --context report/<DATE>/intraday-opportunity-context.json` to append the Codex review, input scope, and dry-run counts into `report/<DATE>/intraday.md`.
-7. Confirm `paper_trade_preview.py` and `paper_trade_submit.py` ran for `session=monitor` without `--execute`.
-8. Read the Feishu summary artifact for candidate, blocked, and skipped counts.
+4. Run `python3 script/trading_copilot.py intraday-decision-coverage --date <DATE> --context report/<DATE>/intraday-opportunity-context.json --signals report/<DATE>/monitor-signals.json` to verify Codex wrote one decision per observation symbol.
+5. Run `python3 script/trading_copilot.py intraday-dry-run --date <DATE> --signals report/<DATE>/monitor-signals.json`.
+6. If no LLM-reviewed sidecar is available, run `python3 script/trading_copilot.py intraday-dry-run --date <DATE>` to generate watch-only monitor candidates from deterministic extraction.
+7. Run `python3 script/trading_copilot.py intraday-review-append --date <DATE> --signals report/<DATE>/monitor-signals.json --submission report/<DATE>/paper-trade-submission.json --context report/<DATE>/intraday-opportunity-context.json` to append the Codex review, input scope, and dry-run counts into `report/<DATE>/intraday.md`.
+8. Confirm `paper_trade_preview.py` and `paper_trade_submit.py` ran for `session=monitor` without `--execute`.
+9. Read the Feishu summary artifact for candidate, blocked, and skipped counts.
 
 This workflow must not submit broker orders.
 

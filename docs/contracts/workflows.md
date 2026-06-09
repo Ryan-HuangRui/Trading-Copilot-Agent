@@ -196,6 +196,7 @@ Canonical command:
 
 ```bash
 python3 script/trading_copilot.py intraday-dry-run --date <DATE>
+python3 script/trading_copilot.py intraday-decision-coverage --date <DATE> --context report/<DATE>/intraday-opportunity-context.json --signals report/<DATE>/monitor-signals.json
 python3 script/trading_copilot.py intraday-dry-run --date <DATE> --signals report/<DATE>/monitor-signals.json
 python3 script/trading_copilot.py intraday-review-append --date <DATE> --signals report/<DATE>/monitor-signals.json --submission report/<DATE>/paper-trade-submission.json --context report/<DATE>/intraday-opportunity-context.json
 ```
@@ -216,9 +217,26 @@ Required behavior:
 - `paper_trade_submit.py` remains dry-run for monitor session.
 - A `conditional_executable` monitor sidecar must come from Codex/LLM review of `intraday-opportunity-context`; deterministic extraction must keep `watch_only`.
 - Codex must treat `observation_scans` / `sidecar_template.signals` as the all-symbol decision input. Deterministic `candidate_scans` are highlights only and must not restrict LLM opportunity discovery.
+- A Codex-reviewed sidecar must pass `intraday-decision-coverage` before trade-plan validation or dry-run so every observation symbol has an explicit `watch_only`, `no_trade`, or `conditional_executable` decision.
 - After a Codex-reviewed sidecar exists, the daily intraday Markdown should include the review summary so each poll preserves why candidates stayed `watch_only`, became `no_trade`, or became `conditional_executable`.
 - Output artifacts are review and notification inputs only.
 - This workflow must not submit broker orders.
+
+## intraday-decision-coverage
+
+Purpose: verify that a Codex-reviewed monitor sidecar contains one explicit decision for every symbol in `intraday-opportunity-context`'s `sidecar_template.signals`.
+
+Canonical command:
+
+```bash
+python3 script/trading_copilot.py intraday-decision-coverage --date <DATE> --context report/<DATE>/intraday-opportunity-context.json --signals report/<DATE>/monitor-signals.json
+```
+
+Required behavior:
+
+- The validator must fail when any observation symbol is missing from `monitor-signals.json`.
+- The validator does not judge trade quality, RR, setup validity, or broker readiness; those remain `validate-trade-plan`, `paper_trade_preview`, and risk guard responsibilities.
+- This workflow must not submit, cancel, replace, or recover broker orders.
 
 ## intraday-opportunity-context
 

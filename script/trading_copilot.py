@@ -776,6 +776,8 @@ def run_intraday_opportunity_context(args: argparse.Namespace) -> None:
         args.monitor,
         "--max-candidates",
         str(args.max_candidates),
+        "--max-observations",
+        str(args.max_observations),
         "--markdown-chars",
         str(args.markdown_chars),
     ]
@@ -801,6 +803,28 @@ def run_intraday_opportunity_context(args: argparse.Namespace) -> None:
     response["artifacts"] = [artifact for artifact in [(stdout or {}).get("output")] if artifact]
     response["signals_output"] = (stdout or {}).get("signals_output")
     response["summary"] = (stdout or {}).get("summary", {})
+    emit(response)
+
+
+def run_intraday_decision_coverage(args: argparse.Namespace) -> None:
+    command = [
+        "script/validate_intraday_decision_coverage.py",
+        "--date",
+        args.date,
+    ]
+    if args.context:
+        command.extend(["--context", args.context])
+    if args.signals:
+        command.extend(["--signals", args.signals])
+
+    proc = run_child(command)
+    stdout = parse_json_output(proc.stdout)
+    if proc.returncode != 0:
+        emit(failed_response("intraday-decision-coverage", command, proc), 1)
+    response = base_response("intraday-decision-coverage", command, stdout)
+    response["date"] = (stdout or {}).get("date") or args.date
+    response["summary"] = (stdout or {}).get("summary", {})
+    response["missing_symbols"] = (stdout or {}).get("missing_symbols", [])
     emit(response)
 
 
@@ -3487,8 +3511,15 @@ def build_parser() -> argparse.ArgumentParser:
     intraday_context.add_argument("--output")
     intraday_context.add_argument("--signals-output")
     intraday_context.add_argument("--max-candidates", type=int, default=3)
+    intraday_context.add_argument("--max-observations", type=int, default=30)
     intraday_context.add_argument("--markdown-chars", type=int, default=6000)
     intraday_context.set_defaults(func=run_intraday_opportunity_context)
+
+    intraday_coverage = sub.add_parser("intraday-decision-coverage", help="Validate monitor sidecar covers the intraday observation universe")
+    intraday_coverage.add_argument("--date", required=True)
+    intraday_coverage.add_argument("--context")
+    intraday_coverage.add_argument("--signals")
+    intraday_coverage.set_defaults(func=run_intraday_decision_coverage)
 
     intraday_entry = sub.add_parser("intraday-paper-entry", help="Run standalone gated intraday paper entry")
     intraday_entry.add_argument("--date", required=True)

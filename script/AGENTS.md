@@ -11,6 +11,7 @@
 - `monitor_scan.py`: 5m watchlist/position scan and `report/latest-monitor.json` writer.
 - `intraday_tracker.py`: read-only pre-market plan tracker that appends `report/<DATE>/intraday.md` and updates `runtime/intraday/<DATE>/state.json` / `events.jsonl`.
 - `intraday_event_notify.py`: builds a Feishu-ready message from unsent intraday tracker events and records sent event ids.
+- `validate_intraday_decision_coverage.py`: verifies a Codex-reviewed monitor sidecar has one explicit decision per `intraday-opportunity-context` observation symbol; it must not judge trade quality or call broker APIs.
 - `intraday_review_append.py`: appends Codex-reviewed monitor sidecar decisions and dry-run counts into `report/<DATE>/intraday.md`; it must not call broker APIs.
 - `longbridge_cli_adapter.py`: read-only Longbridge CLI guard. Do not add order/write commands.
 - `longbridge_account_snapshot.py`: read-only account/position snapshot writer under `runtime/account/`.
