@@ -184,6 +184,7 @@ def observation_record(
         "price_data_interval": scan.get("price_data_interval"),
         "latest_bar": scan.get("latest_bar") if isinstance(scan.get("latest_bar"), dict) else None,
         "recent_bars": scan.get("recent_bars") if isinstance(scan.get("recent_bars"), list) else [],
+        "price_evidence": scan.get("price_evidence") if isinstance(scan.get("price_evidence"), dict) else {},
         "trigger_detail": scan.get("trigger_detail") if isinstance(scan.get("trigger_detail"), dict) else None,
         "invalidation_detail": scan.get("invalidation_detail") if isinstance(scan.get("invalidation_detail"), dict) else None,
         "premarket_plan": premarket.get(symbol),

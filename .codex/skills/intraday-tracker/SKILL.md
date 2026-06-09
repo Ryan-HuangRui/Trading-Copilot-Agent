@@ -58,7 +58,7 @@ python3 script/trading_copilot.py intraday-review-append --date <DATE>
 
 This validates Codex-reviewed monitor decisions, builds paper previews, prepares a paper submit dry-run, and writes a Feishu-ready monitor summary. It must not pass `--execute`.
 
-Before Codex writes `report/<DATE>/monitor-signals.json`, build `report/<DATE>/intraday-opportunity-context.json` and use `observation_scans` / `sidecar_template.signals` as the all-symbol decision input. `observation_scans` include latest/recent bar evidence. `candidate_scans` are deterministic highlights only.
+Before Codex writes `report/<DATE>/monitor-signals.json`, build `report/<DATE>/intraday-opportunity-context.json` and use `observation_scans` / `sidecar_template.signals` as the all-symbol decision input. `observation_scans` include multi-timeframe `price_evidence` by default: 5m up to 78 bars, 15m 40 bars, daily 60 bars, key levels, and derived distances. `candidate_scans` are deterministic highlights only.
 
 After Codex writes or reviews `report/<DATE>/monitor-signals.json`, append the review summary into `report/<DATE>/intraday.md` with `intraday-review-append` so the daily intraday report includes state tracking, the all-symbol input scope, and the reason symbols stayed `watch_only`, became `no_trade`, or became `conditional_executable`.
 

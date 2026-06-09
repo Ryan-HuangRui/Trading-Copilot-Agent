@@ -263,7 +263,7 @@ Output:
 
 Required behavior:
 
-- The artifact must include `observation_scans` for every monitor scan selected for LLM review, including `latest_bar` / `recent_bars` price evidence, plus `candidate_scans` for deterministic highlights, matching pre-market plans, intraday state, paper state summary, refined setup file names, and a `sidecar_template`.
+- The artifact must include `observation_scans` for every monitor scan selected for LLM review, including multi-timeframe `price_evidence` by default: 5m up to 78 bars, 15m 40 bars, daily 60 bars, key levels, and derived distances. It must also include `candidate_scans` for deterministic highlights, matching pre-market plans, intraday state, paper state summary, refined setup file names, and a `sidecar_template`.
 - `sidecar_template.signals` must cover the full `observation_scans` universe and default to `plan_type=watch_only` and `execution_status=watch_only`.
 - `candidate_scans` must not be used as a pre-filter for Codex decisions; it is supporting evidence only.
 - Only Codex/LLM review may raise a signal to `plan_type=trade_plan` and `execution_status=conditional_executable`; validation still requires the complete Trade Plan Card and RR >= 2.

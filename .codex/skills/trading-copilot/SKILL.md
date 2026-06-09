@@ -130,7 +130,7 @@ The tracker reads `report/<DATE>/pre-market-signals.json`, optional `config/intr
 Use this for Phase 2 Codex-reviewed intraday decisions before any paper execution.
 
 1. For LLM-reviewed opportunities, first run `python3 script/trading_copilot.py intraday-opportunity-context --date <DATE>` and read `report/<DATE>/intraday-opportunity-context.json`.
-2. Treat `observation_scans` and `sidecar_template.signals` as the primary all-symbol decision input. `observation_scans` include `latest_bar` / `recent_bars` price evidence. `candidate_scans` are deterministic highlights only and must not limit Codex opportunity discovery.
+2. Treat `observation_scans` and `sidecar_template.signals` as the primary all-symbol decision input. `observation_scans` include `price_evidence` with 5m up to 78 bars, 15m 40 bars, daily 60 bars, key levels, and derived distances. `candidate_scans` are deterministic highlights only and must not limit Codex opportunity discovery.
 3. Codex may write `report/<DATE>/monitor-signals.json` from the context. Keep symbols `watch_only`/`no_trade` unless a complete Trade Plan Card independently satisfies `knowledge/refined/`, risk, invalidation, and RR >= 2.
 4. Run `python3 script/trading_copilot.py intraday-decision-coverage --date <DATE> --context report/<DATE>/intraday-opportunity-context.json --signals report/<DATE>/monitor-signals.json` to verify Codex wrote one decision per observation symbol.
 5. Run `python3 script/trading_copilot.py intraday-dry-run --date <DATE> --signals report/<DATE>/monitor-signals.json`.

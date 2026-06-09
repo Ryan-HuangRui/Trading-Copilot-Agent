@@ -67,16 +67,122 @@ def ema(values: List[float], period: int) -> Optional[float]:
     return e
 
 
-def price_context_fields(bars: List[Dict], *, limit: int = 20) -> Dict:
-    recent = bars[-limit:]
+def limited_bars(bars: List[Dict], limit: int) -> List[Dict]:
+    return [dict(bar) for bar in bars[-limit:]]
+
+
+def bar_value(bar: Dict | None, key: str) -> Optional[float]:
+    if not isinstance(bar, dict):
+        return None
+    try:
+        return float(bar.get(key))
+    except (TypeError, ValueError):
+        return None
+
+
+def vwap(bars: List[Dict]) -> Optional[float]:
+    total_volume = 0.0
+    total_turnover = 0.0
+    for bar in bars:
+        volume = bar_value(bar, "volume")
+        high = bar_value(bar, "high")
+        low = bar_value(bar, "low")
+        close = bar_value(bar, "close")
+        if not volume or high is None or low is None or close is None:
+            continue
+        typical = (high + low + close) / 3
+        total_turnover += typical * volume
+        total_volume += volume
+    if total_volume <= 0:
+        return None
+    return round(total_turnover / total_volume, 4)
+
+
+def pct_change(current: Optional[float], reference: Optional[float]) -> Optional[float]:
+    if current is None or reference in {None, 0}:
+        return None
+    return round((current - float(reference)) / float(reference) * 100, 4)
+
+
+def max_present(values: List[Optional[float]]) -> Optional[float]:
+    present = [value for value in values if value is not None]
+    return max(present) if present else None
+
+
+def min_present(values: List[Optional[float]]) -> Optional[float]:
+    present = [value for value in values if value is not None]
+    return min(present) if present else None
+
+
+def price_evidence_fields(
+    bars: List[Dict],
+    *,
+    supplemental_bars: Dict[str, List[Dict]] | None = None,
+    supplemental_errors: Dict[str, str] | None = None,
+    primary_interval: str = "5min",
+) -> Dict:
+    supplemental_bars = supplemental_bars or {}
+    supplemental_errors = supplemental_errors or {}
+    daily = supplemental_bars.get("1day", [])
+    latest = bars[-1] if bars else {}
+    latest_close = bar_value(latest, "close")
+    previous_day = daily[-2] if len(daily) >= 2 else (daily[-1] if daily else None)
+    previous_day_close = bar_value(previous_day, "close")
+    key_levels = {
+        "previous_day_high": bar_value(previous_day, "high"),
+        "previous_day_low": bar_value(previous_day, "low"),
+        "previous_day_close": previous_day_close,
+        "intraday_high": max_present([bar_value(bar, "high") for bar in bars]),
+        "intraday_low": min_present([bar_value(bar, "low") for bar in bars]),
+        "vwap": vwap(bars),
+    }
+    distances = {
+        "gap_pct_vs_previous_close": pct_change(latest_close, previous_day_close),
+        "distance_to_vwap_pct": pct_change(latest_close, key_levels["vwap"]),
+    }
     return {
         "price_data_interval": "scan_interval",
-        "latest_bar": dict(bars[-1]),
-        "recent_bars": [dict(bar) for bar in recent],
+        "latest_bar": dict(latest),
+        "recent_bars": limited_bars(bars, 20),
+        "price_evidence": {
+            "primary_interval": primary_interval,
+            "bars": {
+                primary_interval: limited_bars(bars, 78),
+                "15min": limited_bars(supplemental_bars.get("15min", []), 40),
+                "1day": limited_bars(daily, 60),
+            },
+            "key_levels": key_levels,
+            "derived": distances,
+            "errors": supplemental_errors,
+        },
     }
 
 
-def analyze_long_signal(symbol: str, bars: List[Dict]) -> Dict:
+def price_context_fields(
+    bars: List[Dict],
+    *,
+    limit: int = 20,
+    supplemental_bars: Dict[str, List[Dict]] | None = None,
+    supplemental_errors: Dict[str, str] | None = None,
+    primary_interval: str = "5min",
+) -> Dict:
+    fields = price_evidence_fields(
+        bars,
+        supplemental_bars=supplemental_bars,
+        supplemental_errors=supplemental_errors,
+        primary_interval=primary_interval,
+    )
+    fields["recent_bars"] = limited_bars(bars, limit)
+    return fields
+
+
+def analyze_long_signal(
+    symbol: str,
+    bars: List[Dict],
+    supplemental_bars: Dict[str, List[Dict]] | None = None,
+    supplemental_errors: Dict[str, str] | None = None,
+    primary_interval: str = "5min",
+) -> Dict:
     closes = [b["close"] for b in bars]
     highs = [b["high"] for b in bars]
     lows = [b["low"] for b in bars]
@@ -120,7 +226,12 @@ def analyze_long_signal(symbol: str, bars: List[Dict]) -> Dict:
             "risk_quality": "acceptable" if risk > 0 else "invalid",
             "journal_appendable": risk > 0,
             "bar_timestamp": bars[-1].get("dt"),
-            **price_context_fields(bars),
+            **price_context_fields(
+                bars,
+                supplemental_bars=supplemental_bars,
+                supplemental_errors=supplemental_errors,
+                primary_interval=primary_interval,
+            ),
         }
 
     near = c >= prev20_high * 0.997
@@ -148,7 +259,12 @@ def analyze_long_signal(symbol: str, bars: List[Dict]) -> Dict:
             "risk_quality": "watch_only",
             "journal_appendable": True,
             "bar_timestamp": bars[-1].get("dt"),
-            **price_context_fields(bars),
+            **price_context_fields(
+                bars,
+                supplemental_bars=supplemental_bars,
+                supplemental_errors=supplemental_errors,
+                primary_interval=primary_interval,
+            ),
         }
 
     return {
@@ -166,7 +282,12 @@ def analyze_long_signal(symbol: str, bars: List[Dict]) -> Dict:
         "risk_quality": "insufficient_setup",
         "journal_appendable": False,
         "bar_timestamp": bars[-1].get("dt"),
-        **price_context_fields(bars),
+        **price_context_fields(
+            bars,
+            supplemental_bars=supplemental_bars,
+            supplemental_errors=supplemental_errors,
+            primary_interval=primary_interval,
+        ),
     }
 
 
@@ -189,6 +310,14 @@ def analyze_position(pos: Position, last_price: float) -> Dict:
         "action": action,
         "stop": pos.stop,
     }
+
+
+def fetch_optional_bars(client, symbol: str, *, interval: str, outputsize: int) -> tuple[List[Dict], Optional[str]]:
+    try:
+        data = client.time_series(symbol, interval=interval, outputsize=outputsize)
+        return parse_series(data.get("values", [])), None
+    except Exception as exc:
+        return [], str(exc)
 
 
 def main():
@@ -223,15 +352,34 @@ def main():
     for s in symbols:
         d = client.time_series(s, interval=args.interval, outputsize=120)
         bars = parse_series(d.get("values", []))
+        supplemental_bars: Dict[str, List[Dict]] = {}
+        supplemental_errors: Dict[str, str] = {}
+        for extra_interval, outputsize in (("15min", 40), ("1day", 60)):
+            extra_bars, extra_error = fetch_optional_bars(client, s, interval=extra_interval, outputsize=outputsize)
+            supplemental_bars[extra_interval] = extra_bars
+            if extra_error:
+                supplemental_errors[extra_interval] = extra_error
         if len(bars) < 25:
             scan = {"symbol": s, "status": "数据不足", "reason": "可用K线少于25根", "recent_bars": [dict(bar) for bar in bars]}
             if bars:
                 scan["latest_bar"] = dict(bars[-1])
                 scan["price_data_interval"] = "scan_interval"
                 scan["bar_timestamp"] = bars[-1].get("dt")
+                scan["price_evidence"] = price_evidence_fields(
+                    bars,
+                    supplemental_bars=supplemental_bars,
+                    supplemental_errors=supplemental_errors,
+                    primary_interval=args.interval,
+                )["price_evidence"]
             scans.append(scan)
             continue
-        scan = analyze_long_signal(s, bars)
+        scan = analyze_long_signal(
+            s,
+            bars,
+            supplemental_bars=supplemental_bars,
+            supplemental_errors=supplemental_errors,
+            primary_interval=args.interval,
+        )
         scans.append(scan)
 
         if s in positions_raw:

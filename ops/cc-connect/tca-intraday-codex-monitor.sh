@@ -115,7 +115,7 @@ PROMPT="你是 Trading-Copilot-Agent 的 cc-connect 盘中 Codex 盯盘定时任
 - 只有该值为 1 时，才可以基于最新 monitor 数据、盘前计划、人工观察列表、paper 状态、knowledge/refined 生成或更新 report/$DATE/monitor-signals.json。
 - 先运行：
   python3 script/trading_copilot.py intraday-opportunity-context --date $DATE
-- 读取 report/$DATE/intraday-opportunity-context.json。它提供 observation_scans 全观察池（含 latest_bar/recent_bars 价格证据）、candidate_scans 代码高亮候选、盘前计划、盘中状态、paper 状态和 sidecar_template。
+- 读取 report/$DATE/intraday-opportunity-context.json。它提供 observation_scans 全观察池（含 price_evidence 多周期价格证据：5m 最多78根、15m 40根、日线60根、关键位和派生距离）、candidate_scans 代码高亮候选、盘前计划、盘中状态、paper 状态和 sidecar_template。
 - 你必须以 observation_scans/sidecar_template.signals 为主输入逐标的分析；candidate_scans 只是辅助证据，不能限制你的机会识别范围。
 - 如果没有高质量条件化机会，逐标的保持 watch_only/no_trade，并运行 dry-run 或说明没有 ready 订单。
 - 若要升级为 conditional_executable，必须由你基于全观察池 context、knowledge/refined 和完整 Trade Plan Card 主观判断；不得由 extract-monitor-signals 或 monitor_scan 自动升级。

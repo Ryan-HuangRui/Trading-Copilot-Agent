@@ -47,6 +47,16 @@ class IntradayOpportunityContextTest(unittest.TestCase):
                                 {"dt": "2026-05-26T14:30:00", "open": 99, "high": 101, "low": 98, "close": 100.5, "volume": 5000},
                             ],
                             "price_data_interval": "scan_interval",
+                            "price_evidence": {
+                                "primary_interval": "5min",
+                                "bars": {
+                                    "5min": [{"dt": "2026-05-26T14:30:00", "close": 100.5}],
+                                    "15min": [{"dt": "2026-05-26T14:30:00", "close": 100.0}],
+                                    "1day": [{"dt": "2026-05-23", "close": 98.0}],
+                                },
+                                "key_levels": {"previous_day_close": 98.0, "vwap": 99.5},
+                                "derived": {"distance_to_vwap_pct": 1.005},
+                            },
                         },
                         {"symbol": "NVDA", "status": "观察中", "setup": "NO VALID SETUP"},
                     ],
@@ -110,6 +120,8 @@ class IntradayOpportunityContextTest(unittest.TestCase):
             self.assertEqual(context["observation_scans"][0]["latest_bar"]["close"], 100.5)
             self.assertEqual(len(context["observation_scans"][0]["recent_bars"]), 2)
             self.assertEqual(context["observation_scans"][0]["price_data_interval"], "scan_interval")
+            self.assertEqual(context["observation_scans"][0]["price_evidence"]["primary_interval"], "5min")
+            self.assertEqual(context["observation_scans"][0]["price_evidence"]["bars"]["15min"][0]["close"], 100.0)
             self.assertEqual(context["summary"]["observation_scans"], 2)
             self.assertEqual(context["summary"]["deterministic_candidate_scans"], 1)
             self.assertEqual([item["symbol"] for item in context["sidecar_template"]["signals"]], ["MU", "NVDA"])
