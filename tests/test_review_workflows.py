@@ -170,6 +170,92 @@ class ReviewWorkflowsTest(unittest.TestCase):
             lessons = (root / "runtime" / "learning" / "daily_lessons.jsonl").read_text(encoding="utf-8")
             self.assertIn("position_without_plan", lessons)
 
+    def test_plan_review_groups_duplicate_symbols_by_session(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            journal = root / "runtime" / "journal"
+            journal.mkdir(parents=True)
+            records = [
+                {
+                    "kind": "signal",
+                    "signal_id": "sig-pre",
+                    "date": "2026-05-26",
+                    "session": "pre-market",
+                    "symbol": "MU",
+                    "setup": "breakout_pullback_continuation.md",
+                    "plan_type": "watch_only",
+                    "execution_status": "watch_only",
+                    "entry": {"trigger_price": 100},
+                    "stop": {"initial_stop": 95},
+                    "take_profit": {"tp1": 112},
+                    "risk_detail": {"max_account_risk_pct": 1, "risk_per_share": 5},
+                    "execution_rules": {"skip_conditions": ["market turns risk-off"]},
+                },
+                {
+                    "kind": "signal",
+                    "signal_id": "sig-post",
+                    "date": "2026-05-22",
+                    "session": "post-market",
+                    "symbol": "MU",
+                    "setup": "trend_pullback_high2_low2.md",
+                    "plan_type": "watch_only",
+                    "execution_status": "watch_only",
+                    "entry": {"trigger_price": 102},
+                    "stop": {"initial_stop": 96},
+                    "take_profit": {"tp1": 114},
+                    "risk_detail": {"max_account_risk_pct": 1, "risk_per_share": 6},
+                    "execution_rules": {"skip_conditions": ["no follow-through"]},
+                },
+            ]
+            (journal / "signals.jsonl").write_text(
+                "\n".join(json.dumps(record, ensure_ascii=False) for record in records) + "\n",
+                encoding="utf-8",
+            )
+            outcomes = [
+                {
+                    "kind": "outcome",
+                    "outcome_id": "out-pre",
+                    "signal_id": "sig-pre",
+                    "review_date": "2026-05-26",
+                    "symbol": "MU",
+                    "outcome": "triggered_and_invalidated",
+                },
+                {
+                    "kind": "outcome",
+                    "outcome_id": "out-post",
+                    "signal_id": "sig-post",
+                    "review_date": "2026-05-26",
+                    "symbol": "MU",
+                    "outcome": "invalidated",
+                },
+            ]
+            (journal / "outcomes.jsonl").write_text(
+                "\n".join(json.dumps(record, ensure_ascii=False) for record in outcomes) + "\n",
+                encoding="utf-8",
+            )
+
+            command = [
+                sys.executable,
+                str(ROOT / "script" / "plan_review.py"),
+                "--repo-root",
+                str(root),
+                "--date",
+                "2026-05-26",
+            ]
+            proc = subprocess.run(command, check=False, text=True, capture_output=True)
+
+            self.assertEqual(proc.returncode, 0, msg=proc.stderr or proc.stdout)
+            payload = json.loads(proc.stdout)
+            self.assertEqual(payload["summary"]["plans"], 2)
+            self.assertEqual(payload["summary"]["sessions"], {"post-market": 1, "pre-market": 1})
+            review = json.loads((root / "report" / "2026-05-26" / "plan-review.json").read_text(encoding="utf-8"))
+            self.assertEqual(review["session_groups"], {"post-market": ["MU"], "pre-market": ["MU"]})
+            markdown = (root / "report" / "2026-05-26" / "plan-review.md").read_text(encoding="utf-8")
+            self.assertIn("### post-market", markdown)
+            self.assertIn("#### MU", markdown)
+            self.assertIn("- session：post-market", markdown)
+            self.assertIn("### pre-market", markdown)
+
     def test_daily_self_review_writes_markdown_and_dedupes_review_append(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

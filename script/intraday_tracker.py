@@ -11,7 +11,17 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 
-IMPORTANT_STATES = {"near_trigger", "triggered", "triggered_but_blocked", "invalidated", "missed_window"}
+IMPORTANT_STATES = {
+    "near_trigger",
+    "triggered",
+    "triggered_but_blocked",
+    "triggered_but_failed_hold",
+    "triggered_and_invalidated",
+    "invalidated",
+    "missed_window",
+    "no_chase_gap",
+    "risk_warning",
+}
 
 
 def read_json(path: Path, default: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -144,7 +154,103 @@ def signal_price(plan: dict[str, Any] | None, key: str) -> float | None:
     return to_float(value)
 
 
-def evaluate_state(symbol: str, scan: dict[str, Any] | None, plan: dict[str, Any] | None) -> dict[str, Any]:
+def nested(payload: dict[str, Any] | None, *keys: str) -> Any:
+    current: Any = payload
+    for key in keys:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return current
+
+
+def plan_trigger_price(plan: dict[str, Any] | None) -> float | None:
+    return (
+        signal_price(plan, "trigger")
+        or to_float(nested(plan, "entry", "trigger_price"))
+        or detail_price(plan or {}, "trigger_detail")
+    )
+
+
+def plan_invalidation_price(plan: dict[str, Any] | None) -> float | None:
+    return (
+        signal_price(plan, "invalidation")
+        or to_float(nested(plan, "stop", "initial_stop"))
+        or detail_price(plan or {}, "invalidation_detail")
+    )
+
+
+def scan_last_price(scan: dict[str, Any]) -> float | None:
+    return (
+        to_float(scan.get("last"))
+        or to_float(scan.get("last_price"))
+        or to_float(scan.get("close"))
+        or to_float(nested(scan, "latest_bar", "close"))
+    )
+
+
+def scan_bar_timestamp(scan: dict[str, Any]) -> Any:
+    return scan.get("bar_timestamp") or nested(scan, "latest_bar", "dt")
+
+
+def bar_timestamp_date(value: Any) -> str | None:
+    if not value:
+        return None
+    text = str(value).strip()
+    if len(text) >= 10:
+        candidate = text[:10]
+        try:
+            dt.date.fromisoformat(candidate)
+        except ValueError:
+            return None
+        return candidate
+    return None
+
+
+def risk_alerts_for(scan: dict[str, Any], last_price: float | None) -> list[str]:
+    if last_price is None:
+        return []
+    key_levels = nested(scan, "price_evidence", "key_levels")
+    if not isinstance(key_levels, dict):
+        return []
+    alerts: list[str] = []
+    vwap = to_float(key_levels.get("vwap"))
+    previous_day_low = to_float(key_levels.get("previous_day_low"))
+    if vwap is not None and last_price < vwap:
+        alerts.append("below_vwap")
+    if previous_day_low is not None and last_price < previous_day_low:
+        alerts.append("below_previous_day_low")
+    return alerts
+
+
+def has_no_chase_rule(plan: dict[str, Any] | None) -> bool:
+    if not isinstance(plan, dict):
+        return False
+    return bool(nested(plan, "entry", "no_chase_rule") or nested(plan, "execution_rules", "no_chase_rule"))
+
+
+def no_chase_gap(scan: dict[str, Any], plan: dict[str, Any] | None, trigger_price: float | None, invalidation_price: float | None) -> bool:
+    if trigger_price is None or invalidation_price is None or not has_no_chase_rule(plan):
+        return False
+    risk = trigger_price - invalidation_price
+    if risk <= 0:
+        return False
+    open_price = to_float(nested(scan, "latest_bar", "open"))
+    reference = open_price or scan_last_price(scan)
+    if reference is None:
+        return False
+    return reference > trigger_price and (reference - trigger_price) >= risk * 0.5
+
+
+def evaluate_state(
+    symbol: str,
+    scan: dict[str, Any] | None,
+    plan: dict[str, Any] | None,
+    *,
+    date: str,
+    previous_state: str | None = None,
+) -> dict[str, Any]:
+    plan_trigger = plan_trigger_price(plan)
+    plan_invalidation = plan_invalidation_price(plan)
     if not scan:
         return {
             "symbol": symbol,
@@ -152,39 +258,96 @@ def evaluate_state(symbol: str, scan: dict[str, Any] | None, plan: dict[str, Any
             "monitor_status": None,
             "reason": "monitor scan missing for tracked symbol",
             "bar_timestamp": None,
-            "trigger_price": signal_price(plan, "trigger"),
-            "invalidation_price": signal_price(plan, "invalidation"),
+            "trigger_price": plan_trigger,
+            "invalidation_price": plan_invalidation,
             "risk_quality": None,
+            "risk_alerts": [],
         }
 
     status = str(scan.get("status") or "")
     risk_quality = str(scan.get("risk_quality") or "")
-    last_price = to_float(scan.get("last") or scan.get("last_price") or scan.get("close"))
-    invalidation_price = detail_price(scan, "invalidation_detail") or to_float(scan.get("stop")) or signal_price(plan, "invalidation")
-    trigger_price = detail_price(scan, "trigger_detail") or to_float(scan.get("trigger")) or signal_price(plan, "trigger")
+    bar_timestamp = scan_bar_timestamp(scan)
+    if bar_timestamp_date(bar_timestamp) not in {None, date}:
+        return {
+            "symbol": symbol,
+            "state": "stale_data",
+            "monitor_status": status or None,
+            "reason": f"stale monitor bar {bar_timestamp}; expected {date}",
+            "bar_timestamp": bar_timestamp,
+            "trigger_price": detail_price(scan, "trigger_detail") or to_float(scan.get("trigger")) or plan_trigger,
+            "invalidation_price": detail_price(scan, "invalidation_detail") or to_float(scan.get("stop")) or plan_invalidation,
+            "risk_quality": risk_quality or None,
+            "risk_alerts": [],
+        }
 
-    if last_price is not None and invalidation_price is not None and last_price <= invalidation_price:
+    last_price = scan_last_price(scan)
+    invalidation_price = detail_price(scan, "invalidation_detail") or to_float(scan.get("stop")) or plan_invalidation
+    trigger_price = detail_price(scan, "trigger_detail") or to_float(scan.get("trigger")) or plan_trigger
+    intraday_high = to_float(nested(scan, "price_evidence", "key_levels", "intraday_high")) or to_float(nested(scan, "latest_bar", "high"))
+    intraday_low = to_float(nested(scan, "price_evidence", "key_levels", "intraday_low")) or to_float(nested(scan, "latest_bar", "low"))
+    trigger_touched = bool(
+        trigger_price is not None
+        and (
+            status == "可执行"
+            or previous_state in {"near_trigger", "triggered", "triggered_but_blocked", "no_chase_gap", "triggered_but_failed_hold"}
+            or (intraday_high is not None and intraday_high >= trigger_price)
+            or (last_price is not None and last_price >= trigger_price)
+        )
+    )
+    invalidation_touched = bool(
+        invalidation_price is not None
+        and (
+            (last_price is not None and last_price <= invalidation_price)
+            or (intraday_low is not None and intraday_low <= invalidation_price)
+        )
+    )
+    risk_alerts = risk_alerts_for(scan, last_price)
+
+    if trigger_touched and invalidation_touched:
+        state = "triggered_and_invalidated"
+        reason = "触发位与失效位均已被触及；不能视为有效突破"
+    elif invalidation_touched:
         state = "invalidated"
+        reason = "跌破失效位"
+    elif no_chase_gap(scan, plan, trigger_price, invalidation_price):
+        state = "no_chase_gap"
+        reason = "开盘或当前价格远离触发位，触发 no-chase 规则"
+    elif trigger_touched and last_price is not None and trigger_price is not None and last_price < trigger_price:
+        state = "triggered_but_failed_hold"
+        reason = "触发后未能站稳触发位"
     elif status == "可执行":
         state = "triggered" if risk_quality in {"acceptable", "watch_only", ""} else "triggered_but_blocked"
+        reason = scan.get("reason")
     elif status == "临近触发":
         state = "near_trigger"
+        reason = scan.get("reason")
+    elif risk_alerts:
+        state = "risk_warning"
+        labels = {
+            "below_vwap": "回到 VWAP 下方",
+            "below_previous_day_low": "跌破前日低点",
+        }
+        reason = "；".join(labels.get(item, item) for item in risk_alerts)
     elif status == "观察中":
         state = "waiting"
+        reason = scan.get("reason")
     elif status == "数据不足":
         state = "data_insufficient"
+        reason = scan.get("reason")
     else:
         state = "waiting"
+        reason = scan.get("reason")
 
     return {
         "symbol": symbol,
         "state": state,
         "monitor_status": status or None,
-        "reason": scan.get("reason"),
-        "bar_timestamp": scan.get("bar_timestamp"),
+        "reason": reason,
+        "bar_timestamp": bar_timestamp,
         "trigger_price": trigger_price,
         "invalidation_price": invalidation_price,
         "risk_quality": risk_quality or None,
+        "risk_alerts": risk_alerts,
     }
 
 
@@ -263,9 +426,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     changed_events: list[dict[str, Any]] = []
     existing_event_ids = load_existing_event_ids(events_path)
     for symbol in focus_symbols:
-        evaluated = evaluate_state(symbol, scans.get(symbol), plans.get(symbol))
-        evaluated["sources"] = sources.get(symbol, [])
         prior = previous_symbols.get(symbol) if isinstance(previous_symbols.get(symbol), dict) else {}
+        evaluated = evaluate_state(symbol, scans.get(symbol), plans.get(symbol), date=date, previous_state=prior.get("state"))
+        evaluated["sources"] = sources.get(symbol, [])
         evaluated["previous_state"] = prior.get("state")
         current_symbols[symbol] = evaluated
         changed = prior.get("state") != evaluated["state"] or prior.get("bar_timestamp") != evaluated.get("bar_timestamp")
@@ -280,6 +443,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "previous_state": prior.get("state"),
                 "bar_timestamp": evaluated.get("bar_timestamp"),
                 "reason": evaluated.get("reason"),
+                "risk_alerts": evaluated.get("risk_alerts") or [],
                 "notify": True,
                 "source": "intraday-tracker",
             }

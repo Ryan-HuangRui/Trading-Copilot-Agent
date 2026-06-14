@@ -153,6 +153,8 @@ def build_plan_review(
 
     return {
         "signal_id": signal.get("signal_id"),
+        "session": signal.get("session"),
+        "signal_date": signal.get("date"),
         "symbol": signal.get("symbol"),
         "setup": signal.get("setup"),
         "plan_type": plan_type,
@@ -229,6 +231,7 @@ def position_lesson(date: str, record: dict[str, Any]) -> dict[str, Any] | None:
 def summarize(reviews: list[dict[str, Any]], position_summary: dict[str, Any] | None = None) -> dict[str, Any]:
     return {
         "plans": len(reviews),
+        "sessions": dict(Counter(str(item.get("session") or "unknown") for item in reviews)),
         "quality": dict(Counter(str(item.get("quality_state")) for item in reviews)),
         "outcomes": dict(Counter(str(item.get("outcome")) for item in reviews)),
         "trade_state": dict(Counter(str(item.get("trade_state")) for item in reviews)),
@@ -250,32 +253,52 @@ def csv_or_none(values: list[str]) -> str:
     return ", ".join(values) if values else "无"
 
 
+def reviews_by_session(reviews: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for review in reviews:
+        session = str(review.get("session") or "unknown")
+        grouped.setdefault(session, []).append(review)
+    return {session: grouped[session] for session in sorted(grouped)}
+
+
+def session_groups(reviews: list[dict[str, Any]]) -> dict[str, list[str]]:
+    return {
+        session: [str(review.get("symbol") or "") for review in items]
+        for session, items in reviews_by_session(reviews).items()
+    }
+
+
 def build_markdown(date: str, reviews: list[dict[str, Any]], summary: dict[str, Any], position_details: dict[str, list[str]]) -> str:
     lines = [
         f"# 日度交易计划复盘（{date}）",
         "",
         "## 总览",
         f"- 计划数：{summary['plans']}",
+        f"- session：{json.dumps(summary.get('sessions', {}), ensure_ascii=False, sort_keys=True)}",
         f"- 计划质量：{json.dumps(summary['quality'], ensure_ascii=False, sort_keys=True)}",
         f"- 触达结果：{json.dumps(summary['outcomes'], ensure_ascii=False, sort_keys=True)}",
         f"- 真实执行：{json.dumps(summary['trade_state'], ensure_ascii=False, sort_keys=True)}",
         "",
-        "## 逐计划复盘",
+        "## 逐计划复盘（按 session 分组）",
     ]
     if not reviews:
         lines.append("- 暂无可复盘计划。")
-    for review in reviews:
-        lines.extend(
-            [
-                f"### {review.get('symbol')}",
-                f"- 类型：{review.get('plan_type')} / {review.get('execution_status')}",
-                f"- 质量：{review.get('quality_state')}",
-                f"- 缺失字段：{', '.join(review.get('missing_fields') or []) or '无'}",
-                f"- 价格触达：{review.get('outcome')}",
-                f"- 真实执行：{review.get('trade_state')}",
-                "",
-            ]
-        )
+    for session, session_reviews in reviews_by_session(reviews).items():
+        lines.append(f"### {session}")
+        for review in session_reviews:
+            lines.extend(
+                [
+                    f"#### {review.get('symbol')}",
+                    f"- session：{review.get('session') or 'unknown'}",
+                    f"- 信号日期：{review.get('signal_date') or 'unknown'}",
+                    f"- 类型：{review.get('plan_type')} / {review.get('execution_status')}",
+                    f"- 质量：{review.get('quality_state')}",
+                    f"- 缺失字段：{', '.join(review.get('missing_fields') or []) or '无'}",
+                    f"- 价格触达：{review.get('outcome')}",
+                    f"- 真实执行：{review.get('trade_state')}",
+                    "",
+                ]
+            )
     discipline = summary["position_discipline"]
     lines.extend(
         [
@@ -338,6 +361,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     payload = {
         "date": args.date,
         "plan_reviews": reviews,
+        "session_groups": session_groups(reviews),
         "position_discipline": position_details,
         "summary": summary,
     }

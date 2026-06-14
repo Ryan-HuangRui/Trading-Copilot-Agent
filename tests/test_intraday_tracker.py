@@ -139,6 +139,177 @@ class IntradayTrackerTest(unittest.TestCase):
             events_path = root / "runtime" / "intraday" / "2026-05-26" / "events.jsonl"
             self.assertFalse(events_path.exists())
 
+    def test_run_ignores_stale_previous_day_monitor_bar(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_json(
+                root / "report" / "2026-05-26" / "pre-market-signals.json",
+                {
+                    "date": "2026-05-26",
+                    "session": "pre-market",
+                    "signals": [
+                        {
+                            "symbol": "DELL",
+                            "trigger": {"type": "break_above", "price": 100},
+                            "invalidation": {"type": "break_below", "price": 95},
+                        }
+                    ],
+                },
+            )
+            write_json(root / "config" / "intraday_watchlist.json", {"symbols": []})
+            write_json(
+                root / "report" / "latest-monitor.json",
+                {
+                    "scans": [
+                        {
+                            "symbol": "DELL",
+                            "status": "临近触发",
+                            "reason": "previous day close was near trigger",
+                            "trigger": 100,
+                            "stop": 95,
+                            "bar_timestamp": "2026-05-22 15:55:00",
+                        }
+                    ]
+                },
+            )
+
+            result = intraday_tracker.run(self.args(root))
+
+            self.assertEqual(result["summary"]["events"], 0)
+            state = json.loads((root / "runtime" / "intraday" / "2026-05-26" / "state.json").read_text(encoding="utf-8"))
+            self.assertEqual(state["symbols"]["DELL"]["state"], "stale_data")
+            self.assertIn("stale", state["symbols"]["DELL"]["reason"])
+            self.assertFalse((root / "runtime" / "intraday" / "2026-05-26" / "events.jsonl").exists())
+
+    def test_run_classifies_no_chase_failed_hold_and_triggered_invalidated(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_json(
+                root / "report" / "2026-05-26" / "pre-market-signals.json",
+                {
+                    "date": "2026-05-26",
+                    "session": "pre-market",
+                    "signals": [
+                        {
+                            "symbol": "MU",
+                            "entry": {
+                                "trigger_price": 100,
+                                "no_chase_rule": "gap above trigger too far from stop",
+                            },
+                            "trigger": {"type": "break_above", "price": 100},
+                            "invalidation": {"type": "break_below", "price": 95},
+                        }
+                    ],
+                },
+            )
+            write_json(root / "config" / "intraday_watchlist.json", {"symbols": []})
+            write_json(
+                root / "report" / "latest-monitor.json",
+                {
+                    "scans": [
+                        {
+                            "symbol": "MU",
+                            "status": "可执行",
+                            "reason": "gap above trigger",
+                            "last": 106,
+                            "trigger": 100,
+                            "stop": 95,
+                            "risk_quality": "acceptable",
+                            "bar_timestamp": "2026-05-26 09:30:00",
+                            "latest_bar": {"dt": "2026-05-26 09:30:00", "open": 106, "high": 108, "low": 105, "close": 106},
+                        }
+                    ]
+                },
+            )
+
+            first = intraday_tracker.run(self.args(root, as_of="2026-05-26T13:35:00+00:00"))
+            state = json.loads((root / "runtime" / "intraday" / "2026-05-26" / "state.json").read_text(encoding="utf-8"))
+            self.assertEqual(first["summary"]["events"], 1)
+            self.assertEqual(state["symbols"]["MU"]["state"], "no_chase_gap")
+
+            write_json(
+                root / "report" / "latest-monitor.json",
+                {
+                    "scans": [
+                        {
+                            "symbol": "MU",
+                            "status": "观察中",
+                            "reason": "lost trigger hold",
+                            "last": 98,
+                            "trigger": 100,
+                            "stop": 95,
+                            "bar_timestamp": "2026-05-26 09:35:00",
+                        }
+                    ]
+                },
+            )
+            second = intraday_tracker.run(self.args(root, as_of="2026-05-26T13:40:00+00:00"))
+            state = json.loads((root / "runtime" / "intraday" / "2026-05-26" / "state.json").read_text(encoding="utf-8"))
+            self.assertEqual(second["summary"]["events"], 1)
+            self.assertEqual(state["symbols"]["MU"]["state"], "triggered_but_failed_hold")
+
+            write_json(
+                root / "report" / "latest-monitor.json",
+                {
+                    "scans": [
+                        {
+                            "symbol": "MU",
+                            "status": "观察中",
+                            "reason": "fell through invalidation",
+                            "last": 94,
+                            "trigger": 100,
+                            "stop": 95,
+                            "bar_timestamp": "2026-05-26 09:40:00",
+                            "price_evidence": {"key_levels": {"intraday_high": 108, "intraday_low": 94}},
+                        }
+                    ]
+                },
+            )
+            third = intraday_tracker.run(self.args(root, as_of="2026-05-26T13:45:00+00:00"))
+            state = json.loads((root / "runtime" / "intraday" / "2026-05-26" / "state.json").read_text(encoding="utf-8"))
+            self.assertEqual(third["summary"]["events"], 1)
+            self.assertEqual(state["symbols"]["MU"]["state"], "triggered_and_invalidated")
+
+    def test_run_emits_risk_warning_for_vwap_and_previous_low_breaks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_json(root / "report" / "2026-05-26" / "pre-market-signals.json", {"signals": []})
+            write_json(root / "config" / "intraday_watchlist.json", {"symbols": ["AVGO"]})
+            write_json(
+                root / "report" / "latest-monitor.json",
+                {
+                    "scans": [
+                        {
+                            "symbol": "AVGO",
+                            "status": "观察中",
+                            "reason": "structure incomplete",
+                            "last": 389,
+                            "trigger": 392,
+                            "stop": 388,
+                            "bar_timestamp": "2026-05-26 11:00:00",
+                            "price_evidence": {
+                                "key_levels": {
+                                    "vwap": 393,
+                                    "previous_day_low": 391,
+                                }
+                            },
+                        }
+                    ]
+                },
+            )
+
+            result = intraday_tracker.run(self.args(root, top_n=5))
+
+            self.assertEqual(result["summary"]["events"], 1)
+            state = json.loads((root / "runtime" / "intraday" / "2026-05-26" / "state.json").read_text(encoding="utf-8"))
+            self.assertEqual(state["symbols"]["AVGO"]["state"], "risk_warning")
+            self.assertEqual(state["symbols"]["AVGO"]["risk_alerts"], ["below_vwap", "below_previous_day_low"])
+            events = [
+                json.loads(line)
+                for line in (root / "runtime" / "intraday" / "2026-05-26" / "events.jsonl").read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertEqual(events[0]["risk_alerts"], ["below_vwap", "below_previous_day_low"])
+
 
 if __name__ == "__main__":
     unittest.main()
