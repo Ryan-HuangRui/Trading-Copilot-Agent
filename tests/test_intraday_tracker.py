@@ -139,6 +139,43 @@ class IntradayTrackerTest(unittest.TestCase):
             events_path = root / "runtime" / "intraday" / "2026-05-26" / "events.jsonl"
             self.assertFalse(events_path.exists())
 
+    def test_run_suppresses_repeated_near_trigger_on_new_bar(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.seed_inputs(root)
+            write_json(
+                root / "runtime" / "intraday" / "2026-05-26" / "state.json",
+                {
+                    "date": "2026-05-26",
+                    "symbols": {
+                        "MU": {"symbol": "MU", "state": "near_trigger", "bar_timestamp": "2026-05-26 10:30:00"},
+                    },
+                },
+            )
+            write_json(
+                root / "report" / "latest-monitor.json",
+                {
+                    "scans": [
+                        {
+                            "symbol": "MU",
+                            "status": "临近触发",
+                            "reason": "still near trigger",
+                            "trigger": 100,
+                            "stop": 95,
+                            "risk_quality": "watch_only",
+                            "bar_timestamp": "2026-05-26 10:35:00",
+                        }
+                    ]
+                },
+            )
+
+            result = intraday_tracker.run(self.args(root))
+
+            self.assertEqual(result["summary"]["events"], 0)
+            self.assertFalse((root / "runtime" / "intraday" / "2026-05-26" / "events.jsonl").exists())
+            state = json.loads((root / "runtime" / "intraday" / "2026-05-26" / "state.json").read_text(encoding="utf-8"))
+            self.assertEqual(state["symbols"]["MU"]["bar_timestamp"], "2026-05-26 10:35:00")
+
     def test_run_ignores_stale_previous_day_monitor_bar(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

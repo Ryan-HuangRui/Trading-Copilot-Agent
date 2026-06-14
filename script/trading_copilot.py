@@ -714,6 +714,8 @@ def run_intraday_review_append(args: argparse.Namespace) -> None:
         command.extend(["--context", args.context])
     if args.markdown:
         command.extend(["--markdown", args.markdown])
+    if getattr(args, "snapshot_dir", None):
+        command.extend(["--snapshot-dir", args.snapshot_dir])
     if args.as_of:
         command.extend(["--as-of", args.as_of])
 
@@ -723,7 +725,15 @@ def run_intraday_review_append(args: argparse.Namespace) -> None:
         emit(failed_response("intraday-review-append", command, proc), 1)
     response = base_response("intraday-review-append", command, stdout)
     response["date"] = (stdout or {}).get("date") or args.date
-    response["artifacts"] = [(stdout or {}).get("markdown")] if (stdout or {}).get("markdown") else []
+    response["artifacts"] = [
+        artifact
+        for artifact in [
+            (stdout or {}).get("markdown"),
+            (stdout or {}).get("snapshot"),
+        ]
+        if artifact
+    ]
+    response["snapshot"] = (stdout or {}).get("snapshot")
     response["signals"] = (stdout or {}).get("signals")
     response["summary"] = (stdout or {}).get("summary", {})
     response["skipped"] = (stdout or {}).get("status") == "skipped"
@@ -3488,6 +3498,7 @@ def build_parser() -> argparse.ArgumentParser:
     intraday_review.add_argument("--submission")
     intraday_review.add_argument("--context")
     intraday_review.add_argument("--markdown")
+    intraday_review.add_argument("--snapshot-dir")
     intraday_review.add_argument("--timezone", default="America/New_York")
     intraday_review.add_argument("--as-of")
     intraday_review.add_argument("--max-notes-chars", type=int, default=160)

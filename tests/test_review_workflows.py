@@ -256,6 +256,121 @@ class ReviewWorkflowsTest(unittest.TestCase):
             self.assertIn("- session：post-market", markdown)
             self.assertIn("### pre-market", markdown)
 
+    def test_plan_review_includes_intraday_execution_layers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            journal = root / "runtime" / "journal"
+            journal.mkdir(parents=True)
+            (journal / "signals.jsonl").write_text(
+                json.dumps(
+                    {
+                        "kind": "signal",
+                        "signal_id": "sig-1",
+                        "date": "2026-05-26",
+                        "session": "pre-market",
+                        "symbol": "MU",
+                        "setup": "breakout_pullback_continuation.md",
+                        "plan_type": "trade_plan",
+                        "execution_status": "conditional_executable",
+                        "entry": {"trigger_price": 100},
+                        "stop": {"initial_stop": 95},
+                        "take_profit": {"tp1": 112},
+                        "risk_detail": {"max_account_risk_pct": 1, "risk_per_share": 5},
+                        "execution_rules": {"skip_conditions": ["risk-off tape"]},
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (journal / "outcomes.jsonl").write_text(
+                json.dumps(
+                    {
+                        "kind": "outcome",
+                        "outcome_id": "out-1",
+                        "signal_id": "sig-1",
+                        "review_date": "2026-05-26",
+                        "symbol": "MU",
+                        "outcome": "triggered",
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            write_report = root / "report" / "2026-05-26"
+            write_report.mkdir(parents=True)
+            (root / "runtime" / "intraday" / "2026-05-26").mkdir(parents=True)
+            (root / "runtime" / "intraday" / "2026-05-26" / "state.json").write_text(
+                json.dumps({"symbols": {"MU": {"state": "triggered", "bar_timestamp": "2026-05-26 10:35:00"}}}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            (write_report / "monitor-signals.json").write_text(
+                json.dumps(
+                    {
+                        "signals": [
+                            {
+                                "signal_id": "sig-monitor",
+                                "symbol": "MU",
+                                "plan_type": "trade_plan",
+                                "execution_status": "conditional_executable",
+                            }
+                        ]
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (write_report / "paper-trade-submission.json").write_text(
+                json.dumps(
+                    {
+                        "ready": [{"intent": {"source_signal_id": "sig-1", "symbol": "MU.US"}}],
+                        "submitted": [],
+                        "blocked": [],
+                        "summary": {"ready": 1, "submitted": 0, "blocked": 0},
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            command = [
+                sys.executable,
+                str(ROOT / "script" / "plan_review.py"),
+                "--repo-root",
+                str(root),
+                "--date",
+                "2026-05-26",
+            ]
+            proc = subprocess.run(command, check=False, text=True, capture_output=True)
+
+            self.assertEqual(proc.returncode, 0, msg=proc.stderr or proc.stdout)
+            payload = json.loads(proc.stdout)
+            self.assertEqual(
+                payload["summary"]["execution_layers"],
+                {
+                    "price_triggered": 1,
+                    "intraday_confirmed": 1,
+                    "codex_candidate": 1,
+                    "paper_ready": 1,
+                    "paper_submitted": 0,
+                    "trade_recorded": 0,
+                },
+            )
+            review = json.loads((root / "report" / "2026-05-26" / "plan-review.json").read_text(encoding="utf-8"))
+            layers = review["plan_reviews"][0]["execution_layers"]
+            self.assertTrue(layers["price_triggered"])
+            self.assertTrue(layers["intraday_confirmed"])
+            self.assertTrue(layers["codex_candidate"])
+            self.assertTrue(layers["paper_ready"])
+            self.assertEqual(review["plan_reviews"][0]["intraday_state"], "triggered")
+            self.assertEqual(review["plan_reviews"][0]["paper_submission_state"], "ready")
+            markdown = (root / "report" / "2026-05-26" / "plan-review.md").read_text(encoding="utf-8")
+            self.assertIn("## 执行漏斗分层", markdown)
+            self.assertIn("价格触发=1", markdown)
+            self.assertIn("盘中确认=1", markdown)
+            self.assertIn("paper ready=1", markdown)
+
     def test_daily_self_review_writes_markdown_and_dedupes_review_append(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

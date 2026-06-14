@@ -104,6 +104,23 @@ class IntradayReviewAppendTest(unittest.TestCase):
             self.assertIn("- AMD: trade_plan / conditional_executable", text)
             self.assertIn("本段为 Codex 盘中评审记录", text)
 
+    def test_archives_review_snapshot_by_run_time(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.seed_signals(root)
+
+            result = intraday_review_append.run(self.args(root))
+
+            snapshot = root.resolve() / "report" / "2026-05-26" / "monitor-signals" / "104500.json"
+            self.assertEqual(result["status"], "success")
+            self.assertEqual(result["snapshot"], str(snapshot))
+            self.assertTrue(snapshot.exists())
+            payload = json.loads(snapshot.read_text(encoding="utf-8"))
+            self.assertEqual(payload["date"], "2026-05-26")
+            self.assertEqual(payload["summary"]["signals"], 2)
+            self.assertEqual(payload["signals"]["signals"][0]["symbol"], "MU")
+            self.assertEqual(payload["submission"]["summary"]["ready"], 1)
+
     def test_missing_signals_file_skips_without_creating_markdown(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

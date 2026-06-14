@@ -372,6 +372,24 @@ def load_existing_event_ids(path: Path) -> set[str]:
     return ids
 
 
+def should_emit_event(prior: dict[str, Any], evaluated: dict[str, Any]) -> bool:
+    state = str(evaluated.get("state") or "")
+    if state not in IMPORTANT_STATES:
+        return False
+    previous_state = prior.get("state")
+    if previous_state != state:
+        return True
+    if state == "near_trigger":
+        return False
+    return prior.get("bar_timestamp") != evaluated.get("bar_timestamp")
+
+
+def event_type_for_state(state: str) -> str:
+    if state in IMPORTANT_STATES:
+        return state
+    return "intraday_state_change"
+
+
 def build_markdown_section(as_of: datetime, timezone_name: str, symbols: list[dict[str, Any]], events: list[dict[str, Any]]) -> str:
     lines = [
         f"## {display_time(as_of, timezone_name)}",
@@ -431,14 +449,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         evaluated["sources"] = sources.get(symbol, [])
         evaluated["previous_state"] = prior.get("state")
         current_symbols[symbol] = evaluated
-        changed = prior.get("state") != evaluated["state"] or prior.get("bar_timestamp") != evaluated.get("bar_timestamp")
-        if changed and evaluated["state"] in IMPORTANT_STATES:
+        if should_emit_event(prior, evaluated):
             record = {
                 "event_id": event_id(date, symbol, evaluated["state"], evaluated.get("bar_timestamp")),
                 "date": date,
                 "created_at": as_of.astimezone(timezone.utc).isoformat(timespec="seconds"),
                 "symbol": symbol,
-                "event_type": "intraday_state_change",
+                "event_type": event_type_for_state(str(evaluated["state"])),
                 "state": evaluated["state"],
                 "previous_state": prior.get("state"),
                 "bar_timestamp": evaluated.get("bar_timestamp"),

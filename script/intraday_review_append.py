@@ -38,6 +38,10 @@ def display_time(value: datetime, timezone_name: str) -> str:
     return value.astimezone(ZoneInfo(timezone_name)).strftime("%H:%M %Z")
 
 
+def snapshot_name(value: datetime, timezone_name: str) -> str:
+    return value.astimezone(ZoneInfo(timezone_name)).strftime("%H%M%S") + ".json"
+
+
 def source_path(path: Path, repo_root: Path) -> str:
     try:
         return str(path.relative_to(repo_root))
@@ -182,12 +186,48 @@ def append_markdown(path: Path, date: str, section: str) -> None:
     path.write_text(previous + section + "\n", encoding="utf-8")
 
 
+def write_snapshot(
+    *,
+    path: Path,
+    date: str,
+    as_of: datetime,
+    timezone_name: str,
+    signals_path: Path,
+    context_path: Path,
+    submission_path: Path,
+    signals_payload: dict[str, Any],
+    context_payload: dict[str, Any],
+    submission_payload: dict[str, Any],
+    summary: dict[str, Any],
+    repo_root: Path,
+) -> None:
+    payload = {
+        "date": date,
+        "created_at": as_of.astimezone(timezone.utc).isoformat(timespec="seconds"),
+        "local_time": display_time(as_of, timezone_name),
+        "workflow": "intraday-review-append",
+        "sources": {
+            "signals": source_path(signals_path, repo_root),
+            "context": source_path(context_path, repo_root) if context_path.exists() else None,
+            "submission": source_path(submission_path, repo_root) if submission_path.exists() else None,
+        },
+        "summary": summary,
+        "signals": signals_payload,
+        "context_summary": context_payload.get("summary") if isinstance(context_payload.get("summary"), dict) else {},
+        "submission": submission_payload,
+        "safety_note": "Archived Codex intraday review snapshot. Not a broker instruction.",
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def run(args: argparse.Namespace) -> dict[str, Any]:
     repo_root = Path(args.repo_root).resolve()
     signals_path = resolve_path(repo_root, args.signals, repo_root / "report" / args.date / "monitor-signals.json")
     submission_path = resolve_path(repo_root, args.submission, repo_root / "report" / args.date / "paper-trade-submission.json")
     context_path = resolve_path(repo_root, args.context, repo_root / "report" / args.date / "intraday-opportunity-context.json")
     markdown_path = resolve_path(repo_root, args.markdown, repo_root / "report" / args.date / "intraday.md")
+    snapshot_dir = resolve_path(repo_root, getattr(args, "snapshot_dir", None), repo_root / "report" / args.date / "monitor-signals")
     if not signals_path.exists():
         return {
             "status": "skipped",
@@ -216,11 +256,27 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         max_notes_chars=args.max_notes_chars,
     )
     append_markdown(markdown_path, args.date, section)
+    snapshot_path = snapshot_dir / snapshot_name(as_of, args.timezone)
+    write_snapshot(
+        path=snapshot_path,
+        date=args.date,
+        as_of=as_of,
+        timezone_name=args.timezone,
+        signals_path=signals_path,
+        context_path=context_path,
+        submission_path=submission_path,
+        signals_payload=signals_payload,
+        context_payload=context_payload,
+        submission_payload=submission_payload,
+        summary=summary,
+        repo_root=repo_root,
+    )
     return {
         "status": "success",
         "workflow": "intraday-review-append",
         "date": args.date,
         "markdown": str(markdown_path),
+        "snapshot": str(snapshot_path),
         "signals": str(signals_path),
         "submission": str(submission_path) if submission_path.exists() else None,
         "context": str(context_path) if context_path.exists() else None,
@@ -235,6 +291,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--submission")
     parser.add_argument("--context")
     parser.add_argument("--markdown")
+    parser.add_argument("--snapshot-dir")
     parser.add_argument("--timezone", default="America/New_York")
     parser.add_argument("--as-of")
     parser.add_argument("--max-notes-chars", type=int, default=160)

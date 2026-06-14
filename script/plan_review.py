@@ -29,6 +29,15 @@ def learning_path(repo_root: Path, learning_dir: str) -> Path:
     return base / "daily_lessons.jsonl"
 
 
+def read_json(path: Path, default: dict[str, Any] | None = None) -> dict[str, Any]:
+    if not path.exists():
+        return dict(default or {})
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"{path}: expected JSON object")
+    return payload
+
+
 def nested(value: Any, *keys: str) -> Any:
     current = value
     for key in keys:
@@ -71,6 +80,114 @@ def trades_by_symbol(trades: list[dict[str, Any]]) -> dict[str, list[dict[str, A
         if symbol:
             result.setdefault(symbol, []).append(trade)
     return result
+
+
+def normalize_symbol(value: Any) -> str:
+    symbol = str(value or "").strip().upper()
+    if "." in symbol:
+        symbol = symbol.split(".", 1)[0]
+    return symbol
+
+
+def signals_by_symbol(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    result: dict[str, dict[str, Any]] = {}
+    raw_signals = payload.get("signals")
+    if not isinstance(raw_signals, list):
+        return result
+    for signal in raw_signals:
+        if not isinstance(signal, dict):
+            continue
+        symbol = normalize_symbol(signal.get("symbol"))
+        if symbol:
+            result[symbol] = signal
+    return result
+
+
+def intraday_states_by_symbol(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    symbols = payload.get("symbols")
+    if not isinstance(symbols, dict):
+        return {}
+    return {
+        normalize_symbol(symbol): state
+        for symbol, state in symbols.items()
+        if normalize_symbol(symbol) and isinstance(state, dict)
+    }
+
+
+def submission_entry_identity(entry: dict[str, Any]) -> tuple[str | None, str | None]:
+    intent = entry.get("intent") if isinstance(entry.get("intent"), dict) else {}
+    preview = entry.get("preview") if isinstance(entry.get("preview"), dict) else {}
+    source_signal_id = (
+        intent.get("source_signal_id")
+        or nested(intent, "source", "signal_id")
+        or preview.get("source_signal_id")
+        or nested(preview, "source", "signal_id")
+    )
+    symbol = normalize_symbol(intent.get("symbol") or preview.get("symbol"))
+    return str(source_signal_id) if source_signal_id else None, symbol or None
+
+
+def paper_submission_lookup(payload: dict[str, Any]) -> tuple[dict[str, str], dict[str, str]]:
+    by_signal_id: dict[str, str] = {}
+    by_symbol: dict[str, str] = {}
+    for state in ("submitted", "ready", "blocked", "skipped_duplicates", "errors"):
+        entries = payload.get(state)
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            source_signal_id, symbol = submission_entry_identity(entry)
+            if source_signal_id:
+                by_signal_id.setdefault(source_signal_id, state)
+            if symbol:
+                by_symbol.setdefault(symbol, state)
+    return by_signal_id, by_symbol
+
+
+def paper_state_for(signal: dict[str, Any], by_signal_id: dict[str, str], by_symbol: dict[str, str]) -> str:
+    signal_id = str(signal.get("signal_id") or "")
+    symbol = normalize_symbol(signal.get("symbol"))
+    return by_signal_id.get(signal_id) or by_symbol.get(symbol) or "not_ready"
+
+
+def price_triggered(outcome: str) -> bool:
+    return outcome in {"triggered", "triggered_and_invalidated"}
+
+
+def intraday_confirmed(state: str | None) -> bool:
+    return state in {
+        "triggered",
+        "triggered_but_blocked",
+        "triggered_but_failed_hold",
+        "triggered_and_invalidated",
+        "no_chase_gap",
+    }
+
+
+def codex_candidate(signal: dict[str, Any] | None) -> bool:
+    if not isinstance(signal, dict):
+        return False
+    status = str(signal.get("execution_status") or signal.get("plan_type") or "")
+    return status in {"conditional_executable", "watch_only"}
+
+
+def build_execution_layers(
+    *,
+    outcome: str,
+    intraday_state: str | None,
+    monitor_signal: dict[str, Any] | None,
+    paper_submission_state: str,
+    trade_count: int,
+) -> dict[str, bool]:
+    return {
+        "price_triggered": price_triggered(outcome),
+        "intraday_confirmed": intraday_confirmed(intraday_state),
+        "codex_candidate": codex_candidate(monitor_signal),
+        "paper_ready": paper_submission_state in {"ready", "submitted"},
+        "paper_submitted": paper_submission_state == "submitted",
+        "trade_recorded": trade_count > 0,
+    }
 
 
 def position_discipline(position_reviews: list[dict[str, Any]], plan_reviews: list[dict[str, Any]]) -> tuple[dict[str, Any], dict[str, list[str]]]:
@@ -136,6 +253,9 @@ def build_plan_review(
     signal: dict[str, Any],
     outcome: dict[str, Any] | None,
     symbol_trades: list[dict[str, Any]],
+    intraday_state: dict[str, Any] | None = None,
+    monitor_signal: dict[str, Any] | None = None,
+    paper_submission_state: str = "not_ready",
 ) -> dict[str, Any]:
     plan_type = str(signal.get("plan_type") or "legacy_signal")
     execution_status = str(signal.get("execution_status") or signal.get("status") or "unknown")
@@ -151,6 +271,16 @@ def build_plan_review(
     else:
         quality_state = "legacy_or_unclassified"
 
+    outcome_state = outcome.get("outcome") if outcome else "missing_outcome"
+    intraday_state_name = str(intraday_state.get("state")) if isinstance(intraday_state, dict) and intraday_state.get("state") else None
+    layers = build_execution_layers(
+        outcome=str(outcome_state),
+        intraday_state=intraday_state_name,
+        monitor_signal=monitor_signal,
+        paper_submission_state=paper_submission_state,
+        trade_count=len(symbol_trades),
+    )
+
     return {
         "signal_id": signal.get("signal_id"),
         "session": signal.get("session"),
@@ -161,7 +291,13 @@ def build_plan_review(
         "execution_status": execution_status,
         "quality_state": quality_state,
         "missing_fields": missing_fields,
-        "outcome": outcome.get("outcome") if outcome else "missing_outcome",
+        "outcome": outcome_state,
+        "intraday_state": intraday_state_name,
+        "intraday_bar_timestamp": intraday_state.get("bar_timestamp") if isinstance(intraday_state, dict) else None,
+        "codex_review_status": monitor_signal.get("execution_status") if isinstance(monitor_signal, dict) else None,
+        "codex_review_plan_type": monitor_signal.get("plan_type") if isinstance(monitor_signal, dict) else None,
+        "paper_submission_state": paper_submission_state,
+        "execution_layers": layers,
         "trade_state": "has_trade_record" if symbol_trades else "no_trade_record",
         "trade_count": len(symbol_trades),
     }
@@ -229,12 +365,17 @@ def position_lesson(date: str, record: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def summarize(reviews: list[dict[str, Any]], position_summary: dict[str, Any] | None = None) -> dict[str, Any]:
+    layer_names = ("price_triggered", "intraday_confirmed", "codex_candidate", "paper_ready", "paper_submitted", "trade_recorded")
     return {
         "plans": len(reviews),
         "sessions": dict(Counter(str(item.get("session") or "unknown") for item in reviews)),
         "quality": dict(Counter(str(item.get("quality_state")) for item in reviews)),
         "outcomes": dict(Counter(str(item.get("outcome")) for item in reviews)),
         "trade_state": dict(Counter(str(item.get("trade_state")) for item in reviews)),
+        "execution_layers": {
+            name: sum(1 for item in reviews if (item.get("execution_layers") or {}).get(name))
+            for name in layer_names
+        },
         "position_discipline": position_summary or {
             "position_reviews": 0,
             "review_required": 0,
@@ -269,6 +410,7 @@ def session_groups(reviews: list[dict[str, Any]]) -> dict[str, list[str]]:
 
 
 def build_markdown(date: str, reviews: list[dict[str, Any]], summary: dict[str, Any], position_details: dict[str, list[str]]) -> str:
+    layers = summary.get("execution_layers", {})
     lines = [
         f"# 日度交易计划复盘（{date}）",
         "",
@@ -278,6 +420,17 @@ def build_markdown(date: str, reviews: list[dict[str, Any]], summary: dict[str, 
         f"- 计划质量：{json.dumps(summary['quality'], ensure_ascii=False, sort_keys=True)}",
         f"- 触达结果：{json.dumps(summary['outcomes'], ensure_ascii=False, sort_keys=True)}",
         f"- 真实执行：{json.dumps(summary['trade_state'], ensure_ascii=False, sort_keys=True)}",
+        "",
+        "## 执行漏斗分层",
+        (
+            "- "
+            f"价格触发={layers.get('price_triggered', 0)}；"
+            f"盘中确认={layers.get('intraday_confirmed', 0)}；"
+            f"Codex 候选={layers.get('codex_candidate', 0)}；"
+            f"paper ready={layers.get('paper_ready', 0)}；"
+            f"paper submitted={layers.get('paper_submitted', 0)}；"
+            f"trade recorded={layers.get('trade_recorded', 0)}"
+        ),
         "",
         "## 逐计划复盘（按 session 分组）",
     ]
@@ -295,6 +448,9 @@ def build_markdown(date: str, reviews: list[dict[str, Any]], summary: dict[str, 
                     f"- 质量：{review.get('quality_state')}",
                     f"- 缺失字段：{', '.join(review.get('missing_fields') or []) or '无'}",
                     f"- 价格触达：{review.get('outcome')}",
+                    f"- 盘中状态：{review.get('intraday_state') or 'unknown'}",
+                    f"- Codex 盘中评审：{review.get('codex_review_plan_type') or 'unknown'} / {review.get('codex_review_status') or 'unknown'}",
+                    f"- paper 提交流程：{review.get('paper_submission_state')}",
                     f"- 真实执行：{review.get('trade_state')}",
                     "",
                 ]
@@ -347,12 +503,27 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         if record.get("kind") == "position_review" and record.get("date") == args.date
     ]
     trade_map = trades_by_symbol(trades)
+    intraday_state_payload = read_json(repo_root / "runtime" / "intraday" / args.date / "state.json", {})
+    monitor_signals_payload = read_json(repo_root / "report" / args.date / "monitor-signals.json", {})
+    paper_submission_payload = read_json(repo_root / "report" / args.date / "paper-trade-submission.json", {})
+    intraday_map = intraday_states_by_symbol(intraday_state_payload)
+    monitor_map = signals_by_symbol(monitor_signals_payload)
+    paper_by_signal_id, paper_by_symbol = paper_submission_lookup(paper_submission_payload)
 
     reviews = []
     for signal in signals:
         sid = str(signal.get("signal_id") or "")
         symbol = str(signal.get("symbol") or "").split(".", 1)[0].upper()
-        reviews.append(build_plan_review(signal, outcomes_by_signal.get(sid), trade_map.get(symbol, [])))
+        reviews.append(
+            build_plan_review(
+                signal,
+                outcomes_by_signal.get(sid),
+                trade_map.get(symbol, []),
+                intraday_state=intraday_map.get(symbol),
+                monitor_signal=monitor_map.get(symbol),
+                paper_submission_state=paper_state_for(signal, paper_by_signal_id, paper_by_symbol),
+            )
+        )
 
     position_summary, position_details = position_discipline(position_reviews, reviews)
     summary = summarize(reviews, position_summary)
