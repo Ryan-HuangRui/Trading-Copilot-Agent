@@ -169,6 +169,24 @@ class PaperExecutionConfigTest(unittest.TestCase):
         config["allow_intraday_entry_submit"] = True
         ensure_paper_write_allowed(config, execute=True, action="intraday_entry_submit")
 
+    def test_experimental_micro_paper_has_separate_gate(self):
+        config = {
+            "broker_writes_enabled": True,
+            "allow_intraday_entry_submit": True,
+            "allow_experimental_micro_paper": False,
+        }
+
+        matrix = broker_capability_matrix(config)
+        actions = {item["action"]: item for item in matrix["actions"]}
+        self.assertEqual(actions["experimental_micro_paper"]["workflow"], "experimental-micro-paper-entry")
+        self.assertEqual(actions["experimental_micro_paper"]["config_key"], "allow_experimental_micro_paper")
+        self.assertEqual(actions["experimental_micro_paper"]["execution_status"], "config_disabled")
+        with self.assertRaises(PermissionError):
+            ensure_paper_write_allowed(config, execute=True, action="experimental_micro_paper")
+
+        config["allow_experimental_micro_paper"] = True
+        ensure_paper_write_allowed(config, execute=True, action="experimental_micro_paper")
+
     def test_order_replace_has_separate_gate(self):
         config = {
             "broker_writes_enabled": True,

@@ -433,6 +433,30 @@ bash ops/cc-connect/tca-intraday-codex-monitor.sh <DATE>
 
 This requires the ignored NAS-local `config/paper_execution.local.json` to set `broker_writes_enabled=true`, `allow_intraday_entry_submit=true`, `allow_cancel=true`, and `allow_protective_stop=true`. The wrapper still submits only when Codex writes a validated monitor sidecar and `intraday-dry-run` reports ready orders. Pending order replace, TP1, plan-invalidated full exit, and break-even stop movement stay disabled in NAS cron by default. Pending order replace requires both `TCA_INTRADAY_ORDER_REPLACE_EXECUTE=1` and local gate `allow_order_replace=true`; it only updates unfilled pending order quantity/limit price. TP1 execution is blocked in code when an active protective stop quantity exceeds the post-TP1 remaining quantity unless `--resize-stop-before-submit` is explicitly used with the separate stop-resize gate. Plan-invalidated full exit requires both `TCA_INTRADAY_PLAN_EXIT_EXECUTE=1` and local gates `allow_exit_cancel_replace=true` plus `allow_exit_submit=true`.
 
+Optional experimental micro paper learning is separate from the formal paper path and is disabled by default. It does not change `intraday-paper-entry` or `paper-trade-submit` eligibility. To preview learning samples after the Codex-reviewed monitor sidecar and intraday dry-run, use:
+
+```bash
+TCA_INTRADAY_ENABLE_EXPERIMENTAL_MICRO_PAPER=1 \
+bash ops/cc-connect/tca-intraday-codex-monitor.sh <DATE>
+
+python3 script/trading_copilot.py experimental-micro-paper-entry \
+  --date <DATE> \
+  --config config/experimental_micro_paper.json \
+  --paper-execution-config config/paper_execution.local.json
+```
+
+To execute those learning samples against the paper account, both configs must opt in: `config/experimental_micro_paper.json` or an ignored local override must set `experimental_micro_paper.allow_experimental_micro_paper=true`, and the selected paper execution config must set `paper_execution.broker_writes_enabled=true` plus `paper_execution.allow_experimental_micro_paper=true`. Then set `TCA_INTRADAY_EXPERIMENTAL_MICRO_PAPER_EXECUTE=1` or run:
+
+```bash
+python3 script/trading_copilot.py experimental-micro-paper-entry \
+  --date <DATE> \
+  --config config/experimental_micro_paper.json \
+  --paper-execution-config config/paper_execution.local.json \
+  --execute
+```
+
+This writes only `runtime/learning/<DATE>/learning-trade-journal.jsonl` and marks each record `not_for_formal_stats=true`; it must not write formal `trades.jsonl` or the formal paper order journal.
+
 Optional dry-run paper checks:
 
 ```bash

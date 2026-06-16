@@ -1,0 +1,13 @@
+{
+  "experimental_micro_paper": {
+    "allow_experimental_micro_paper": false,
+    "max_notional": 100,
+    "max_loss": 5,
+    "max_daily_trades": 1,
+    "max_per_symbol_per_day": 1,
+    "time_stop": "same_day_close",
+    "default_market": "US",
+    "order_type": "LO",
+    "tif": "day"
+  }
+}

@@ -11,8 +11,11 @@ CC_BIN="${CC_CONNECT_BIN:-/home/admin_ryan/.local/bin/cc-connect}"
 PROJECT="${CC_CONNECT_PROJECT:-trading-copilot}"
 SESSION="${CC_CONNECT_SESSION:-feishu:oc_0df4740c94656aaa83249668668c3994:ou_f60f6e25add2b35cc00bb933b6e3960c}"
 PAPER_CONFIG="${TCA_PAPER_EXECUTION_CONFIG:-config/paper_execution.local.json}"
+LEARNING_CONFIG="${TCA_EXPERIMENTAL_MICRO_PAPER_CONFIG:-config/experimental_micro_paper.json}"
 ENABLE_PAPER_DRY_RUN="${TCA_INTRADAY_ENABLE_PAPER_DRY_RUN:-0}"
 ENABLE_PAPER_EXECUTE="${TCA_INTRADAY_PAPER_EXECUTE:-0}"
+ENABLE_EXPERIMENTAL_MICRO_PAPER="${TCA_INTRADAY_ENABLE_EXPERIMENTAL_MICRO_PAPER:-0}"
+ENABLE_EXPERIMENTAL_MICRO_PAPER_EXECUTE="${TCA_INTRADAY_EXPERIMENTAL_MICRO_PAPER_EXECUTE:-0}"
 ENABLE_PAPER_LIFECYCLE="${TCA_INTRADAY_ENABLE_PAPER_LIFECYCLE:-0}"
 ENABLE_EXIT_EXECUTE="${TCA_INTRADAY_EXIT_EXECUTE:-0}"
 ENABLE_CANCEL_EXECUTE="${TCA_INTRADAY_CANCEL_EXECUTE:-0}"
@@ -127,6 +130,17 @@ PROMPT="你是 Trading-Copilot-Agent 的 cc-connect 盘中 Codex 盯盘定时任
 - dry-run 后必须追加本轮 Codex 评审到当天盘中报告：
   python3 script/trading_copilot.py intraday-review-append --date $DATE --signals report/$DATE/monitor-signals.json --submission report/$DATE/paper-trade-submission.json --context report/$DATE/intraday-opportunity-context.json
 - dry-run 结果只写产物和 intraday.md 评审段落，不发送下单成功消息。
+
+独立 learning 微型模拟盘开关：TCA_INTRADAY_ENABLE_EXPERIMENTAL_MICRO_PAPER=$ENABLE_EXPERIMENTAL_MICRO_PAPER。
+- 这是独立于正式 paper path 的 learning_trade / experimental_micro_paper 层；不得降低或绕开 intraday-paper-entry / paper-trade-submit 的正式标准。
+- 只有该值为 1 且已经完成 monitor-signals、intraday-tracker、intraday-dry-run / intraday-review-append 后，才可以运行：
+  python3 script/trading_copilot.py experimental-micro-paper-entry --date $DATE --config $LEARNING_CONFIG --paper-execution-config $PAPER_CONFIG
+- 该命令只从 price_touched / Codex no_trade 或 watch_only 中挑极少量样本，输出 report/$DATE/experimental-micro-paper-preview.json；not_for_formal_stats 必须为 true。
+- 如果 ready > 0 且 TCA_INTRADAY_EXPERIMENTAL_MICRO_PAPER_EXECUTE=$ENABLE_EXPERIMENTAL_MICRO_PAPER_EXECUTE 为 1，才可以随后运行：
+  python3 script/trading_copilot.py experimental-micro-paper-entry --date $DATE --config $LEARNING_CONFIG --paper-execution-config $PAPER_CONFIG --execute
+- execute 还必须满足 $LEARNING_CONFIG 中 experimental_micro_paper.allow_experimental_micro_paper=true，以及 $PAPER_CONFIG 中 paper_execution.broker_writes_enabled=true 和 allow_experimental_micro_paper=true。
+- execute 只写 runtime/learning/$DATE/learning-trade-journal.jsonl，不得写正式 trades.jsonl，不得写正式 paper order journal，不得计入正式策略胜率、收益或执行质量统计。
+- blocked/ready=0/仅 preview 不发飞书；只有实际 submitted 或 critical error 才可发送简短告警。
 
 盘中模拟盘入场执行开关：TCA_INTRADAY_PAPER_EXECUTE=$ENABLE_PAPER_EXECUTE。
 - 只有 dry-run summary.ready > 0 且该值为 1 时，才运行：

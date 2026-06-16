@@ -16,6 +16,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "allow_take_profit": False,
     "allow_take_profit_stop_resize": False,
     "allow_intraday_entry_submit": False,
+    "allow_experimental_micro_paper": False,
     "allow_exit_cancel_replace": False,
     "allow_exit_submit": False,
     "allow_break_even_stop_move": False,
@@ -26,6 +27,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
 ACTION_CONFIG_KEYS = {
     "entry_submit": "allow_entry_submit",
     "intraday_entry_submit": "allow_intraday_entry_submit",
+    "experimental_micro_paper": "allow_experimental_micro_paper",
     "cancel": "allow_cancel",
     "protective_stop": "allow_protective_stop",
     "take_profit": "allow_take_profit",
@@ -54,6 +56,15 @@ SUPPORTED_BROKER_ACTIONS: tuple[dict[str, Any], ...] = (
         "side": "buy",
         "workflow": "intraday-paper-entry",
         "maturity": "guarded_phase3",
+    },
+    {
+        "action": "experimental_micro_paper",
+        "label": "Experimental micro paper learning entry",
+        "config_key": "allow_experimental_micro_paper",
+        "order_type": "LO/ELO/MO/AO/ALO/ODD/SLO/LIT/MIT/TSLPAMT/TSLPPCT",
+        "side": "buy",
+        "workflow": "experimental-micro-paper-entry",
+        "maturity": "paper_only_learning",
     },
     {
         "action": "cancel",

@@ -881,6 +881,52 @@ def run_intraday_paper_entry(args: argparse.Namespace) -> None:
     emit(response)
 
 
+def run_experimental_micro_paper_entry(args: argparse.Namespace) -> None:
+    command = [
+        "script/experimental_micro_paper_entry.py",
+        "--date",
+        args.date,
+        "--repo-root",
+        args.repo_root,
+    ]
+    if args.config:
+        command.extend(["--config", args.config])
+    if args.state:
+        command.extend(["--state", args.state])
+    if args.signals:
+        command.extend(["--signals", args.signals])
+    if args.data_quality:
+        command.extend(["--data-quality", args.data_quality])
+    if args.output:
+        command.extend(["--output", args.output])
+    if args.journal:
+        command.extend(["--journal", args.journal])
+    if args.paper_execution_config:
+        command.extend(["--paper-execution-config", args.paper_execution_config])
+    if args.longbridge_cli:
+        command.extend(["--longbridge-cli", args.longbridge_cli])
+    if args.execute:
+        command.append("--execute")
+
+    proc = run_child(command)
+    stdout = parse_json_output(proc.stdout)
+    if proc.returncode != 0:
+        emit(failed_response("experimental-micro-paper-entry", command, proc), 1)
+
+    response = base_response("experimental-micro-paper-entry", command, stdout)
+    response["date"] = (stdout or {}).get("date") or args.date
+    artifacts = []
+    if stdout and stdout.get("output"):
+        artifacts.append(stdout["output"])
+    if stdout and stdout.get("journal"):
+        artifacts.append(stdout["journal"])
+    response["artifacts"] = artifacts
+    response["dry_run"] = (stdout or {}).get("dry_run")
+    response["summary"] = (stdout or {}).get("summary", {})
+    response["safety_note"] = (stdout or {}).get("safety_note")
+    emit(response)
+
+
 def run_agent_research_context(args: argparse.Namespace) -> None:
     symbols = normalize_symbols(args.symbol)
     output = resolve_repo_path(args.output) if args.output else ROOT / "report" / args.date / "agents" / "research-context.json"
@@ -3545,7 +3591,25 @@ def build_parser() -> argparse.ArgumentParser:
     intraday_entry.add_argument("--max-daily-risk-pct", type=float, default=3.0)
     intraday_entry.add_argument("--max-daily-orders", type=int, default=1)
     intraday_entry.add_argument("--paper-execution-config")
+    intraday_entry.add_argument("--repo-root", default=str(ROOT))
     intraday_entry.set_defaults(func=run_intraday_paper_entry)
+
+    experimental_micro = sub.add_parser(
+        "experimental-micro-paper-entry",
+        help="Build or execute independent experimental micro paper learning entries",
+    )
+    experimental_micro.add_argument("--date", required=True)
+    experimental_micro.add_argument("--config")
+    experimental_micro.add_argument("--state")
+    experimental_micro.add_argument("--signals")
+    experimental_micro.add_argument("--data-quality")
+    experimental_micro.add_argument("--output")
+    experimental_micro.add_argument("--journal")
+    experimental_micro.add_argument("--paper-execution-config")
+    experimental_micro.add_argument("--longbridge-cli")
+    experimental_micro.add_argument("--execute", action="store_true")
+    experimental_micro.add_argument("--repo-root", default=str(ROOT))
+    experimental_micro.set_defaults(func=run_experimental_micro_paper_entry)
 
     agent_context = sub.add_parser("agent-research-context", help="Write a Phase 0 agent research context skeleton")
     agent_context.add_argument("--date", required=True)
