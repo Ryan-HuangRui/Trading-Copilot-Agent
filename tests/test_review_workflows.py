@@ -302,7 +302,7 @@ class ReviewWorkflowsTest(unittest.TestCase):
             write_report.mkdir(parents=True)
             (root / "runtime" / "intraday" / "2026-05-26").mkdir(parents=True)
             (root / "runtime" / "intraday" / "2026-05-26" / "state.json").write_text(
-                json.dumps({"symbols": {"MU": {"state": "triggered", "bar_timestamp": "2026-05-26 10:35:00"}}}, ensure_ascii=False),
+                json.dumps({"symbols": {"MU": {"state": "price_touched", "bar_timestamp": "2026-05-26 10:35:00"}}}, ensure_ascii=False),
                 encoding="utf-8",
             )
             (write_report / "monitor-signals.json").write_text(
@@ -363,13 +363,145 @@ class ReviewWorkflowsTest(unittest.TestCase):
             self.assertTrue(layers["intraday_confirmed"])
             self.assertTrue(layers["codex_candidate"])
             self.assertTrue(layers["paper_ready"])
-            self.assertEqual(review["plan_reviews"][0]["intraday_state"], "triggered")
+            self.assertEqual(review["plan_reviews"][0]["intraday_state"], "price_touched")
             self.assertEqual(review["plan_reviews"][0]["paper_submission_state"], "ready")
             markdown = (root / "report" / "2026-05-26" / "plan-review.md").read_text(encoding="utf-8")
             self.assertIn("## 执行漏斗分层", markdown)
             self.assertIn("价格触发=1", markdown)
             self.assertIn("盘中确认=1", markdown)
             self.assertIn("paper ready=1", markdown)
+
+    def test_plan_review_reports_detailed_funnel_and_paper_block_reasons(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            journal = root / "runtime" / "journal"
+            journal.mkdir(parents=True)
+            records = []
+            for symbol in ("AMD", "MU"):
+                records.append(
+                    {
+                        "kind": "signal",
+                        "signal_id": f"sig-{symbol}",
+                        "date": "2026-06-15",
+                        "session": "pre-market",
+                        "symbol": symbol,
+                        "setup": "breakout_pullback_continuation.md",
+                        "plan_type": "watch_only",
+                        "execution_status": "watch_only",
+                        "entry": {"trigger_price": 100},
+                        "stop": {"initial_stop": 95},
+                    }
+                )
+            (journal / "signals.jsonl").write_text(
+                "\n".join(json.dumps(record, ensure_ascii=False) for record in records) + "\n",
+                encoding="utf-8",
+            )
+            (journal / "outcomes.jsonl").write_text(
+                "\n".join(
+                    json.dumps(
+                        {
+                            "kind": "outcome",
+                            "outcome_id": f"out-{symbol}",
+                            "signal_id": f"sig-{symbol}",
+                            "review_date": "2026-06-15",
+                            "symbol": symbol,
+                            "outcome": "triggered",
+                        },
+                        ensure_ascii=False,
+                    )
+                    for symbol in ("AMD", "MU")
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            report = root / "report" / "2026-06-15"
+            report.mkdir(parents=True)
+            (root / "runtime" / "intraday" / "2026-06-15").mkdir(parents=True)
+            (root / "runtime" / "intraday" / "2026-06-15" / "state.json").write_text(
+                json.dumps(
+                    {
+                        "symbols": {
+                            "AMD": {"state": "price_touched", "bar_timestamp": "2026-06-15 10:35:00"},
+                            "MU": {"state": "price_touched", "bar_timestamp": "2026-06-15 10:35:00"},
+                        }
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (report / "monitor-signals.json").write_text(
+                json.dumps(
+                    {
+                        "signals": [
+                            {"signal_id": "mon-AMD", "symbol": "AMD", "plan_type": "no_trade", "execution_status": "no_trade"},
+                            {"signal_id": "mon-MU", "symbol": "MU", "plan_type": "no_trade", "execution_status": "no_trade"},
+                        ]
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            blocked_reasons = [
+                "execution_status is not conditional_executable",
+                "plan_type is not trade_plan",
+                "risk.max_account_risk_pct must be > 0",
+            ]
+            (report / "paper-trade-submission.json").write_text(
+                json.dumps(
+                    {
+                        "ready": [],
+                        "submitted": [],
+                        "blocked": [
+                            {
+                                "intent": {"source_signal_id": f"sig-{symbol}", "symbol": f"{symbol}.US"},
+                                "preview": {"reasons": blocked_reasons},
+                                "risk_guard": {"passed": False, "errors": []},
+                            }
+                            for symbol in ("AMD", "MU")
+                        ],
+                        "summary": {"ready": 0, "submitted": 0, "blocked": 2},
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            command = [
+                sys.executable,
+                str(ROOT / "script" / "plan_review.py"),
+                "--repo-root",
+                str(root),
+                "--date",
+                "2026-06-15",
+            ]
+            proc = subprocess.run(command, check=False, text=True, capture_output=True)
+
+            self.assertEqual(proc.returncode, 0, msg=proc.stderr or proc.stdout)
+            payload = json.loads(proc.stdout)
+            funnel = payload["summary"]["execution_funnel"]
+            self.assertEqual(funnel["price_touched"], 2)
+            self.assertEqual(funnel["intraday_state_confirmed"], 2)
+            self.assertEqual(funnel["codex_reviewed"], 2)
+            self.assertEqual(funnel["codex_no_trade"], 2)
+            self.assertEqual(funnel["codex_conditional_executable"], 0)
+            self.assertEqual(funnel["complete_trade_plan_card"], 0)
+            self.assertEqual(funnel["validation_passed"], 0)
+            self.assertEqual(funnel["preview_ready"], 0)
+            self.assertEqual(funnel["risk_guard_passed"], 0)
+            self.assertEqual(funnel["submit_requested"], 0)
+            self.assertEqual(funnel["broker_submitted"], 0)
+            self.assertEqual(funnel["trade_recorded"], 0)
+            self.assertEqual(
+                payload["summary"]["paper_block_reasons"],
+                {
+                    "execution_status is not conditional_executable": 2,
+                    "plan_type is not trade_plan": 2,
+                    "risk.max_account_risk_pct must be > 0": 2,
+                },
+            )
+            markdown = (root / "report" / "2026-06-15" / "plan-review.md").read_text(encoding="utf-8")
+            self.assertIn("codex_conditional_executable=0", markdown)
+            self.assertIn("paper ready=0", markdown)
 
     def test_daily_self_review_writes_markdown_and_dedupes_review_append(self):
         with tempfile.TemporaryDirectory() as tmp:

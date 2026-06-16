@@ -49,6 +49,8 @@ def session_signal_paths(repo_root: Path, date: str, session: str) -> list[Path]
             report_dir / SESSION_SIGNAL_FILENAMES["post-market"],
             report_dir / "signals.json",
         ]
+    if session == "intraday":
+        return [report_dir / "monitor-signals.json"]
     return [report_dir / SESSION_SIGNAL_FILENAMES[session]]
 
 
@@ -108,9 +110,23 @@ def fallback_rows(symbols: dict[str, dict[str, Any]], focus: set[str] | None = N
                 "provider": meta.get("provider"),
                 "fallback_from": meta.get("fallback_from"),
                 "primary_error": meta.get("primary_error"),
+                "fallback_reason": normalize_fallback_reason(meta.get("primary_error")),
             }
         )
     return rows
+
+
+def normalize_fallback_reason(value: Any) -> str | None:
+    text = str(value or "").strip().lower()
+    if not text:
+        return None
+    if "connection reset" in text or "reset by peer" in text:
+        return "connection_reset"
+    if "timeout" in text or "timed out" in text:
+        return "timeout"
+    if "permission" in text or "unauthorized" in text or "forbidden" in text:
+        return "permission_or_auth"
+    return text.replace(" ", "_")[:80]
 
 
 def account_price_deltas(
@@ -183,6 +199,70 @@ def load_snapshot(repo_root: Path, date: str, explicit_snapshot: str | None) -> 
     raise FileNotFoundError(f"missing or invalid snapshot: {daily_path}")
 
 
+def latest_bar_date_from_symbols(symbols: dict[str, dict[str, Any]]) -> str | None:
+    dates: list[str] = []
+    for item in symbols.values():
+        latest = item.get("latest") if isinstance(item.get("latest"), dict) else {}
+        for key in ("datetime", "date", "dt"):
+            value = latest.get(key)
+            if value:
+                text = str(value)
+                if len(text) >= 10:
+                    dates.append(text[:10])
+                break
+    return max(dates) if dates else None
+
+
+def provider_phase_summary(symbols: dict[str, dict[str, Any]], focused_fallback: list[dict[str, Any]]) -> dict[str, Any]:
+    providers = provider_summary(symbols)
+    provider_source = None
+    if len(providers) == 1:
+        provider_source = next(iter(providers))
+    elif providers:
+        provider_source = "mixed"
+    fallback_from = None
+    fallback_reason = None
+    if focused_fallback:
+        from_values = sorted({str(row.get("fallback_from")) for row in focused_fallback if row.get("fallback_from")})
+        reason_values = sorted({str(row.get("fallback_reason")) for row in focused_fallback if row.get("fallback_reason")})
+        fallback_from = from_values[0] if len(from_values) == 1 else ("mixed" if from_values else None)
+        fallback_reason = reason_values[0] if len(reason_values) == 1 else ("mixed" if reason_values else None)
+    return {"provider_source": provider_source, "fallback_from": fallback_from, "fallback_reason": fallback_reason}
+
+
+def phase_name(session: str) -> str:
+    return {"pre-market": "pre_market", "post-market": "post_market"}.get(session, session)
+
+
+def phase_freshness(
+    *,
+    session: str,
+    date: str,
+    snapshot: dict[str, Any],
+    symbols: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    phase = phase_name(session)
+    latest_dates = snapshot.get("latest_bar_dates")
+    latest_date = None
+    if isinstance(latest_dates, list) and latest_dates:
+        latest_date = str(max(latest_dates))
+    latest_date = latest_date or latest_bar_date_from_symbols(symbols)
+    expected = str(snapshot.get("snapshot_date") or latest_date or date) if phase == "pre_market" else date
+    stale = bool(snapshot.get("stale_data"))
+    reason = snapshot.get("stale_reason")
+    if phase in {"intraday", "post_market"} and latest_date and latest_date != expected:
+        stale = True
+        label = "intraday latest bar date" if phase == "intraday" else "post-market latest bar date"
+        reason = f"{label} {latest_date} != expected {expected}"
+    return {
+        "session_phase": phase,
+        "expected_bar_date": expected,
+        "actual_latest_bar_date": latest_date,
+        "stale_data": stale,
+        "stale_reason": reason,
+    }
+
+
 def status_for(payload: dict[str, Any]) -> str:
     if payload["missing_focused_symbols"]:
         return "fail"
@@ -196,8 +276,15 @@ def markdown(payload: dict[str, Any]) -> str:
         f"# Data Quality ({payload['date']})",
         "",
         f"- status: {payload['status']}",
+        f"- session_phase: {payload['session_phase']}",
         f"- snapshot: {payload['snapshot_path']}",
+        f"- expected_bar_date: {payload.get('expected_bar_date') or 'unknown'}",
+        f"- actual_latest_bar_date: {payload.get('actual_latest_bar_date') or 'unknown'}",
         f"- stale_data: {payload['stale_data']}",
+        f"- stale_reason: {payload.get('stale_reason') or 'none'}",
+        f"- provider_source: {payload.get('provider_source') or 'unknown'}",
+        f"- fallback_from: {payload.get('fallback_from') or 'none'}",
+        f"- fallback_reason: {payload.get('fallback_reason') or 'none'}",
         f"- latest_bar_dates: {', '.join(payload['latest_bar_dates']) or 'none'}",
         f"- providers: {json.dumps(payload['provider_summary'], ensure_ascii=False, sort_keys=True)}",
         f"- focused_symbols: {', '.join(payload['focused_symbols']) or 'none'}",
@@ -244,6 +331,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     focus, signal_sources = focused_symbols(repo_root, args.date, args.session)
     focus_set = set(focus)
     missing_focus = sorted(symbol for symbol in focus if symbol not in symbols)
+    focused_fallback = fallback_rows(symbols, focus_set)
+    freshness = phase_freshness(session=args.session, date=args.date, snapshot=snapshot, symbols=symbols)
+    provider_fields = provider_phase_summary(symbols, focused_fallback)
     account_deltas, account_path = account_price_deltas(
         repo_root=repo_root,
         date=args.date,
@@ -254,20 +344,20 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     payload = {
         "date": args.date,
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        **freshness,
         "snapshot_path": snapshot_path,
         "signal_sources": signal_sources,
         "account_snapshot_path": account_path,
         "market_data_source": snapshot.get("market_data_source"),
         "primary_market_data_source": snapshot.get("primary_market_data_source"),
         "fallback_market_data_source": snapshot.get("fallback_market_data_source"),
-        "stale_data": bool(snapshot.get("stale_data")),
-        "stale_reason": snapshot.get("stale_reason"),
+        **provider_fields,
         "latest_bar_dates": snapshot.get("latest_bar_dates", []),
         "provider_summary": provider_summary(symbols),
         "focused_symbols": focus,
         "missing_focused_symbols": missing_focus,
         "fallback_symbols": fallback_rows(symbols),
-        "focused_fallback_symbols": fallback_rows(symbols, focus_set),
+        "focused_fallback_symbols": focused_fallback,
         "account_price_deltas": account_deltas,
         "abnormal_moves": abnormal_moves(symbols, args.abnormal_move_threshold_pct),
         "snapshot_errors": snapshot.get("errors", []),
@@ -295,7 +385,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Generate daily market-data quality artifacts")
     parser.add_argument("--date", required=True)
-    parser.add_argument("--session", choices=["pre-market", "post-market", "all"], default="all")
+    parser.add_argument("--session", choices=["pre-market", "intraday", "post-market", "all"], default="all")
     parser.add_argument("--snapshot")
     parser.add_argument("--account-snapshot")
     parser.add_argument("--output-json")

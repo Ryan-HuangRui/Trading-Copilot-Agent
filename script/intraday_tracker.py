@@ -13,6 +13,9 @@ from zoneinfo import ZoneInfo
 
 IMPORTANT_STATES = {
     "near_trigger",
+    "price_touched",
+    "reference_invalidated",
+    "daily_range_touched_both_order_unknown",
     "triggered",
     "triggered_but_blocked",
     "triggered_but_failed_hold",
@@ -22,6 +25,18 @@ IMPORTANT_STATES = {
     "no_chase_gap",
     "risk_warning",
 }
+
+ONE_SHOT_STATES = {
+    "near_trigger",
+    "triggered_and_invalidated",
+    "daily_range_touched_both_order_unknown",
+    "invalidated",
+    "reference_invalidated",
+    "no_chase_gap",
+    "missed_window",
+}
+
+INVALID_DETAIL_TYPES = {"", "none", "null", "na", "n/a", "reference_only"}
 
 
 def read_json(path: Path, default: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -145,11 +160,38 @@ def detail_price(payload: dict[str, Any], key: str) -> float | None:
     return to_float(value)
 
 
+def valid_detail_price(payload: dict[str, Any] | None, key: str) -> float | None:
+    if not isinstance(payload, dict):
+        return None
+    value = payload.get(key)
+    if isinstance(value, dict):
+        detail_type = str(value.get("type") or "").strip().lower()
+        if detail_type in INVALID_DETAIL_TYPES:
+            return None
+        return to_float(value.get("price"))
+    return to_float(value)
+
+
+def scan_level_price(scan: dict[str, Any] | None, detail_key: str, scalar_key: str) -> float | None:
+    if not isinstance(scan, dict):
+        return None
+    detail = scan.get(detail_key)
+    if isinstance(detail, dict):
+        detail_type = str(detail.get("type") or "").strip().lower()
+        if detail_type in INVALID_DETAIL_TYPES:
+            return None
+        return to_float(detail.get("price")) or to_float(scan.get(scalar_key))
+    return to_float(scan.get(scalar_key))
+
+
 def signal_price(plan: dict[str, Any] | None, key: str) -> float | None:
     if not isinstance(plan, dict):
         return None
     value = plan.get(key)
     if isinstance(value, dict):
+        detail_type = str(value.get("type") or "").strip().lower()
+        if detail_type in INVALID_DETAIL_TYPES:
+            return None
         return to_float(value.get("price"))
     return to_float(value)
 
@@ -167,7 +209,7 @@ def plan_trigger_price(plan: dict[str, Any] | None) -> float | None:
     return (
         signal_price(plan, "trigger")
         or to_float(nested(plan, "entry", "trigger_price"))
-        or detail_price(plan or {}, "trigger_detail")
+        or valid_detail_price(plan, "trigger_detail")
     )
 
 
@@ -175,8 +217,30 @@ def plan_invalidation_price(plan: dict[str, Any] | None) -> float | None:
     return (
         signal_price(plan, "invalidation")
         or to_float(nested(plan, "stop", "initial_stop"))
-        or detail_price(plan or {}, "invalidation_detail")
+        or valid_detail_price(plan, "invalidation_detail")
     )
+
+
+def select_levels(scan: dict[str, Any] | None, plan: dict[str, Any] | None) -> dict[str, Any]:
+    plan_trigger = plan_trigger_price(plan)
+    plan_invalidation = plan_invalidation_price(plan)
+    monitor_trigger = scan_level_price(scan, "trigger_detail", "trigger")
+    monitor_stop = scan_level_price(scan, "invalidation_detail", "stop")
+    if plan_trigger is not None and plan_invalidation is not None:
+        trigger_price = plan_trigger
+        invalidation_price = plan_invalidation
+        level_source = "pre_market_plan"
+    else:
+        trigger_price = monitor_trigger
+        invalidation_price = monitor_stop
+        level_source = "monitor_scan_dynamic" if trigger_price is not None or invalidation_price is not None else None
+    return {
+        "trigger_price": trigger_price,
+        "invalidation_price": invalidation_price,
+        "level_source": level_source,
+        "monitor_trigger": monitor_trigger,
+        "monitor_stop": monitor_stop,
+    }
 
 
 def scan_last_price(scan: dict[str, Any]) -> float | None:
@@ -249,17 +313,18 @@ def evaluate_state(
     date: str,
     previous_state: str | None = None,
 ) -> dict[str, Any]:
-    plan_trigger = plan_trigger_price(plan)
-    plan_invalidation = plan_invalidation_price(plan)
+    levels = select_levels(scan, plan)
     if not scan:
         return {
             "symbol": symbol,
             "state": "no_data",
+            "price_observation_state": "no_data",
+            "trade_candidate_state": None,
+            "state_layer": "price_observation",
             "monitor_status": None,
             "reason": "monitor scan missing for tracked symbol",
             "bar_timestamp": None,
-            "trigger_price": plan_trigger,
-            "invalidation_price": plan_invalidation,
+            **levels,
             "risk_quality": None,
             "risk_alerts": [],
         }
@@ -270,26 +335,37 @@ def evaluate_state(
     if bar_timestamp_date(bar_timestamp) not in {None, date}:
         return {
             "symbol": symbol,
-            "state": "stale_data",
+            "state": "stale",
+            "price_observation_state": "stale",
+            "trade_candidate_state": None,
+            "state_layer": "price_observation",
             "monitor_status": status or None,
             "reason": f"stale monitor bar {bar_timestamp}; expected {date}",
             "bar_timestamp": bar_timestamp,
-            "trigger_price": detail_price(scan, "trigger_detail") or to_float(scan.get("trigger")) or plan_trigger,
-            "invalidation_price": detail_price(scan, "invalidation_detail") or to_float(scan.get("stop")) or plan_invalidation,
+            **levels,
             "risk_quality": risk_quality or None,
             "risk_alerts": [],
         }
 
     last_price = scan_last_price(scan)
-    invalidation_price = detail_price(scan, "invalidation_detail") or to_float(scan.get("stop")) or plan_invalidation
-    trigger_price = detail_price(scan, "trigger_detail") or to_float(scan.get("trigger")) or plan_trigger
+    invalidation_price = levels["invalidation_price"]
+    trigger_price = levels["trigger_price"]
     intraday_high = to_float(nested(scan, "price_evidence", "key_levels", "intraday_high")) or to_float(nested(scan, "latest_bar", "high"))
     intraday_low = to_float(nested(scan, "price_evidence", "key_levels", "intraday_low")) or to_float(nested(scan, "latest_bar", "low"))
     trigger_touched = bool(
         trigger_price is not None
         and (
             status == "可执行"
-            or previous_state in {"near_trigger", "triggered", "triggered_but_blocked", "no_chase_gap", "triggered_but_failed_hold"}
+            or previous_state
+            in {
+                "triggered",
+                "triggered_but_blocked",
+                "triggered_but_failed_hold",
+                "triggered_and_invalidated",
+                "price_touched",
+                "daily_range_touched_both_order_unknown",
+                "no_chase_gap",
+            }
             or (intraday_high is not None and intraday_high >= trigger_price)
             or (last_price is not None and last_price >= trigger_price)
         )
@@ -304,19 +380,16 @@ def evaluate_state(
     risk_alerts = risk_alerts_for(scan, last_price)
 
     if trigger_touched and invalidation_touched:
-        state = "triggered_and_invalidated"
-        reason = "触发位与失效位均已被触及；不能视为有效突破"
+        state = "daily_range_touched_both_order_unknown"
+        reason = "日内区间同时触及触发位与失效位；无时间顺序证据，不能视为交易确认"
     elif invalidation_touched:
-        state = "invalidated"
-        reason = "跌破失效位"
+        state = "reference_invalidated"
+        reason = "触及参考失效位"
     elif no_chase_gap(scan, plan, trigger_price, invalidation_price):
         state = "no_chase_gap"
         reason = "开盘或当前价格远离触发位，触发 no-chase 规则"
-    elif trigger_touched and last_price is not None and trigger_price is not None and last_price < trigger_price:
-        state = "triggered_but_failed_hold"
-        reason = "触发后未能站稳触发位"
-    elif status == "可执行":
-        state = "triggered" if risk_quality in {"acceptable", "watch_only", ""} else "triggered_but_blocked"
+    elif trigger_touched:
+        state = "price_touched"
         reason = scan.get("reason")
     elif status == "临近触发":
         state = "near_trigger"
@@ -341,11 +414,13 @@ def evaluate_state(
     return {
         "symbol": symbol,
         "state": state,
+        "price_observation_state": state,
+        "trade_candidate_state": None,
+        "state_layer": "price_observation",
         "monitor_status": status or None,
         "reason": reason,
         "bar_timestamp": bar_timestamp,
-        "trigger_price": trigger_price,
-        "invalidation_price": invalidation_price,
+        **levels,
         "risk_quality": risk_quality or None,
         "risk_alerts": risk_alerts,
     }
@@ -379,7 +454,7 @@ def should_emit_event(prior: dict[str, Any], evaluated: dict[str, Any]) -> bool:
     previous_state = prior.get("state")
     if previous_state != state:
         return True
-    if state == "near_trigger":
+    if state in ONE_SHOT_STATES:
         return False
     return prior.get("bar_timestamp") != evaluated.get("bar_timestamp")
 
@@ -457,9 +532,17 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 "symbol": symbol,
                 "event_type": event_type_for_state(str(evaluated["state"])),
                 "state": evaluated["state"],
+                "price_observation_state": evaluated.get("price_observation_state"),
+                "trade_candidate_state": evaluated.get("trade_candidate_state"),
+                "state_layer": evaluated.get("state_layer"),
                 "previous_state": prior.get("state"),
                 "bar_timestamp": evaluated.get("bar_timestamp"),
                 "reason": evaluated.get("reason"),
+                "trigger_price": evaluated.get("trigger_price"),
+                "invalidation_price": evaluated.get("invalidation_price"),
+                "level_source": evaluated.get("level_source"),
+                "monitor_trigger": evaluated.get("monitor_trigger"),
+                "monitor_stop": evaluated.get("monitor_stop"),
                 "risk_alerts": evaluated.get("risk_alerts") or [],
                 "notify": True,
                 "source": "intraday-tracker",

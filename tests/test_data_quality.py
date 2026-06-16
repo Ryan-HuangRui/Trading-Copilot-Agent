@@ -139,6 +139,111 @@ class DataQualityTest(unittest.TestCase):
             self.assertEqual(payload["snapshot_path"], "report/2026-05-27/daily-snapshot.json")
             self.assertEqual(payload["quality_status"], "pass")
 
+    def test_intraday_data_quality_reports_phase_fallback_and_current_bar_freshness(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            report_dir = root / "report" / "2026-06-15"
+            report_dir.mkdir(parents=True)
+            (report_dir / "daily-snapshot.json").write_text(
+                json.dumps(
+                    {
+                        "snapshot_date": "2026-06-15",
+                        "market_data_source": "longbridge_with_twelve_data_fallback",
+                        "primary_market_data_source": "longbridge",
+                        "fallback_market_data_source": "twelve",
+                        "stale_data": False,
+                        "latest_bar_dates": ["2026-06-15"],
+                        "symbols": [
+                            {
+                                "symbol": "AMD",
+                                "meta": {
+                                    "provider": "twelve_data",
+                                    "fallback_from": "longbridge",
+                                    "primary_error": "connection reset by peer",
+                                },
+                                "latest": {"datetime": "2026-06-15 10:35:00", "close": "123"},
+                                "metrics": {"close_delta_pct": 1},
+                            }
+                        ],
+                        "errors": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (report_dir / "monitor-signals.json").write_text(
+                json.dumps({"signals": [{"symbol": "AMD"}]}),
+                encoding="utf-8",
+            )
+
+            result = data_quality.run(
+                Namespace(
+                    repo_root=str(root),
+                    date="2026-06-15",
+                    session="intraday",
+                    snapshot=None,
+                    account_snapshot=None,
+                    output_json=None,
+                    output_md=None,
+                    account_delta_threshold_pct=5.0,
+                    abnormal_move_threshold_pct=20.0,
+                )
+            )
+
+            self.assertEqual(result["quality_status"], "warn")
+            payload = json.loads((report_dir / "data-quality.json").read_text(encoding="utf-8"))
+            self.assertEqual(payload["session_phase"], "intraday")
+            self.assertEqual(payload["expected_bar_date"], "2026-06-15")
+            self.assertEqual(payload["actual_latest_bar_date"], "2026-06-15")
+            self.assertEqual(payload["provider_source"], "twelve_data")
+            self.assertEqual(payload["fallback_from"], "longbridge")
+            self.assertEqual(payload["fallback_reason"], "connection_reset")
+            self.assertFalse(payload["stale_data"])
+            markdown = (report_dir / "data-quality.md").read_text(encoding="utf-8")
+            self.assertIn("session_phase: intraday", markdown)
+            self.assertIn("fallback_reason: connection_reset", markdown)
+
+    def test_intraday_data_quality_flags_previous_day_bar_as_stale_even_when_snapshot_flag_is_false(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            report_dir = root / "report" / "2026-06-15"
+            report_dir.mkdir(parents=True)
+            (report_dir / "daily-snapshot.json").write_text(
+                json.dumps(
+                    {
+                        "snapshot_date": "2026-06-15",
+                        "stale_data": False,
+                        "latest_bar_dates": ["2026-06-12"],
+                        "symbols": [
+                            {
+                                "symbol": "AMD",
+                                "meta": {"provider": "longbridge"},
+                                "latest": {"datetime": "2026-06-12 15:55:00", "close": "123"},
+                            }
+                        ],
+                        "errors": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            data_quality.run(
+                Namespace(
+                    repo_root=str(root),
+                    date="2026-06-15",
+                    session="intraday",
+                    snapshot=None,
+                    account_snapshot=None,
+                    output_json=None,
+                    output_md=None,
+                    account_delta_threshold_pct=5.0,
+                    abnormal_move_threshold_pct=20.0,
+                )
+            )
+
+            payload = json.loads((report_dir / "data-quality.json").read_text(encoding="utf-8"))
+            self.assertTrue(payload["stale_data"])
+            self.assertEqual(payload["stale_reason"], "intraday latest bar date 2026-06-12 != expected 2026-06-15")
+
 
 if __name__ == "__main__":
     unittest.main()

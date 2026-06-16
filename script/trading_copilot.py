@@ -3711,7 +3711,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     data_quality = sub.add_parser("data-quality", help="Generate market-data quality artifacts")
     data_quality.add_argument("--date", required=True)
-    data_quality.add_argument("--session", choices=["pre-market", "post-market", "all"], default="all")
+    data_quality.add_argument("--session", choices=["pre-market", "intraday", "post-market", "all"], default="all")
     data_quality.add_argument("--snapshot")
     data_quality.add_argument("--account-snapshot")
     data_quality.add_argument("--output-json")

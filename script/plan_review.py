@@ -145,6 +145,30 @@ def paper_submission_lookup(payload: dict[str, Any]) -> tuple[dict[str, str], di
     return by_signal_id, by_symbol
 
 
+def paper_block_reason_counts(payload: dict[str, Any]) -> dict[str, int]:
+    counts: Counter[str] = Counter()
+    for state in ("blocked", "errors"):
+        entries = payload.get(state)
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            candidates: list[Any] = []
+            preview = entry.get("preview") if isinstance(entry.get("preview"), dict) else {}
+            risk_guard = entry.get("risk_guard") if isinstance(entry.get("risk_guard"), dict) else {}
+            candidates.extend(preview.get("reasons") if isinstance(preview.get("reasons"), list) else [])
+            candidates.extend(risk_guard.get("errors") if isinstance(risk_guard.get("errors"), list) else [])
+            candidates.extend(entry.get("errors") if isinstance(entry.get("errors"), list) else [])
+            candidates.append(entry.get("reason"))
+            candidates.append(entry.get("error"))
+            for reason in candidates:
+                text = str(reason or "").strip()
+                if text:
+                    counts[text] += 1
+    return dict(sorted(counts.items()))
+
+
 def paper_state_for(signal: dict[str, Any], by_signal_id: dict[str, str], by_symbol: dict[str, str]) -> str:
     signal_id = str(signal.get("signal_id") or "")
     symbol = normalize_symbol(signal.get("symbol"))
@@ -161,6 +185,8 @@ def intraday_confirmed(state: str | None) -> bool:
         "triggered_but_blocked",
         "triggered_but_failed_hold",
         "triggered_and_invalidated",
+        "price_touched",
+        "daily_range_touched_both_order_unknown",
         "no_chase_gap",
     }
 
@@ -170,6 +196,18 @@ def codex_candidate(signal: dict[str, Any] | None) -> bool:
         return False
     status = str(signal.get("execution_status") or signal.get("plan_type") or "")
     return status in {"conditional_executable", "watch_only"}
+
+
+def codex_status(signal: dict[str, Any] | None) -> str | None:
+    if not isinstance(signal, dict):
+        return None
+    return str(signal.get("execution_status") or signal.get("plan_type") or "") or None
+
+
+def complete_trade_plan_card(signal: dict[str, Any] | None) -> bool:
+    if not isinstance(signal, dict):
+        return False
+    return signal.get("plan_type") == "trade_plan" and has_trade_plan_card(signal)
 
 
 def build_execution_layers(
@@ -186,6 +224,35 @@ def build_execution_layers(
         "codex_candidate": codex_candidate(monitor_signal),
         "paper_ready": paper_submission_state in {"ready", "submitted"},
         "paper_submitted": paper_submission_state == "submitted",
+        "trade_recorded": trade_count > 0,
+    }
+
+
+def build_execution_funnel(
+    *,
+    outcome: str,
+    intraday_state: str | None,
+    monitor_signal: dict[str, Any] | None,
+    paper_submission_state: str,
+    trade_count: int,
+    validation_passed: bool,
+    submit_requested: bool,
+) -> dict[str, bool]:
+    status = codex_status(monitor_signal)
+    return {
+        "price_touched": price_triggered(outcome) or intraday_confirmed(intraday_state),
+        "intraday_state_confirmed": intraday_confirmed(intraday_state),
+        "codex_reviewed": isinstance(monitor_signal, dict),
+        "codex_no_trade": status == "no_trade",
+        "codex_watch_only": status == "watch_only",
+        "codex_candidate": codex_candidate(monitor_signal),
+        "codex_conditional_executable": status == "conditional_executable",
+        "complete_trade_plan_card": complete_trade_plan_card(monitor_signal),
+        "validation_passed": validation_passed,
+        "preview_ready": paper_submission_state in {"ready", "submitted"},
+        "risk_guard_passed": paper_submission_state in {"ready", "submitted"},
+        "submit_requested": submit_requested,
+        "broker_submitted": paper_submission_state == "submitted",
         "trade_recorded": trade_count > 0,
     }
 
@@ -256,6 +323,8 @@ def build_plan_review(
     intraday_state: dict[str, Any] | None = None,
     monitor_signal: dict[str, Any] | None = None,
     paper_submission_state: str = "not_ready",
+    validation_passed: bool = False,
+    submit_requested: bool = False,
 ) -> dict[str, Any]:
     plan_type = str(signal.get("plan_type") or "legacy_signal")
     execution_status = str(signal.get("execution_status") or signal.get("status") or "unknown")
@@ -280,6 +349,15 @@ def build_plan_review(
         paper_submission_state=paper_submission_state,
         trade_count=len(symbol_trades),
     )
+    funnel = build_execution_funnel(
+        outcome=str(outcome_state),
+        intraday_state=intraday_state_name,
+        monitor_signal=monitor_signal,
+        paper_submission_state=paper_submission_state,
+        trade_count=len(symbol_trades),
+        validation_passed=validation_passed,
+        submit_requested=submit_requested,
+    )
 
     return {
         "signal_id": signal.get("signal_id"),
@@ -298,6 +376,7 @@ def build_plan_review(
         "codex_review_plan_type": monitor_signal.get("plan_type") if isinstance(monitor_signal, dict) else None,
         "paper_submission_state": paper_submission_state,
         "execution_layers": layers,
+        "execution_funnel": funnel,
         "trade_state": "has_trade_record" if symbol_trades else "no_trade_record",
         "trade_count": len(symbol_trades),
     }
@@ -364,8 +443,28 @@ def position_lesson(date: str, record: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
-def summarize(reviews: list[dict[str, Any]], position_summary: dict[str, Any] | None = None) -> dict[str, Any]:
+def summarize(
+    reviews: list[dict[str, Any]],
+    position_summary: dict[str, Any] | None = None,
+    paper_block_reasons: dict[str, int] | None = None,
+) -> dict[str, Any]:
     layer_names = ("price_triggered", "intraday_confirmed", "codex_candidate", "paper_ready", "paper_submitted", "trade_recorded")
+    funnel_names = (
+        "price_touched",
+        "intraday_state_confirmed",
+        "codex_reviewed",
+        "codex_no_trade",
+        "codex_watch_only",
+        "codex_candidate",
+        "codex_conditional_executable",
+        "complete_trade_plan_card",
+        "validation_passed",
+        "preview_ready",
+        "risk_guard_passed",
+        "submit_requested",
+        "broker_submitted",
+        "trade_recorded",
+    )
     return {
         "plans": len(reviews),
         "sessions": dict(Counter(str(item.get("session") or "unknown") for item in reviews)),
@@ -376,6 +475,11 @@ def summarize(reviews: list[dict[str, Any]], position_summary: dict[str, Any] | 
             name: sum(1 for item in reviews if (item.get("execution_layers") or {}).get(name))
             for name in layer_names
         },
+        "execution_funnel": {
+            name: sum(1 for item in reviews if (item.get("execution_funnel") or {}).get(name))
+            for name in funnel_names
+        },
+        "paper_block_reasons": paper_block_reasons or {},
         "position_discipline": position_summary or {
             "position_reviews": 0,
             "review_required": 0,
@@ -411,6 +515,8 @@ def session_groups(reviews: list[dict[str, Any]]) -> dict[str, list[str]]:
 
 def build_markdown(date: str, reviews: list[dict[str, Any]], summary: dict[str, Any], position_details: dict[str, list[str]]) -> str:
     layers = summary.get("execution_layers", {})
+    funnel = summary.get("execution_funnel", {})
+    paper_block_reasons = summary.get("paper_block_reasons", {})
     lines = [
         f"# 日度交易计划复盘（{date}）",
         "",
@@ -431,6 +537,23 @@ def build_markdown(date: str, reviews: list[dict[str, Any]], summary: dict[str, 
             f"paper submitted={layers.get('paper_submitted', 0)}；"
             f"trade recorded={layers.get('trade_recorded', 0)}"
         ),
+        (
+            "- "
+            f"price_touched={funnel.get('price_touched', 0)}；"
+            f"intraday_state_confirmed={funnel.get('intraday_state_confirmed', 0)}；"
+            f"codex_reviewed={funnel.get('codex_reviewed', 0)}；"
+            f"codex_no_trade={funnel.get('codex_no_trade', 0)}；"
+            f"codex_watch_only={funnel.get('codex_watch_only', 0)}；"
+            f"codex_conditional_executable={funnel.get('codex_conditional_executable', 0)}；"
+            f"complete_trade_plan_card={funnel.get('complete_trade_plan_card', 0)}；"
+            f"validation_passed={funnel.get('validation_passed', 0)}；"
+            f"preview_ready={funnel.get('preview_ready', 0)}；"
+            f"risk_guard_passed={funnel.get('risk_guard_passed', 0)}；"
+            f"submit_requested={funnel.get('submit_requested', 0)}；"
+            f"broker_submitted={funnel.get('broker_submitted', 0)}；"
+            f"trade_recorded={funnel.get('trade_recorded', 0)}"
+        ),
+        f"- paper blocked reason：{json.dumps(paper_block_reasons, ensure_ascii=False, sort_keys=True) if paper_block_reasons else '无'}",
         "",
         "## 逐计划复盘（按 session 分组）",
     ]
@@ -509,6 +632,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     intraday_map = intraday_states_by_symbol(intraday_state_payload)
     monitor_map = signals_by_symbol(monitor_signals_payload)
     paper_by_signal_id, paper_by_symbol = paper_submission_lookup(paper_submission_payload)
+    paper_block_reasons = paper_block_reason_counts(paper_submission_payload)
+    validation = paper_submission_payload.get("validation") if isinstance(paper_submission_payload.get("validation"), dict) else {}
+    validation_passed = validation.get("status") == "pass"
+    submit_requested = bool(paper_submission_payload.get("execute_requested"))
 
     reviews = []
     for signal in signals:
@@ -522,11 +649,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 intraday_state=intraday_map.get(symbol),
                 monitor_signal=monitor_map.get(symbol),
                 paper_submission_state=paper_state_for(signal, paper_by_signal_id, paper_by_symbol),
+                validation_passed=validation_passed,
+                submit_requested=submit_requested,
             )
         )
 
     position_summary, position_details = position_discipline(position_reviews, reviews)
-    summary = summarize(reviews, position_summary)
+    summary = summarize(reviews, position_summary, paper_block_reasons)
     markdown_path, json_path = output_paths(repo_root, args.date, args.output)
     markdown_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {

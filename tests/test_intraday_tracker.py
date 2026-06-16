@@ -105,12 +105,12 @@ class IntradayTrackerTest(unittest.TestCase):
             self.assertEqual(result["summary"]["events"], 2)
             state = json.loads((root / "runtime" / "intraday" / "2026-05-26" / "state.json").read_text(encoding="utf-8"))
             self.assertEqual(state["symbols"]["MU"]["state"], "near_trigger")
-            self.assertEqual(state["symbols"]["INTC"]["state"], "triggered")
+            self.assertEqual(state["symbols"]["INTC"]["state"], "price_touched")
             self.assertNotIn("ORCL", state["symbols"])
             markdown = intraday_md.read_text(encoding="utf-8")
             self.assertIn("previous note", markdown)
             self.assertIn("MU: near_trigger", markdown)
-            self.assertIn("INTC: triggered", markdown)
+            self.assertIn("INTC: price_touched", markdown)
             events = [
                 json.loads(line)
                 for line in (root / "runtime" / "intraday" / "2026-05-26" / "events.jsonl").read_text(encoding="utf-8").splitlines()
@@ -128,7 +128,7 @@ class IntradayTrackerTest(unittest.TestCase):
                     "date": "2026-05-26",
                     "symbols": {
                         "MU": {"symbol": "MU", "state": "near_trigger", "bar_timestamp": "2026-05-26 10:30:00"},
-                        "INTC": {"symbol": "INTC", "state": "triggered", "bar_timestamp": "2026-05-26 10:30:00"},
+                        "INTC": {"symbol": "INTC", "state": "price_touched", "bar_timestamp": "2026-05-26 10:30:00"},
                     },
                 },
             )
@@ -176,6 +176,31 @@ class IntradayTrackerTest(unittest.TestCase):
             state = json.loads((root / "runtime" / "intraday" / "2026-05-26" / "state.json").read_text(encoding="utf-8"))
             self.assertEqual(state["symbols"]["MU"]["bar_timestamp"], "2026-05-26 10:35:00")
 
+    def test_run_suppresses_repeated_one_shot_state_on_new_bar(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.seed_inputs(root)
+            write_json(
+                root / "runtime" / "intraday" / "2026-05-26" / "state.json",
+                {
+                    "date": "2026-05-26",
+                    "symbols": {
+                        "MU": {
+                            "symbol": "MU",
+                            "state": "triggered_and_invalidated",
+                            "bar_timestamp": "2026-05-26 10:30:00",
+                        },
+                    },
+                },
+            )
+
+            self.assertFalse(
+                intraday_tracker.should_emit_event(
+                    {"state": "triggered_and_invalidated", "bar_timestamp": "2026-05-26 10:30:00"},
+                    {"state": "triggered_and_invalidated", "bar_timestamp": "2026-05-26 10:35:00"},
+                )
+            )
+
     def test_run_ignores_stale_previous_day_monitor_bar(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -214,11 +239,11 @@ class IntradayTrackerTest(unittest.TestCase):
 
             self.assertEqual(result["summary"]["events"], 0)
             state = json.loads((root / "runtime" / "intraday" / "2026-05-26" / "state.json").read_text(encoding="utf-8"))
-            self.assertEqual(state["symbols"]["DELL"]["state"], "stale_data")
+            self.assertEqual(state["symbols"]["DELL"]["state"], "stale")
             self.assertIn("stale", state["symbols"]["DELL"]["reason"])
             self.assertFalse((root / "runtime" / "intraday" / "2026-05-26" / "events.jsonl").exists())
 
-    def test_run_classifies_no_chase_failed_hold_and_triggered_invalidated(self):
+    def test_run_classifies_no_chase_failed_hold_and_daily_range_touched_both(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             write_json(
@@ -283,7 +308,7 @@ class IntradayTrackerTest(unittest.TestCase):
             second = intraday_tracker.run(self.args(root, as_of="2026-05-26T13:40:00+00:00"))
             state = json.loads((root / "runtime" / "intraday" / "2026-05-26" / "state.json").read_text(encoding="utf-8"))
             self.assertEqual(second["summary"]["events"], 1)
-            self.assertEqual(state["symbols"]["MU"]["state"], "triggered_but_failed_hold")
+            self.assertEqual(state["symbols"]["MU"]["state"], "price_touched")
 
             write_json(
                 root / "report" / "latest-monitor.json",
@@ -305,7 +330,112 @@ class IntradayTrackerTest(unittest.TestCase):
             third = intraday_tracker.run(self.args(root, as_of="2026-05-26T13:45:00+00:00"))
             state = json.loads((root / "runtime" / "intraday" / "2026-05-26" / "state.json").read_text(encoding="utf-8"))
             self.assertEqual(third["summary"]["events"], 1)
-            self.assertEqual(state["symbols"]["MU"]["state"], "triggered_and_invalidated")
+            self.assertEqual(state["symbols"]["MU"]["state"], "daily_range_touched_both_order_unknown")
+            self.assertEqual(state["symbols"]["MU"]["price_observation_state"], "daily_range_touched_both_order_unknown")
+            self.assertEqual(state["symbols"]["MU"]["trade_candidate_state"], None)
+
+    def test_pre_market_plan_levels_override_monitor_dynamic_levels(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_json(
+                root / "report" / "2026-05-26" / "pre-market-signals.json",
+                {
+                    "signals": [
+                        {
+                            "symbol": "MU",
+                            "trigger": {"type": "break_above", "price": 100},
+                            "invalidation": {"type": "break_below", "price": 95},
+                        }
+                    ]
+                },
+            )
+            write_json(root / "config" / "intraday_watchlist.json", {"symbols": []})
+            write_json(
+                root / "report" / "latest-monitor.json",
+                {
+                    "scans": [
+                        {
+                            "symbol": "MU",
+                            "status": "观察中",
+                            "last": 104,
+                            "trigger_detail": {"type": "dynamic_break_above", "price": 110},
+                            "invalidation_detail": {"type": "dynamic_break_below", "price": 102},
+                            "bar_timestamp": "2026-05-26 10:30:00",
+                            "price_evidence": {"key_levels": {"intraday_high": 104, "intraday_low": 101}},
+                        }
+                    ]
+                },
+            )
+
+            intraday_tracker.run(self.args(root))
+
+            state = json.loads((root / "runtime" / "intraday" / "2026-05-26" / "state.json").read_text(encoding="utf-8"))
+            row = state["symbols"]["MU"]
+            self.assertEqual(row["trigger_price"], 100.0)
+            self.assertEqual(row["invalidation_price"], 95.0)
+            self.assertEqual(row["level_source"], "pre_market_plan")
+            self.assertEqual(row["monitor_trigger"], 110.0)
+            self.assertEqual(row["monitor_stop"], 102.0)
+            self.assertEqual(row["state"], "price_touched")
+
+    def test_manual_watchlist_uses_monitor_dynamic_levels_without_plan(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_json(root / "report" / "2026-05-26" / "pre-market-signals.json", {"signals": []})
+            write_json(root / "config" / "intraday_watchlist.json", {"symbols": ["AMD"]})
+            write_json(
+                root / "report" / "latest-monitor.json",
+                {
+                    "scans": [
+                        {
+                            "symbol": "AMD",
+                            "status": "观察中",
+                            "last": 101,
+                            "trigger_detail": {"type": "dynamic_break_above", "price": 100},
+                            "invalidation_detail": {"type": "dynamic_break_below", "price": 95},
+                            "bar_timestamp": "2026-05-26 10:30:00",
+                        }
+                    ]
+                },
+            )
+
+            intraday_tracker.run(self.args(root))
+
+            state = json.loads((root / "runtime" / "intraday" / "2026-05-26" / "state.json").read_text(encoding="utf-8"))
+            row = state["symbols"]["AMD"]
+            self.assertEqual(row["trigger_price"], 100.0)
+            self.assertEqual(row["invalidation_price"], 95.0)
+            self.assertEqual(row["level_source"], "monitor_scan_dynamic")
+            self.assertEqual(row["state"], "price_touched")
+
+    def test_invalid_none_invalidation_detail_does_not_invalidate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_json(root / "report" / "2026-05-26" / "pre-market-signals.json", {"signals": []})
+            write_json(root / "config" / "intraday_watchlist.json", {"symbols": ["AMD"]})
+            write_json(
+                root / "report" / "latest-monitor.json",
+                {
+                    "scans": [
+                        {
+                            "symbol": "AMD",
+                            "status": "观察中",
+                            "last": 94,
+                            "trigger_detail": {"type": "dynamic_break_above", "price": 100},
+                            "invalidation_detail": {"type": "none", "price": 95},
+                            "bar_timestamp": "2026-05-26 10:30:00",
+                            "price_evidence": {"key_levels": {"intraday_low": 94}},
+                        }
+                    ]
+                },
+            )
+
+            intraday_tracker.run(self.args(root))
+
+            state = json.loads((root / "runtime" / "intraday" / "2026-05-26" / "state.json").read_text(encoding="utf-8"))
+            row = state["symbols"]["AMD"]
+            self.assertEqual(row["invalidation_price"], None)
+            self.assertEqual(row["state"], "waiting")
 
     def test_run_emits_risk_warning_for_vwap_and_previous_low_breaks(self):
         with tempfile.TemporaryDirectory() as tmp:

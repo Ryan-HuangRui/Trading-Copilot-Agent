@@ -22,7 +22,7 @@ from signal_artifacts import read_json
 
 
 OPEN_EXIT_STATUSES = {"submitted", "accepted", "partially_filled"}
-EXIT_TRIGGER_STATES = {"invalidated"}
+EXIT_TRIGGER_STATES = {"invalidated", "reference_invalidated"}
 
 
 def resolve_path(repo_root: Path, explicit_path: str | None, default_path: Path) -> Path:
