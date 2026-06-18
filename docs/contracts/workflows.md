@@ -411,6 +411,8 @@ Outputs:
 
 - `report/<DATE>/<SESSION>-run-manifest.json`
 - `report/<DATE>/focus-selection.json`
+- Post-market only: `report/<DATE>/workflow-review.json`
+- Post-market only: `report/<DATE>/workflow-review.md`
 - `report/<DATE>/feishu-summary.md`
 
 Required behavior:
@@ -419,6 +421,7 @@ Required behavior:
 - Run `data-quality` before `extract-report-signals`.
 - Run `focus-selection` before journal append so the selection audit is included in the run manifest and Feishu summary.
 - Post-market delivery should include learning-review by default after plan-review, with `--skip-learning-review` available for debugging or recovery.
+- Post-market delivery should run `daily-workflow-review` before `feishu-summary`, with `--skip-workflow-review` available for debugging or recovery.
 - Keep Longbridge sync optional and explicit. Pre-market defaults to additive sync; post-market defaults to replacement sync for `今日关注`.
 - Real-account broker writes remain prohibited.
 
@@ -709,6 +712,7 @@ Inputs:
 - Optional `report/<DATE>/position-review.json`
 - Optional `report/<DATE>/plan-review.json`
 - Optional post-market intraday artifacts: `report/<DATE>/intraday.md`, `runtime/intraday/<DATE>/state.json`, `runtime/intraday/<DATE>/events.jsonl`, and `runtime/intraday/<DATE>/sent-events.json`
+- Optional post-market workflow review: `report/<DATE>/workflow-review.json`
 - Optional `runtime/learning/daily_lessons.jsonl`
 
 Output:
@@ -719,6 +723,7 @@ Required behavior:
 
 - Show only a compact execution panel: conditional plans, watch candidates, `NO TRADE`, position review summary, plan review summary, and daily lessons.
 - For post-market summaries, include a compact intraday-monitor recap when artifacts exist: focus symbols, final state distribution, important event count, sent notification count, and artifact paths.
+- For post-market summaries, include the same-day workflow review when available: pre-market/intraday/post-market stage status, intraday failure count, possible missed candidates, and touch-fade/invalidated counts.
 - Keep the full analysis in the Markdown report artifacts; Feishu content should stay summary-first.
 - Do not present conditional plans as deterministic buy/sell instructions.
 
@@ -1484,6 +1489,38 @@ Required behavior:
 - Treat signal outcomes as objective price-touch observations, not true trade results.
 - Use `trades.jsonl` only for actual execution review.
 - Surface `not_evaluable`, `no_data`, and `triggered_and_invalidated` counts as follow-up items.
+
+## daily-workflow-review
+
+Purpose: review the same-day pre-market, intraday, and post-market process after post-market validation, and compare recorded signals against completed price evidence.
+
+Canonical command:
+
+```bash
+python3 script/trading_copilot.py daily-workflow-review --date <SNAPSHOT_DATE>
+```
+
+Inputs:
+
+- `report/<DATE>/pre-market-signals.json`
+- `report/<DATE>/monitor-signals.json`
+- `report/<DATE>/intraday-opportunity-context.json`
+- `runtime/intraday/<DATE>/state.json`
+- `runtime/intraday/<DATE>/events.jsonl`
+- `report/<DATE>/daily-snapshot.json`
+- `report/<DATE>/post-market-run-manifest.json`
+
+Output:
+
+- `report/<DATE>/workflow-review.json`
+- `report/<DATE>/workflow-review.md`
+
+Required behavior:
+
+- Summarize whether pre-market, intraday, and post-market artifacts were present and successful.
+- Classify watch/no-trade observations against price evidence as `possible_process_miss`, `touch_fade_or_invalidated`, `not_triggered`, or `not_evaluable`.
+- Treat `conditional_executable` Trade Plan Cards as execution-review inputs, not as missed watch-only opportunities.
+- Keep the review read-only; it must not mutate journal records, watchlists, broker state, or `knowledge/refined/`.
 
 ## weekly-review
 

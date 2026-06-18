@@ -1808,6 +1808,12 @@ class TradingCopilotWrapperTest(unittest.TestCase):
                     payload = {"status": "success", "artifacts": [str(root / "plan-review.json")], "summary": {}}
                 elif command[0] == "script/daily_self_review.py":
                     payload = {"status": "success", "output": str(root / "self-review.md"), "summary": {}}
+                elif command[0] == "script/daily_workflow_review.py":
+                    payload = {
+                        "status": "success",
+                        "artifacts": [str(root / "workflow-review.json"), str(root / "workflow-review.md")],
+                        "summary": {"missed_or_misjudged": {"possible_missed_candidates": 0}},
+                    }
                 elif command[0] == "script/feishu_summary.py":
                     payload = {"status": "success", "output": str(summary), "summary": {"watch_only": 1}}
                 return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
@@ -1832,6 +1838,7 @@ class TradingCopilotWrapperTest(unittest.TestCase):
                 learning_lookback_days=20,
                 skip_self_review=False,
                 append_self_review=False,
+                skip_workflow_review=False,
                 sync_longbridge=False,
                 execute_sync=False,
                 group_name="今日关注",
@@ -1854,6 +1861,7 @@ class TradingCopilotWrapperTest(unittest.TestCase):
 
             self.assertLess(calls.index("script/data_quality.py"), calls.index("script/extract_report_signals.py"))
             self.assertLess(calls.index("script/focus_selection.py"), calls.index("script/extract_report_signals.py"))
+            self.assertLess(calls.index("script/daily_workflow_review.py"), calls.index("script/feishu_summary.py"))
             self.assertTrue(manifest.exists())
             payload = emit.call_args.args[0]
             self.assertEqual(payload["status"], "success")
@@ -1861,6 +1869,7 @@ class TradingCopilotWrapperTest(unittest.TestCase):
             manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
             self.assertEqual(manifest_payload["status"], "success")
             self.assertEqual(manifest_payload["focused_symbols"], ["MU"])
+            self.assertIn("daily-workflow-review", [step["name"] for step in manifest_payload["steps"]])
 
     def test_account_snapshot_wrapper_contract(self):
         with tempfile.TemporaryDirectory() as tmp:

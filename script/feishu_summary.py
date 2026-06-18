@@ -147,6 +147,10 @@ def intraday_review(repo_root: Path, date: str) -> dict[str, Any]:
     }
 
 
+def workflow_review_artifact(repo_root: Path, date: str, explicit_path: str | None = None) -> dict[str, Any]:
+    return artifact_json(repo_root, explicit_path, repo_root / "report" / date / "workflow-review.json")
+
+
 def session_title(session: str) -> str:
     if session == "monitor":
         return "盘中"
@@ -210,6 +214,7 @@ def build_markdown(
     signal_source_summary: dict[str, Any] | None = None,
     focus_selection_payload: dict[str, Any] | None = None,
     intraday_payload: dict[str, Any] | None = None,
+    workflow_review_payload: dict[str, Any] | None = None,
 ) -> str:
     title_prefix = session_title(session)
     executable, watch, no_trade = split_signals(signals)
@@ -386,6 +391,37 @@ def build_markdown(
                 lines.append(f"- artifacts：{', '.join(artifacts)}")
             lines.append("- 盘中监控只用于复盘和提醒，不作为交易指令。")
 
+        workflow_review = workflow_review_payload or {}
+        workflow_summary = workflow_review.get("summary") if isinstance(workflow_review.get("summary"), dict) else {}
+        workflow_status = workflow_summary.get("workflow_status") if isinstance(workflow_summary.get("workflow_status"), dict) else {}
+        missed = workflow_summary.get("missed_or_misjudged") if isinstance(workflow_summary.get("missed_or_misjudged"), dict) else {}
+        review_artifacts = workflow_review.get("artifacts") if isinstance(workflow_review.get("artifacts"), list) else []
+        lines.extend(["", "【当日工作过程复盘】"])
+        if not workflow_review:
+            lines.append("- 未生成 workflow-review；请检查 post-market-deliver 是否跳过 daily-workflow-review。")
+        else:
+            lines.append(
+                "- 流程状态："
+                f"盘前={workflow_status.get('pre_market', 'unknown')}；"
+                f"盘中={workflow_status.get('intraday', 'unknown')}；"
+                f"盘后={workflow_status.get('post_market', 'unknown')}"
+            )
+            lines.append(
+                f"- 盘中事件：{workflow_summary.get('intraday_events', 0)}；"
+                f"失败记录：{workflow_summary.get('intraday_failures', 0)}"
+            )
+            lines.append(
+                f"- 可能漏接候选：{missed.get('possible_missed_candidates', 0)}；"
+                f"触价后回落/失效：{missed.get('touch_fade_or_invalidated', 0)}；"
+                f"未触发：{missed.get('not_triggered', 0)}"
+            )
+            if missed.get("confirmed_no_missed_executable"):
+                lines.append("- 结论：未发现可执行漏判；触价不等于完整交易计划。")
+            else:
+                lines.append("- 结论：存在可能漏接候选，需要人工复核盘中确认、RR 和风险。")
+            if review_artifacts:
+                lines.append(f"- artifacts：{', '.join(review_artifacts)}")
+
     lines.extend(
         [
             "",
@@ -445,6 +481,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     lessons = lessons_for_date(repo_root, args.date, args.learning_dir)
     focus_payload = focus_selection(repo_root, args.date)
     intraday_payload = intraday_review(repo_root, args.date) if args.session == "post-market" else {}
+    workflow_payload = (
+        workflow_review_artifact(repo_root, args.date, getattr(args, "workflow_review", None))
+        if args.session == "post-market"
+        else {}
+    )
     output = output_path(repo_root, args.date, args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(
@@ -461,10 +502,17 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             signal_source_summary=signal_source_summary,
             focus_selection_payload=focus_payload,
             intraday_payload=intraday_payload,
+            workflow_review_payload=workflow_payload,
         ),
         encoding="utf-8",
     )
     executable, watch, no_trade = split_signals(signals)
+    workflow_summary = workflow_payload.get("summary") if isinstance(workflow_payload.get("summary"), dict) else {}
+    missed_summary = (
+        workflow_summary.get("missed_or_misjudged")
+        if isinstance(workflow_summary.get("missed_or_misjudged"), dict)
+        else {}
+    )
     return {
         "status": "success",
         "date": args.date,
@@ -489,6 +537,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "intraday_available": bool(intraday_payload.get("available")),
             "intraday_events": intraday_payload.get("event_count", 0),
             "intraday_notify_events": intraday_payload.get("notify_event_count", 0),
+            "workflow_review_available": bool(workflow_payload),
+            "workflow_possible_missed_candidates": missed_summary.get("possible_missed_candidates", 0),
+            "workflow_touch_fade_or_invalidated": missed_summary.get("touch_fade_or_invalidated", 0),
+            "workflow_intraday_failures": workflow_summary.get("intraday_failures", 0),
         },
     }
 
@@ -501,6 +553,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--position-review")
     parser.add_argument("--plan-review")
     parser.add_argument("--run-manifest")
+    parser.add_argument("--workflow-review")
     parser.add_argument("--output")
     parser.add_argument("--learning-dir", default="runtime/learning")
     parser.add_argument("--repo-root", default=str(Path(__file__).resolve().parents[1]))

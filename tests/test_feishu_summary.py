@@ -309,6 +309,37 @@ class FeishuSummaryTest(unittest.TestCase):
                 json.dumps({"sent_event_ids": ["e1"]}, ensure_ascii=False),
                 encoding="utf-8",
             )
+            (report_dir / "workflow-review.json").write_text(
+                json.dumps(
+                    {
+                        "status": "success",
+                        "workflow": "daily-workflow-review",
+                        "date": "2026-05-26",
+                        "artifacts": [
+                            "report/2026-05-26/workflow-review.json",
+                            "report/2026-05-26/workflow-review.md",
+                        ],
+                        "summary": {
+                            "workflow_status": {
+                                "pre_market": "success",
+                                "intraday": "available",
+                                "post_market": "success",
+                            },
+                            "intraday_events": 1,
+                            "intraday_failures": 0,
+                            "missed_or_misjudged": {
+                                "possible_missed_candidates": 0,
+                                "touch_fade_or_invalidated": 1,
+                                "not_triggered": 2,
+                                "not_evaluable": 0,
+                                "confirmed_no_missed_executable": True,
+                            },
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
 
             proc = subprocess.run(
                 [
@@ -332,11 +363,17 @@ class FeishuSummaryTest(unittest.TestCase):
             self.assertTrue(payload["summary"]["intraday_available"])
             self.assertEqual(payload["summary"]["intraday_events"], 1)
             self.assertEqual(payload["summary"]["intraday_notify_events"], 1)
+            self.assertTrue(payload["summary"]["workflow_review_available"])
+            self.assertEqual(payload["summary"]["workflow_possible_missed_candidates"], 0)
+            self.assertEqual(payload["summary"]["workflow_touch_fade_or_invalidated"], 1)
             content = Path(payload["output"]).read_text(encoding="utf-8")
             self.assertIn("【盘中监控回顾】", content)
             self.assertIn("关注池：MU, AMD", content)
             self.assertIn("near_trigger=1", content)
             self.assertIn("已发送=1", content)
+            self.assertIn("【当日工作过程复盘】", content)
+            self.assertIn("可能漏接候选：0", content)
+            self.assertIn("触价后回落/失效：1", content)
 
 
 if __name__ == "__main__":

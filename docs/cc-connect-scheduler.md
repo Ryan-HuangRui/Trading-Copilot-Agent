@@ -50,7 +50,7 @@ Update the configured cc connect prompts so they require the new artifacts and g
 - Post-market generation must write `post-market.md` and `post-market-signals.json`.
 - After Codex/LLM writes those reports, record `llm-generation-manifest` so model, prompt, inputs, outputs, git SHA, and dirty files are auditable.
 - Market-data preparation should use the repo default provider stack: Longbridge CLI primary, Twelve Data fallback.
-- Both workflows should call `pre-market-deliver` or `post-market-deliver` after report generation. These wrappers run `validate-report`, `validate-trade-plan`, `data-quality`, `focus-selection`, journal append, Feishu summary, run manifest, and optional Longbridge sync.
+- Both workflows should call `pre-market-deliver` or `post-market-deliver` after report generation. These wrappers run `validate-report`, `validate-trade-plan`, `data-quality`, `focus-selection`, journal append, Feishu summary, run manifest, and optional Longbridge sync. Post-market delivery also runs `daily-workflow-review` before `feishu-summary`.
 - Optional agent research enhancement may be enabled with `--include-agent-research` on `pre-market-plan` and `post-market-review`; generated agent artifacts are evidence inputs only.
 - If agent research is enabled, cc connect must also surface `validate-agent-reports` / `validate-agent-decision` failures as blocking status before report generation consumes those artifacts.
 - Agent report validation now fails when `market` or `technicals` evidence is empty. Empty `fundamentals`, `news`, or `sentiment` evidence remains a warning and must be disclosed in the Feishu summary or status note.
@@ -60,6 +60,7 @@ Update the configured cc connect prompts so they require the new artifacts and g
 - Any `sync-longbridge-watchlist --require-validation` failure must stop watchlist sync.
 - Post-market must run account/position review before `plan-review --append-lessons` when account context is enabled, so plan review can include position discipline.
 - Post-market must include `learning-review --lookback-days 20` after `plan-review --append-lessons`.
+- Post-market must include `daily-workflow-review` before Feishu delivery so same-day pre-market, intraday, and post-market process gaps are disclosed.
 - Both workflows should generate `feishu-summary.md` through `feishu-summary` and send that summary body instead of dumping the full Markdown report.
 - `promote-lesson --apply` must not be scheduled automatically; run it only after human approval of a specific `pattern_id`.
 - Paper execution must be scheduled as separate execution tasks. Do not add broker write operations to the pre-market or post-market report-generation tasks.
@@ -259,6 +260,7 @@ prepare the completed daily snapshot, generate post-market.md and post-market-si
 summarize same-day intraday monitor artifacts when present,
 validate artifacts and Trade Plan Cards, backfill signal outcomes, extract post-market observation signals,
 generate plan-review lessons, optionally run read-only account snapshot and position review, generate daily self-review,
+generate same-day workflow review from pre-market/intraday/post-market artifacts and completed price evidence,
 and return a Feishu-ready summary.
 Do not place trades or output deterministic buy/sell instructions.
 ```
@@ -274,7 +276,7 @@ python3 script/trading_copilot.py llm-generation-manifest --session post-market 
 python3 script/trading_copilot.py post-market-deliver --date <DATE> --sync-longbridge --execute-sync --append-outcomes --append-lessons --append-self-review
 ```
 
-`post-market-deliver` runs validation, data-quality, focus-selection, outcome backfill, journal append, optional read-only account/position review, plan review, learning review, self-review, Feishu summary, and optional `今日关注` replacement sync. It writes `report/<DATE>/post-market-run-manifest.json` and `report/<DATE>/focus-selection.json`.
+`post-market-deliver` runs validation, data-quality, focus-selection, outcome backfill, journal append, optional read-only account/position review, plan review, learning review, self-review, daily workflow review, Feishu summary, and optional `今日关注` replacement sync. It writes `report/<DATE>/post-market-run-manifest.json`, `report/<DATE>/focus-selection.json`, and `report/<DATE>/workflow-review.json/md`.
 
 ### Task C: Weekly Review
 
@@ -518,6 +520,7 @@ The final Feishu message should be a concise summary with artifact paths:
 - journal append counts
 - position review count and human-review count, if account snapshot was enabled
 - self-review or weekly-review summary
+- daily workflow review counts for possible missed candidates and touch-fade/invalidated observations
 - plan-review position discipline summary and learning-review candidate count, when available
 - data-quality status and focused-symbol fallback, when available
 - monitor candidate/blocked/skipped counts, when a monitor task runs

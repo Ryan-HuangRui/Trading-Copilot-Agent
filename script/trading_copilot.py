@@ -1388,6 +1388,39 @@ def run_daily_self_review(args: argparse.Namespace) -> None:
     emit(response)
 
 
+def run_daily_workflow_review(args: argparse.Namespace) -> None:
+    command = [
+        "script/daily_workflow_review.py",
+        "--date",
+        args.date,
+        "--repo-root",
+        getattr(args, "repo_root", str(ROOT)),
+    ]
+    for attr, option in [
+        ("snapshot", "--snapshot"),
+        ("pre_market_signals", "--pre-market-signals"),
+        ("monitor_signals", "--monitor-signals"),
+        ("intraday_context", "--intraday-context"),
+        ("run_manifest", "--run-manifest"),
+        ("json_output", "--json-output"),
+        ("markdown_output", "--markdown-output"),
+    ]:
+        value = getattr(args, attr, None)
+        if value:
+            command.extend([option, value])
+
+    proc = run_child(command)
+    stdout = parse_json_output(proc.stdout)
+    if proc.returncode != 0:
+        emit(failed_response("daily-workflow-review", command, proc), 1)
+
+    response = base_response("daily-workflow-review", command, stdout)
+    response["date"] = args.date
+    response["artifacts"] = (stdout or {}).get("artifacts", [])
+    response["summary"] = (stdout or {}).get("summary")
+    emit(response)
+
+
 def run_plan_review(args: argparse.Namespace) -> None:
     command = [
         "script/plan_review.py",
@@ -1465,6 +1498,8 @@ def run_feishu_summary(args: argparse.Namespace) -> None:
         command.extend(["--plan-review", args.plan_review])
     if getattr(args, "run_manifest", None):
         command.extend(["--run-manifest", args.run_manifest])
+    if getattr(args, "workflow_review", None):
+        command.extend(["--workflow-review", args.workflow_review])
     if args.output:
         command.extend(["--output", args.output])
 
@@ -2088,6 +2123,13 @@ def run_post_market_deliver(args: argparse.Namespace) -> None:
     manifest["status"] = "success"
     manifest["reason"] = None
     write_manifest(manifest, manifest_file)
+
+    if not getattr(args, "skip_workflow_review", False):
+        workflow_review = ["script/daily_workflow_review.py", "--date", date, "--run-manifest", str(manifest_file)]
+        if args.snapshot:
+            workflow_review.extend(["--snapshot", args.snapshot])
+        run_manifest_step(manifest=manifest, name="daily-workflow-review", command=workflow_review, allow_failure=True)
+        write_manifest(manifest, manifest_file)
 
     feishu = ["script/feishu_summary.py", "--date", date, "--session", session, "--run-manifest", str(manifest_file), "--learning-dir", args.learning_dir]
     if args.signals:
@@ -3461,6 +3503,7 @@ def build_parser() -> argparse.ArgumentParser:
     post_deliver.add_argument("--learning-lookback-days", type=int, default=20)
     post_deliver.add_argument("--skip-self-review", action="store_true")
     post_deliver.add_argument("--append-self-review", action="store_true")
+    post_deliver.add_argument("--skip-workflow-review", action="store_true")
     post_deliver.add_argument("--sync-longbridge", action="store_true")
     post_deliver.add_argument("--execute-sync", action="store_true")
     post_deliver.add_argument("--group-name", default="今日关注")
@@ -3717,6 +3760,18 @@ def build_parser() -> argparse.ArgumentParser:
     daily_review.add_argument("--journal-dir", default="runtime/journal")
     daily_review.set_defaults(func=run_daily_self_review)
 
+    workflow_review = sub.add_parser("daily-workflow-review", help="Review same-day workflow execution and price evidence")
+    workflow_review.add_argument("--date", required=True)
+    workflow_review.add_argument("--repo-root", default=str(ROOT))
+    workflow_review.add_argument("--snapshot")
+    workflow_review.add_argument("--pre-market-signals")
+    workflow_review.add_argument("--monitor-signals")
+    workflow_review.add_argument("--intraday-context")
+    workflow_review.add_argument("--run-manifest")
+    workflow_review.add_argument("--json-output")
+    workflow_review.add_argument("--markdown-output")
+    workflow_review.set_defaults(func=run_daily_workflow_review)
+
     plan_review = sub.add_parser("plan-review", help="Review generated trade plans and record learning lessons")
     plan_review.add_argument("--date", required=True)
     plan_review.add_argument("--output")
@@ -3741,6 +3796,7 @@ def build_parser() -> argparse.ArgumentParser:
     feishu_summary.add_argument("--position-review")
     feishu_summary.add_argument("--plan-review")
     feishu_summary.add_argument("--run-manifest")
+    feishu_summary.add_argument("--workflow-review")
     feishu_summary.add_argument("--output")
     feishu_summary.add_argument("--learning-dir", default="runtime/learning")
     feishu_summary.set_defaults(func=run_feishu_summary)

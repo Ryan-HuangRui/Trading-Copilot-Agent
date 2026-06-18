@@ -41,7 +41,7 @@ Paper execution is an execution extension to this report workflow, not a report-
    ```bash
    python3 script/trading_copilot.py post-market-deliver --date <SNAPSHOT_DATE> --sync-longbridge --execute-sync --append-outcomes --append-lessons --append-self-review
    ```
-   This wrapper runs validation, data-quality, focus-selection, outcome backfill, journal append, optional read-only account/position review, plan/learning/self review, Feishu summary, run manifest, and optional Longbridge watchlist sync.
+   This wrapper runs validation, data-quality, focus-selection, outcome backfill, journal append, optional read-only account/position review, plan/learning/self review, same-day workflow review, Feishu summary, run manifest, and optional Longbridge watchlist sync.
 6. Validate the generated post-market artifacts manually only when debugging an individual gate:
    ```bash
    python3 script/trading_copilot.py validate-report --session post-market --date <SNAPSHOT_DATE>
@@ -64,42 +64,47 @@ Paper execution is an execution extension to this report workflow, not a report-
    ```bash
    python3 script/trading_copilot.py daily-self-review --date <SNAPSHOT_DATE> --append
    ```
-11. Post-market Longbridge sync fully replaces the `今日关注` group from the generated post-market focus list:
+11. Generate the same-day workflow review when debugging the deterministic delivery wrapper:
+   ```bash
+   python3 script/trading_copilot.py daily-workflow-review --date <SNAPSHOT_DATE>
+   ```
+   `post-market-deliver` runs this automatically before `feishu-summary` and writes `report/<SNAPSHOT_DATE>/workflow-review.json` plus `report/<SNAPSHOT_DATE>/workflow-review.md`.
+12. Post-market Longbridge sync fully replaces the `今日关注` group from the generated post-market focus list:
    ```bash
    python3 script/trading_copilot.py sync-longbridge-watchlist --session post-market --date <SNAPSHOT_DATE> --group-name 今日关注 --sync-mode replace --require-validation --execute --no-create
    ```
    This removes stale symbols from the `今日关注` group only; it must not globally unfollow securities or remove them from other watchlists.
-12. Next pre-market context reuses the previous trading day's snapshot:
+13. Next pre-market context reuses the previous trading day's snapshot:
    ```bash
    python3 script/trading_copilot.py pre-market-plan --watchlist config/watchlist.json --skip-non-trading-day
    ```
-13. Inspect the pre-market context when the automation or operator needs a stable schema summary:
+14. Inspect the pre-market context when the automation or operator needs a stable schema summary:
    ```bash
    python3 script/trading_copilot.py inspect-pre-market-context --date <PRE_MARKET_DATE>
    ```
-14. Pre-market report generation reads:
+15. Pre-market report generation reads:
    - `report/<PRE_MARKET_DATE>/pre-market-context.json`
    - `report/<PRE_MARKET_DATE>/external-disclosures/trump-trades.json` when available
-15. Pre-market output writes:
+16. Pre-market output writes:
    - `report/<PRE_MARKET_DATE>/exec-brief.md`
    - `report/<PRE_MARKET_DATE>/pre-market.md`
    - `report/<PRE_MARKET_DATE>/pre-market-signals.json`
    - both Markdown reports must include `## 消息层汇总` with a dedicated `### 特朗普持仓与交易变化` subsection; if no structured or freshly verified disclosure input is available, the subsection must explicitly state the data gap.
-16. Record LLM report-generation provenance after Codex writes the report artifacts:
+17. Record LLM report-generation provenance after Codex writes the report artifacts:
    ```bash
    python3 script/trading_copilot.py llm-generation-manifest --session pre-market --date <PRE_MARKET_DATE> --model <MODEL> --prompt agent/daily_analysis_prompt.md --input report/<PRE_MARKET_DATE>/pre-market-context.json --generated-output report/<PRE_MARKET_DATE>/exec-brief.md --generated-output report/<PRE_MARKET_DATE>/pre-market.md --generated-output report/<PRE_MARKET_DATE>/pre-market-signals.json
    ```
-17. Validate and deliver the generated pre-market bundle through the deterministic gates:
+18. Validate and deliver the generated pre-market bundle through the deterministic gates:
    ```bash
    python3 script/trading_copilot.py pre-market-deliver --date <PRE_MARKET_DATE> --sync-longbridge --execute-sync
    ```
    This wrapper runs validation, data-quality, focus-selection, journal append, optional read-only account/position review, Feishu summary, run manifest, and optional Longbridge watchlist sync.
-18. Validate the generated pre-market reports manually only when debugging an individual gate:
+19. Validate the generated pre-market reports manually only when debugging an individual gate:
    ```bash
    python3 script/trading_copilot.py validate-report --session pre-market --date <PRE_MARKET_DATE>
    python3 script/trading_copilot.py validate-trade-plan --session pre-market --date <PRE_MARKET_DATE>
    ```
-19. Run the manual append/review/sync commands only when debugging the deterministic delivery wrapper:
+20. Run the manual append/review/sync commands only when debugging the deterministic delivery wrapper:
    ```bash
    python3 script/trading_copilot.py extract-report-signals --session pre-market --date <PRE_MARKET_DATE> --require-validation --append
    python3 script/trading_copilot.py account-snapshot --date <PRE_MARKET_DATE>
@@ -131,7 +136,7 @@ python3 script/trading_copilot.py llm-generation-manifest --session post-market 
 python3 script/trading_copilot.py post-market-deliver --date <SNAPSHOT_DATE> --sync-longbridge --execute-sync --append-outcomes --append-lessons --append-self-review
 ```
 
-The wrapper is a full replacement of the old manual validation/backfill/extract/review/summary/sync sequence. `--sync-longbridge --execute-sync` replaces the `今日关注` group for tomorrow's focus list. Removing a symbol here only removes it from `今日关注`; do not delete the security globally or from other Longbridge watchlist groups.
+The wrapper is a full replacement of the old manual validation/backfill/extract/review/summary/sync sequence. It generates `workflow-review.json/md` before the Feishu summary so same-day pre-market, intraday, and post-market execution can be reviewed with price evidence. `--sync-longbridge --execute-sync` replaces the `今日关注` group for tomorrow's focus list. Removing a symbol here only removes it from `今日关注`; do not delete the security globally or from other Longbridge watchlist groups.
 
 ### Pre-market task
 Run:
