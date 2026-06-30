@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class FeishuSummaryTest(unittest.TestCase):
-    def test_feishu_summary_writes_execution_panel(self):
+    def test_feishu_summary_prioritizes_analysis_over_execution_log(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             report_dir = root / "report" / "2026-05-26"
@@ -163,13 +163,9 @@ class FeishuSummaryTest(unittest.TestCase):
             output = Path(payload["output"])
             self.assertTrue(output.exists())
             markdown = output.read_text(encoding="utf-8")
-            self.assertIn("【Workflow】", markdown)
-            self.assertIn("workflow：pre-market-deliver", markdown)
-            self.assertIn("【Validation】", markdown)
-            self.assertIn("validate-report：success", markdown)
-            self.assertIn("【Journal】", markdown)
+            self.assertIn("# 飞书分析摘要", markdown)
             self.assertIn("【今日可执行交易计划】", markdown)
-            self.assertIn("MU：入场 100", markdown)
+            self.assertIn("MU：触发 100", markdown)
             self.assertIn("止损 95", markdown)
             self.assertIn("TP1 112", markdown)
             self.assertIn("【观察候选】", markdown)
@@ -179,6 +175,12 @@ class FeishuSummaryTest(unittest.TestCase):
             self.assertIn("持仓复核摘要", markdown)
             self.assertIn("数据质量", markdown)
             self.assertIn("MU 使用 twelve_data fallback", markdown)
+            self.assertIn("【流程检查】", markdown)
+            self.assertIn("workflow：pre-market-deliver", markdown)
+            self.assertIn("validation：通过", markdown)
+            self.assertNotIn("【Workflow】", markdown)
+            self.assertNotIn("【生成 artifacts】", markdown)
+            self.assertNotIn("【Journal】", markdown)
             self.assertEqual(payload["summary"]["data_quality_status"], "warn")
             self.assertEqual(payload["summary"]["focused_fallback_symbols"], 1)
 
@@ -370,8 +372,8 @@ class FeishuSummaryTest(unittest.TestCase):
             self.assertIn("【盘中监控回顾】", content)
             self.assertIn("关注池：MU, AMD", content)
             self.assertIn("near_trigger=1", content)
-            self.assertIn("已发送=1", content)
-            self.assertIn("【当日工作过程复盘】", content)
+            self.assertNotIn("已发送=1", content)
+            self.assertIn("【当日复盘结论】", content)
             self.assertIn("可能漏接候选：0", content)
             self.assertIn("触价后回落/失效：1", content)
 

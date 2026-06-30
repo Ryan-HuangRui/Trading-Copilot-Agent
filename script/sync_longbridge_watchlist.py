@@ -279,10 +279,179 @@ def group_symbol_payloads(payload: dict[str, object]) -> list[str]:
     return result
 
 
+def watchlist_group_snapshot(group: dict[str, object]) -> dict[str, object]:
+    group_id = payload_value(group, ("id", "group_id", "watchlist_id"))
+    group_name = payload_value(group, ("name", "group_name"))
+    return {
+        "group_id": str(group_id) if group_id is not None else None,
+        "group_name": str(group_name) if group_name is not None else None,
+        "symbols": group_symbol_payloads(group),
+    }
+
+
+def watchlist_snapshots(groups: Iterable[dict[str, object]]) -> list[dict[str, object]]:
+    return [watchlist_group_snapshot(group) for group in groups]
+
+
+def snapshot_key(snapshot: dict[str, object]) -> str | None:
+    group_id = snapshot.get("group_id")
+    if group_id:
+        return f"id:{group_id}"
+    group_name = snapshot.get("group_name")
+    if group_name:
+        return f"name:{group_name}"
+    return None
+
+
+def is_target_group(snapshot: dict[str, object], target_group_id: str | None, target_group_name: str) -> bool:
+    if target_group_id and snapshot.get("group_id") == target_group_id:
+        return True
+    return snapshot.get("group_name") == target_group_name
+
+
+def find_snapshot_by_key(
+    snapshots: Iterable[dict[str, object]],
+    before: dict[str, object],
+) -> dict[str, object] | None:
+    before_key = snapshot_key(before)
+    for snapshot in snapshots:
+        if before_key and snapshot_key(snapshot) == before_key:
+            return snapshot
+    before_name = before.get("group_name")
+    if before_name:
+        for snapshot in snapshots:
+            if snapshot.get("group_name") == before_name:
+                return snapshot
+    return None
+
+
+def detect_other_group_drift(
+    before_snapshots: list[dict[str, object]],
+    after_snapshots: list[dict[str, object]],
+    target_group_id: str | None,
+    target_group_name: str,
+) -> list[dict[str, object]]:
+    drift = []
+    for before in before_snapshots:
+        if is_target_group(before, target_group_id, target_group_name):
+            continue
+        after = find_snapshot_by_key(after_snapshots, before)
+        if after is None or after.get("symbols") != before.get("symbols"):
+            drift.append({"before": before, "after": after})
+    return drift
+
+
+def count_other_groups(
+    snapshots: Iterable[dict[str, object]],
+    target_group_id: str | None,
+    target_group_name: str,
+) -> int:
+    return sum(1 for snapshot in snapshots if not is_target_group(snapshot, target_group_id, target_group_name))
+
+
+def build_restore_guard_result(
+    before_snapshots: list[dict[str, object]],
+    after_snapshots: list[dict[str, object]],
+    target_group_id: str | None,
+    target_group_name: str,
+    restored: list[dict[str, object]],
+) -> dict[str, object]:
+    remaining = detect_other_group_drift(before_snapshots, after_snapshots, target_group_id, target_group_name)
+    return {
+        "checked_groups": count_other_groups(before_snapshots, target_group_id, target_group_name),
+        "restored_groups": restored,
+        "remaining_drift": remaining,
+        "unchanged": not restored and not remaining,
+    }
+
+
+def restore_other_groups_with_cli(
+    cli: str,
+    before_snapshots: list[dict[str, object]],
+    target_group_id: str | None,
+    target_group_name: str,
+) -> dict[str, object]:
+    after_payload = run_longbridge_cli(cli, ["watchlist", "--format", "json"])
+    after_snapshots = watchlist_snapshots(iter_group_payloads(after_payload))
+    drift = detect_other_group_drift(before_snapshots, after_snapshots, target_group_id, target_group_name)
+    restored = []
+    for item in drift:
+        before = item["before"]
+        group_id = before.get("group_id")
+        if not group_id:
+            raise RuntimeError(f"Cannot restore Longbridge watchlist group without id: {before!r}")
+        symbols = [str(symbol) for symbol in before.get("symbols", [])]
+        run_longbridge_cli(cli, watchlist_update_args(str(group_id), symbols, "replace"))
+        restored.append(
+            {
+                "group_id": group_id,
+                "group_name": before.get("group_name"),
+                "restored_symbols": symbols,
+            }
+        )
+    if restored:
+        after_payload = run_longbridge_cli(cli, ["watchlist", "--format", "json"])
+        after_snapshots = watchlist_snapshots(iter_group_payloads(after_payload))
+    result = build_restore_guard_result(before_snapshots, after_snapshots, target_group_id, target_group_name, restored)
+    if result["remaining_drift"]:
+        raise RuntimeError(f"Longbridge non-target watchlist groups still drift after restore: {result['remaining_drift']!r}")
+    return result
+
+
+def sdk_watchlist_snapshot(group: object) -> dict[str, object]:
+    group_id = getattr(group, "id", None)
+    group_name = getattr(group, "name", None)
+    return {
+        "group_id": str(group_id) if group_id is not None else None,
+        "group_name": str(group_name) if group_name is not None else None,
+        "symbols": group_symbols(group),
+    }
+
+
+def sdk_watchlist_snapshots(groups: Iterable[object]) -> list[dict[str, object]]:
+    return [sdk_watchlist_snapshot(group) for group in groups]
+
+
+def restore_other_groups_with_sdk(
+    ctx: object,
+    replace_mode: object,
+    before_snapshots: list[dict[str, object]],
+    target_group_id: str | None,
+    target_group_name: str,
+) -> dict[str, object]:
+    after_snapshots = sdk_watchlist_snapshots(list(ctx.watchlist()))
+    drift = detect_other_group_drift(before_snapshots, after_snapshots, target_group_id, target_group_name)
+    restored = []
+    for item in drift:
+        before = item["before"]
+        group_id = before.get("group_id")
+        if not group_id:
+            raise RuntimeError(f"Cannot restore Longbridge watchlist group without id: {before!r}")
+        symbols = [str(symbol) for symbol in before.get("symbols", [])]
+        ctx.update_watchlist_group(str(group_id), securities=symbols, mode=replace_mode)
+        restored.append(
+            {
+                "group_id": group_id,
+                "group_name": before.get("group_name"),
+                "restored_symbols": symbols,
+            }
+        )
+    if restored:
+        after_snapshots = sdk_watchlist_snapshots(list(ctx.watchlist()))
+    result = build_restore_guard_result(before_snapshots, after_snapshots, target_group_id, target_group_name, restored)
+    if result["remaining_drift"]:
+        raise RuntimeError(f"Longbridge non-target watchlist groups still drift after restore: {result['remaining_drift']!r}")
+    return result
+
+
 def extract_created_group_id(payload: object) -> str:
     current = unwrap_payload(payload)
     if isinstance(current, (str, int)):
-        return str(current)
+        text = str(current).strip()
+        match = re.search(r"\bID:\s*([0-9]+)\b", text, flags=re.IGNORECASE)
+        if match:
+            return match.group(1)
+        return text
     if isinstance(current, dict):
         group_id = payload_value(current, ("id", "group_id", "watchlist_id"))
         if group_id:
@@ -301,8 +470,10 @@ def sync_with_longbridge_cli(
         raise RuntimeError(f"Longbridge CLI not found: {cli}")
 
     groups_payload = run_longbridge_cli(cli, ["watchlist", "--format", "json"])
+    groups = iter_group_payloads(groups_payload)
+    before_snapshots = watchlist_snapshots(groups)
     existing = None
-    for group in iter_group_payloads(groups_payload):
+    for group in groups:
         name = payload_value(group, ("name", "group_name"))
         if name == group_name:
             existing = group
@@ -314,6 +485,7 @@ def sync_with_longbridge_cli(
         created = run_longbridge_cli(cli, ["watchlist", "create", group_name, "--format", "json"])
         group_id = extract_created_group_id(created)
         run_longbridge_cli(cli, watchlist_update_args(group_id, symbols, "replace"))
+        guard = restore_other_groups_with_cli(cli, before_snapshots, group_id, group_name)
         return {
             "tool": "cli",
             "action": "create",
@@ -324,6 +496,7 @@ def sync_with_longbridge_cli(
             "added_symbols": symbols,
             "removed_from_group": [],
             "symbols": symbols,
+            "other_groups_guard": guard,
         }
 
     group_id = payload_value(existing, ("id", "group_id", "watchlist_id"))
@@ -342,6 +515,7 @@ def sync_with_longbridge_cli(
         raise ValueError(f"Unsupported sync mode: {sync_mode}")
 
     run_longbridge_cli(cli, watchlist_update_args(str(group_id), symbols, sync_mode))
+    guard = restore_other_groups_with_cli(cli, before_snapshots, str(group_id), group_name)
     return {
         "tool": "cli",
         "action": sync_mode,
@@ -352,6 +526,7 @@ def sync_with_longbridge_cli(
         "added_symbols": added,
         "removed_from_group": removed,
         "symbols": desired,
+        "other_groups_guard": guard,
     }
 
 
@@ -377,13 +552,21 @@ def sync_with_longbridge_sdk(group_name: str, symbols: list[str], create: bool, 
         raise RuntimeError("Longbridge SDK Config has no from_env/from_apikey_env initializer.")
 
     ctx = QuoteContext(config_factory())
-    groups = ctx.watchlist()
+    groups = list(ctx.watchlist())
+    before_snapshots = sdk_watchlist_snapshots(groups)
     existing = next((group for group in groups if getattr(group, "name", None) == group_name), None)
 
     if existing is None:
         if not create:
             raise RuntimeError(f"Longbridge watchlist group not found: {group_name}")
         group_id = ctx.create_watchlist_group(name=group_name, securities=symbols)
+        guard = restore_other_groups_with_sdk(
+            ctx,
+            SecuritiesUpdateMode.Replace,
+            before_snapshots,
+            str(group_id),
+            group_name,
+        )
         return {
             "tool": "sdk",
             "action": "create",
@@ -394,6 +577,7 @@ def sync_with_longbridge_sdk(group_name: str, symbols: list[str], create: bool, 
             "added_symbols": symbols,
             "removed_from_group": [],
             "symbols": symbols,
+            "other_groups_guard": guard,
         }
 
     previous = group_symbols(existing)
@@ -415,6 +599,13 @@ def sync_with_longbridge_sdk(group_name: str, symbols: list[str], create: bool, 
         securities=symbols,
         mode=update_mode,
     )
+    guard = restore_other_groups_with_sdk(
+        ctx,
+        SecuritiesUpdateMode.Replace,
+        before_snapshots,
+        str(getattr(existing, "id")),
+        group_name,
+    )
     return {
         "tool": "sdk",
         "action": sync_mode,
@@ -425,6 +616,7 @@ def sync_with_longbridge_sdk(group_name: str, symbols: list[str], create: bool, 
         "added_symbols": added,
         "removed_from_group": removed,
         "symbols": desired,
+        "other_groups_guard": guard,
     }
 
 
@@ -474,7 +666,10 @@ def main() -> None:
         "sync_mode": sync_mode,
         "symbols": symbols,
         "dry_run": not args.execute,
-        "safety_note": "replace/add updates only the target Longbridge watchlist group; it does not delete securities globally.",
+        "safety_note": (
+            "replace/add updates only the target Longbridge watchlist group; it does not delete securities globally. "
+            "Execute mode snapshots other groups before/after and restores any non-target drift."
+        ),
     }
 
     if args.execute:

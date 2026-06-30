@@ -10,6 +10,7 @@ import argparse
 import json
 from pathlib import Path
 
+from longbridge_watchlist_source import DEFAULT_SOURCE_GROUPS, refresh_watchlist
 from market_calendar import MARKET_TIMEZONE, previous_trading_day, resolve_market_date, trading_day_status
 from market_snapshot import snapshot_path
 
@@ -22,6 +23,10 @@ def main() -> None:
     parser.add_argument("--snapshot-date", help="Completed trading date to use. Defaults to previous trading day.")
     parser.add_argument("--timezone", default=MARKET_TIMEZONE)
     parser.add_argument("--skip-non-trading-day", action="store_true")
+    parser.add_argument("--longbridge-cli", help="Explicit Longbridge CLI path for watchlist refresh.")
+    parser.add_argument("--watchlist-source-method", choices=["auto", "cli", "sdk"], default="auto")
+    parser.add_argument("--longbridge-watchlist-group", action="append", default=[])
+    parser.add_argument("--no-longbridge-watchlist-refresh", dest="refresh_longbridge_watchlist", action="store_false", default=True)
     args = parser.parse_args()
 
     repo_root = Path(__file__).resolve().parents[1]
@@ -30,6 +35,16 @@ def main() -> None:
     if args.skip_non_trading_day and not guard["is_trading_day"]:
         print(json.dumps({"skipped": True, "guard": guard}, ensure_ascii=False, indent=2))
         return
+
+    watchlist_source = None
+    if args.refresh_longbridge_watchlist:
+        watchlist_source = refresh_watchlist(
+            repo_root=repo_root,
+            watchlist_path=args.watchlist,
+            group_names=args.longbridge_watchlist_group or DEFAULT_SOURCE_GROUPS,
+            method=args.watchlist_source_method,
+            longbridge_cli=args.longbridge_cli,
+        )
 
     source_date = resolve_market_date(args.snapshot_date, timezone=args.timezone) if args.snapshot_date else previous_trading_day(report_date)
     source_path = snapshot_path(repo_root, source_date.isoformat(), args.interval)
@@ -45,6 +60,7 @@ def main() -> None:
         "session": "pre-market",
         "source_snapshot_date": source_date.isoformat(),
         "source_snapshot_path": str(source_path),
+        "watchlist_source": watchlist_source,
         "trading_day": guard,
         "snapshot": snapshot,
     }
@@ -62,6 +78,7 @@ def main() -> None:
             "symbols": len(snapshot.get("symbols", [])),
             "errors": len(snapshot.get("errors", [])),
             "stale_data": snapshot.get("stale_data", False),
+            "watchlist_source": watchlist_source,
         },
         ensure_ascii=False,
         indent=2,

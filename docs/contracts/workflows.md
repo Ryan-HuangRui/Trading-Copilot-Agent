@@ -50,7 +50,8 @@ python3 script/trading_copilot.py pre-market-plan --watchlist config/watchlist.j
 
 Inputs:
 
-- `config/watchlist.json`
+- Longbridge watchlist groups `持仓`, `ibkr持仓`, `老朋友`, `AI先进封装HBM`, and `AI Top 10 Research`; `config/watchlist.json` is refreshed from their full union before the context step.
+- `config/watchlist.json`, used only as the fallback when Longbridge watchlist retrieval is unavailable.
 - Prior completed trading day's `report/<SNAPSHOT_DATE>/daily-snapshot.json`
 - `knowledge/refined/`
 - `agent/daily_analysis_prompt.md`
@@ -85,7 +86,8 @@ python3 script/trading_copilot.py post-market-review --watchlist config/watchlis
 
 Inputs:
 
-- `config/watchlist.json`
+- Longbridge watchlist groups `持仓`, `ibkr持仓`, `老朋友`, `AI先进封装HBM`, and `AI Top 10 Research`; `config/watchlist.json` is refreshed from their full union before snapshot generation.
+- `config/watchlist.json`, used only as the fallback when Longbridge watchlist retrieval is unavailable.
 - Longbridge CLI market data by default, with Twelve Data fallback via `.env` or `TWELVE_DATA_API_KEY`
 - Optional S&P 500 dynamic universe flags
 - Optional journal signal and position-symbol merge flags for outcome/position coverage
@@ -697,7 +699,7 @@ Required behavior:
 
 ## feishu-summary
 
-Purpose: build a concise Feishu-ready execution panel from validated sidecars and review artifacts.
+Purpose: build a concise Feishu-ready analysis summary from validated sidecars and review artifacts.
 
 Canonical command:
 
@@ -721,10 +723,12 @@ Output:
 
 Required behavior:
 
-- Show only a compact execution panel: conditional plans, watch candidates, `NO TRADE`, position review summary, plan review summary, and daily lessons.
-- For post-market summaries, include a compact intraday-monitor recap when artifacts exist: focus symbols, final state distribution, important event count, sent notification count, and artifact paths.
-- For post-market summaries, include the same-day workflow review when available: pre-market/intraday/post-market stage status, intraday failure count, possible missed candidates, and touch-fade/invalidated counts.
-- Keep the full analysis in the Markdown report artifacts; Feishu content should stay summary-first.
+- Put analysis content first: conditional plans, watch candidates, `NO TRADE`, position review summary, plan review summary, and daily lessons.
+- Keep execution bookkeeping out of the main body. Do not list generated artifacts, journal append counts, dirty files, LLM metadata, or full validation step logs in Feishu.
+- For post-market summaries, include a compact intraday-monitor recap when artifacts exist: focus symbols, final state distribution, and latest state summary. Do not include sent-notification counts or artifact paths.
+- For post-market summaries, include the same-day review conclusion when available: possible missed candidates, touch-fade/invalidated counts, not-triggered counts, and the conclusion.
+- Keep a small trailing workflow check with workflow/date, validation status, data-quality status, and optional watchlist-sync status.
+- Keep the full detailed report in the Markdown report artifacts; Feishu content should stay analysis-first.
 - Do not present conditional plans as deterministic buy/sell instructions.
 
 ## promote-lesson

@@ -59,12 +59,39 @@ def validation_statuses(run_manifest: dict[str, Any]) -> list[str]:
     return statuses
 
 
-def step_summary(run_manifest: dict[str, Any], name: str) -> dict[str, Any]:
+def compact_validation_status(run_manifest: dict[str, Any]) -> str:
+    statuses = []
+    for step in run_manifest.get("steps", []):
+        if not isinstance(step, dict):
+            continue
+        name = str(step.get("name") or "")
+        if name in {"validate-report", "validate-trade-plan", "data-quality"} or name.startswith("validate-agent"):
+            statuses.append(str(step.get("status") or "unknown"))
+    if not statuses:
+        return "未记录"
+    if all(status == "success" for status in statuses):
+        return "通过"
+    return " / ".join(statuses)
+
+
+def manifest_step(run_manifest: dict[str, Any], name: str) -> dict[str, Any]:
     for step in run_manifest.get("steps", []):
         if isinstance(step, dict) and step.get("name") == name:
-            stdout = step.get("stdout")
-            return stdout if isinstance(stdout, dict) else {}
+            return step
     return {}
+
+
+def step_summary(run_manifest: dict[str, Any], name: str) -> dict[str, Any]:
+    stdout = manifest_step(run_manifest, name).get("stdout")
+    return stdout if isinstance(stdout, dict) else {}
+
+
+def step_status(run_manifest: dict[str, Any], name: str) -> str:
+    step = manifest_step(run_manifest, name)
+    stdout = step.get("stdout")
+    if isinstance(stdout, dict) and stdout.get("status"):
+        return str(stdout.get("status"))
+    return str(step.get("status") or "unknown")
 
 
 def agent_decision_paths(repo_root: Path, date: str, signals: list[dict[str, Any]]) -> list[tuple[str, str]]:
@@ -169,6 +196,16 @@ def compact_price(value: Any) -> str:
     return str(value)
 
 
+def compact_text(value: Any) -> str:
+    if isinstance(value, list):
+        return "；".join(str(item) for item in value if item not in (None, ""))
+    if isinstance(value, dict):
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    if value in (None, ""):
+        return "无补充"
+    return str(value)
+
+
 def signal_note(signal: dict[str, Any]) -> str:
     return str(signal.get("notes") or signal.get("setup") or "无补充")
 
@@ -228,86 +265,10 @@ def build_markdown(
         source_snapshot_date = context.get("source_snapshot_date")
 
     lines = [
-        f"# 飞书执行摘要（{date} {session}）",
+        f"# 飞书分析摘要（{date} {session}）",
         "",
-        "【Workflow】",
-        f"- workflow：{workflow or session}",
-        f"- date：{date}",
+        f"【{title_prefix}可执行交易计划】",
     ]
-    if source_snapshot_date:
-        lines.append(f"- source_snapshot_date：{source_snapshot_date}")
-    lines.extend(
-        [
-            f"- git：{run_manifest.get('git_sha', 'unknown')}；dirty_files={len(run_manifest.get('dirty_files', []))}",
-            "",
-            "【生成 artifacts】",
-        ]
-    )
-    artifacts = run_manifest.get("artifacts") if isinstance(run_manifest.get("artifacts"), list) else []
-    if artifacts:
-        lines.extend(f"- {item}" for item in artifacts)
-    else:
-        lines.append("- 未记录 run manifest artifacts。")
-
-    lines.extend(["", "【Validation】"])
-    statuses = validation_statuses(run_manifest)
-    if statuses:
-        lines.extend(statuses)
-    else:
-        lines.append("- 未记录 validation manifest；请检查 run manifest。")
-
-    journal = step_summary(run_manifest, "extract-report-signals")
-    if journal:
-        lines.extend(
-            [
-                "",
-                "【Journal】",
-                f"- extract-report-signals：{journal.get('status', 'unknown')}",
-                f"- appended：{len(journal.get('appended', []) or [])}",
-                f"- skipped_duplicates：{len(journal.get('skipped_duplicates', []) or [])}",
-            ]
-        )
-
-    sync = step_summary(run_manifest, "sync-longbridge-watchlist")
-    if sync:
-        lines.extend(
-            [
-                "",
-                "【长桥同步】",
-                f"- group：{sync.get('group_name', 'unknown')}",
-                f"- sync_mode：{sync.get('sync_mode', 'unknown')}",
-                f"- status：{sync.get('status', 'unknown')}",
-                f"- symbols：{', '.join(sync.get('symbols', []) or [])}",
-            ]
-        )
-
-    decision_paths = agent_decision_paths(repo_root, date, signals)
-    if decision_paths:
-        lines.extend(["", "【Agent research / decision artifacts】"])
-        lines.extend(f"- {symbol}：{path}" for symbol, path in decision_paths)
-        lines.append("- agent artifacts 仅作证据增强，不作为订单输入。")
-
-    focus_payload = focus_selection_payload or {}
-    selected_focus = focus_payload.get("selected") if isinstance(focus_payload.get("selected"), list) else []
-    if selected_focus:
-        lines.extend(["", "【重点选择】"])
-        for row in selected_focus[:5]:
-            if not isinstance(row, dict):
-                continue
-            score = row.get("rank_score")
-            suffix = f"；rank_score={score}" if score is not None else ""
-            lines.append(
-                f"- {row.get('symbol')}：{row.get('why_focus', row.get('setup', 'selected'))}{suffix}"
-            )
-            if row.get("why_not_executable"):
-                lines.append(f"  - 未进入执行：{row.get('why_not_executable')}")
-
-    lines.extend(
-        [
-            "",
-            f"【{title_prefix}可执行交易计划】",
-        ]
-    )
     if not executable:
         lines.append("- 无。")
     for signal in executable:
@@ -315,7 +276,12 @@ def build_markdown(
         stop = compact_price((signal.get("stop") or {}).get("initial_stop"))
         tp1 = compact_price((signal.get("take_profit") or {}).get("tp1"))
         risk = compact_price((signal.get("risk") or {}).get("max_account_risk_pct"))
-        lines.append(f"- {signal_symbol(signal)}：入场 {entry}；止损 {stop}；TP1 {tp1}；风险 <= {risk}%；状态：等待条件触发。")
+        confirmation = (signal.get("entry") or {}).get("confirmation")
+        confirmation_text = f"；确认：{confirmation}" if confirmation else ""
+        lines.append(
+            f"- {signal_symbol(signal)}：触发 {entry}；止损 {stop}；TP1 {tp1}；"
+            f"风险 <= {risk}%{confirmation_text}。"
+        )
 
     lines.extend(["", "【观察候选】"])
     if not watch:
@@ -329,15 +295,29 @@ def build_markdown(
     for signal in no_trade:
         lines.append(f"- {signal_symbol(signal)}：{signal_note(signal)}")
 
+    focus_payload = focus_selection_payload or {}
+    selected_focus = focus_payload.get("selected") if isinstance(focus_payload.get("selected"), list) else []
+    if selected_focus:
+        lines.extend(["", "【重点选择】"])
+        for row in selected_focus[:5]:
+            if not isinstance(row, dict):
+                continue
+            lines.append(
+                f"- {row.get('symbol')}：{compact_text(row.get('why_focus', row.get('setup', 'selected')))}"
+            )
+            if row.get("why_not_executable"):
+                lines.append(f"  - 未进入执行：{compact_text(row.get('why_not_executable'))}")
+
     focused_fallback = data_quality.get("focused_fallback_symbols")
     lines.extend(
         [
             "",
             "【数据质量】",
             f"- 状态：{data_quality.get('quality_status') or data_quality.get('status', 'unknown')}",
-            f"- stale_data：{data_quality.get('stale_data', 'unknown')}",
         ]
     )
+    if data_quality.get("stale_data"):
+        lines.append("- stale_data：True")
     if isinstance(focused_fallback, list) and focused_fallback:
         for row in focused_fallback:
             if isinstance(row, dict):
@@ -346,7 +326,7 @@ def build_markdown(
                     f"primary={row.get('fallback_from')}；原因：{row.get('primary_error')}"
                 )
     else:
-        lines.append("- 重点标的无 fallback 记录。")
+        lines.append("- 无 stale/fallback 风险。")
 
     if session == "monitor":
         summary = signal_source_summary or {}
@@ -370,7 +350,6 @@ def build_markdown(
             focus_symbols = intraday.get("focus_symbols") if isinstance(intraday.get("focus_symbols"), list) else []
             state_counts = intraday.get("state_counts") if isinstance(intraday.get("state_counts"), dict) else {}
             current_states = intraday.get("current_states") if isinstance(intraday.get("current_states"), list) else []
-            artifacts = intraday.get("artifacts") if isinstance(intraday.get("artifacts"), list) else []
             lines.append(f"- 关注池：{', '.join(focus_symbols) if focus_symbols else '无'}")
             lines.append(
                 "- 状态分布："
@@ -380,36 +359,17 @@ def build_markdown(
                     else "无"
                 )
             )
-            lines.append(
-                f"- 重要事件：{intraday.get('event_count', 0)}；"
-                f"notify={intraday.get('notify_event_count', 0)}；"
-                f"已发送={intraday.get('sent_event_count', 0)}"
-            )
             if current_states:
                 lines.append(f"- 最新状态：{', '.join(current_states[:8])}")
-            if artifacts:
-                lines.append(f"- artifacts：{', '.join(artifacts)}")
             lines.append("- 盘中监控只用于复盘和提醒，不作为交易指令。")
 
         workflow_review = workflow_review_payload or {}
         workflow_summary = workflow_review.get("summary") if isinstance(workflow_review.get("summary"), dict) else {}
-        workflow_status = workflow_summary.get("workflow_status") if isinstance(workflow_summary.get("workflow_status"), dict) else {}
         missed = workflow_summary.get("missed_or_misjudged") if isinstance(workflow_summary.get("missed_or_misjudged"), dict) else {}
-        review_artifacts = workflow_review.get("artifacts") if isinstance(workflow_review.get("artifacts"), list) else []
-        lines.extend(["", "【当日工作过程复盘】"])
+        lines.extend(["", "【当日复盘结论】"])
         if not workflow_review:
             lines.append("- 未生成 workflow-review；请检查 post-market-deliver 是否跳过 daily-workflow-review。")
         else:
-            lines.append(
-                "- 流程状态："
-                f"盘前={workflow_status.get('pre_market', 'unknown')}；"
-                f"盘中={workflow_status.get('intraday', 'unknown')}；"
-                f"盘后={workflow_status.get('post_market', 'unknown')}"
-            )
-            lines.append(
-                f"- 盘中事件：{workflow_summary.get('intraday_events', 0)}；"
-                f"失败记录：{workflow_summary.get('intraday_failures', 0)}"
-            )
             lines.append(
                 f"- 可能漏接候选：{missed.get('possible_missed_candidates', 0)}；"
                 f"触价后回落/失效：{missed.get('touch_fade_or_invalidated', 0)}；"
@@ -419,8 +379,6 @@ def build_markdown(
                 lines.append("- 结论：未发现可执行漏判；触价不等于完整交易计划。")
             else:
                 lines.append("- 结论：存在可能漏接候选，需要人工复核盘中确认、RR 和风险。")
-            if review_artifacts:
-                lines.append(f"- artifacts：{', '.join(review_artifacts)}")
 
     lines.extend(
         [
@@ -454,9 +412,27 @@ def build_markdown(
     lines.extend(
         [
             "",
+            "【流程检查】",
+            f"- workflow：{workflow or session}；date：{date}",
+            f"- validation：{compact_validation_status(run_manifest)}",
+            f"- data_quality：{data_quality.get('quality_status') or data_quality.get('status', 'unknown')}",
+        ]
+    )
+    if source_snapshot_date:
+        lines.append(f"- source_snapshot_date：{source_snapshot_date}")
+    sync = step_summary(run_manifest, "sync-longbridge-watchlist")
+    if sync:
+        lines.append(
+            f"- watchlist_sync：{step_status(run_manifest, 'sync-longbridge-watchlist')}；"
+            f"symbols={', '.join(sync.get('symbols', []) or [])}"
+        )
+
+    lines.extend(
+        [
+            "",
             "【边界】",
-            "- 本摘要只压缩展示条件化计划、复盘和风险提示，不构成投资建议。",
-            "- 不自动下单；任何交易执行必须人工确认。",
+            "- 本摘要优先展示分析结论、复盘和风险提示，不构成投资建议。",
+            "- 不自动下单；不调用券商交易 API；Longbridge 实盘账户流程仅只读。",
         ]
     )
     return "\n".join(lines) + "\n"
@@ -546,7 +522,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Build a concise Feishu-ready execution summary")
+    parser = argparse.ArgumentParser(description="Build a concise Feishu-ready analysis summary")
     parser.add_argument("--date", required=True)
     parser.add_argument("--session", choices=["pre-market", "post-market", "monitor"], required=True)
     parser.add_argument("--signals")

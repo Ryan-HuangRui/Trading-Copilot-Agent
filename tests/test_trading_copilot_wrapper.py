@@ -1444,6 +1444,10 @@ class TradingCopilotWrapperTest(unittest.TestCase):
             date=None,
             snapshot_date=None,
             skip_non_trading_day=False,
+            refresh_longbridge_watchlist=True,
+            watchlist_source_method="auto",
+            longbridge_watchlist_group=[],
+            longbridge_cli="/tmp/lb",
         )
 
         with patch.object(trading_copilot, "run_child", return_value=proc), patch.object(
@@ -1453,6 +1457,8 @@ class TradingCopilotWrapperTest(unittest.TestCase):
                 trading_copilot.run_pre_market(args)
 
         payload = emit.call_args.args[0]
+        self.assertIn("--longbridge-cli", payload["command"])
+        self.assertIn("--watchlist-source-method", payload["command"])
         self.assertIn("report/2026-05-26/pre-market-signals.json", payload["expected_agent_outputs"])
 
     def test_pre_market_injects_external_disclosure_artifact_at_wrapper_layer(self):
@@ -1565,6 +1571,9 @@ class TradingCopilotWrapperTest(unittest.TestCase):
             fallback_market_data_source="twelve",
             longbridge_cli=None,
             longbridge_default_market="US",
+            refresh_longbridge_watchlist=True,
+            watchlist_source_method="auto",
+            longbridge_watchlist_group=["持仓"],
         )
 
         with patch.object(trading_copilot, "run_child", return_value=proc), patch.object(
@@ -1574,6 +1583,7 @@ class TradingCopilotWrapperTest(unittest.TestCase):
                 trading_copilot.run_post_market(args)
 
         payload = emit.call_args.args[0]
+        self.assertIn("--longbridge-watchlist-group", payload["command"])
         self.assertIn("report/2026-05-26/post-market-signals.json", payload["expected_agent_outputs"])
         self.assertIn("report/2026-05-26/intraday.md", payload["next_agent_inputs"])
         self.assertIn("runtime/intraday/2026-05-26/state.json", payload["next_agent_inputs"])

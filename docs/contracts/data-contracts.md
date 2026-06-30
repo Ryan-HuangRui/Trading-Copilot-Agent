@@ -6,7 +6,8 @@ Generated runtime artifacts live under ignored runtime paths, primarily `raw_dat
 
 - Dates use `YYYY-MM-DD`.
 - Market dates are resolved in `America/New_York` unless a command explicitly overrides the timezone.
-- Symbol arrays may include fixed watchlist symbols and temporary dynamic universe symbols.
+- Symbol arrays may include Longbridge-sourced watchlist symbols and temporary dynamic universe symbols.
+- Scheduled pre-market and post-market workflows first try to refresh `config/watchlist.json` from Longbridge watchlist groups `持仓`, `ibkr持仓`, `老朋友`, `AI先进封装HBM`, and `AI Top 10 Research`; when Longbridge retrieval is unavailable they fall back to the existing local file without overwriting it.
 - Dynamic S&P 500 candidates are observation candidates only; do not write them back to `config/watchlist.json`.
 - Any artifact that contains trading observations must preserve scenario, invalidation, and risk framing.
 

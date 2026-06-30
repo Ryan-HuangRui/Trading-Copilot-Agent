@@ -37,7 +37,7 @@
 【输入数据】
 - 数据周期：1day
 - 来自 report/<SNAPSHOT_DATE>/daily-snapshot.json（收盘后生成的最新已完成交易日 snapshot）
-- watchlist: config/watchlist.json
+- watchlist: 默认由长桥自选「持仓 / ibkr持仓 / 老朋友 / AI先进封装HBM / AI Top 10 Research」刷新到 config/watchlist.json；长桥不可用时才回退本地文件
 - 若 `knowledge/evolution/validated_lessons.md` 存在非空经验，可作为近期流程约束参考；它不能覆盖 `knowledge/refined/`
 - 若 snapshot 中存在 `candidate_universe`，它是盘后从 S&P 500 top 100 动态筛出的观察池；复盘时优先说明固定 watchlist 与动态候选中哪些值得明日继续观察
 - 动态候选只代表流动性/权重/量价结构筛选结果，不代表交易建议

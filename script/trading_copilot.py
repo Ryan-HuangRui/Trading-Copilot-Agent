@@ -343,6 +343,14 @@ def run_pre_market(args: argparse.Namespace) -> None:
         "--timezone",
         args.timezone,
     ]
+    if getattr(args, "longbridge_cli", None):
+        command.extend(["--longbridge-cli", args.longbridge_cli])
+    if not getattr(args, "refresh_longbridge_watchlist", False):
+        command.append("--no-longbridge-watchlist-refresh")
+    if getattr(args, "watchlist_source_method", None):
+        command.extend(["--watchlist-source-method", args.watchlist_source_method])
+    for group in getattr(args, "longbridge_watchlist_group", []) or []:
+        command.extend(["--longbridge-watchlist-group", group])
     if args.date:
         command.extend(["--date", args.date])
     if args.snapshot_date:
@@ -358,6 +366,7 @@ def run_pre_market(args: argparse.Namespace) -> None:
     response = maybe_skipped(base_response("pre-market-plan", command, stdout), stdout)
     if response["status"] == "success" and stdout:
         response["date"] = stdout.get("report_date")
+        response["watchlist_source"] = stdout.get("watchlist_source")
         context_path = stdout.get("context_path")
         response["artifacts"] = [context_path] if context_path else []
         response["next_agent_inputs"] = [
@@ -426,6 +435,12 @@ def run_post_market(args: argparse.Namespace) -> None:
         command.extend(["--longbridge-cli", args.longbridge_cli])
     if args.longbridge_default_market:
         command.extend(["--longbridge-default-market", args.longbridge_default_market])
+    if not getattr(args, "refresh_longbridge_watchlist", False):
+        command.append("--no-longbridge-watchlist-refresh")
+    if getattr(args, "watchlist_source_method", None):
+        command.extend(["--watchlist-source-method", args.watchlist_source_method])
+    for group in getattr(args, "longbridge_watchlist_group", []) or []:
+        command.extend(["--longbridge-watchlist-group", group])
     if args.date:
         command.extend(["--date", args.date])
     if args.skip_non_trading_day:
@@ -455,6 +470,7 @@ def run_post_market(args: argparse.Namespace) -> None:
         if stdout.get("candidate_universe_path"):
             artifacts.append(stdout["candidate_universe_path"])
         response["date"] = stdout.get("snapshot_date")
+        response["watchlist_source"] = stdout.get("watchlist_source")
         response["artifacts"] = artifacts
         response["next_agent_inputs"] = [
             "agent/post_market_analysis_prompt.md",
@@ -3448,6 +3464,10 @@ def build_parser() -> argparse.ArgumentParser:
     pre.add_argument("--snapshot-date")
     pre.add_argument("--timezone", default="America/New_York")
     pre.add_argument("--skip-non-trading-day", action="store_true")
+    pre.add_argument("--longbridge-cli")
+    pre.add_argument("--watchlist-source-method", choices=["auto", "cli", "sdk"], default="auto")
+    pre.add_argument("--longbridge-watchlist-group", action="append", default=[])
+    pre.add_argument("--no-longbridge-watchlist-refresh", dest="refresh_longbridge_watchlist", action="store_false", default=True)
     pre.add_argument("--include-agent-research", action="store_true")
     pre.add_argument("--agent-symbol", action="append", default=[])
     pre.add_argument("--include-external-disclosures", dest="include_external_disclosures", action="store_true", default=True)
@@ -3536,6 +3556,9 @@ def build_parser() -> argparse.ArgumentParser:
     post.add_argument("--fallback-market-data-source", choices=["twelve", "longbridge", "none"], default="twelve")
     post.add_argument("--longbridge-cli")
     post.add_argument("--longbridge-default-market", default="US")
+    post.add_argument("--watchlist-source-method", choices=["auto", "cli", "sdk"], default="auto")
+    post.add_argument("--longbridge-watchlist-group", action="append", default=[])
+    post.add_argument("--no-longbridge-watchlist-refresh", dest="refresh_longbridge_watchlist", action="store_false", default=True)
     post.add_argument("--include-agent-research", action="store_true")
     post.add_argument("--agent-symbol", action="append", default=[])
     post.set_defaults(func=run_post_market)
@@ -3789,7 +3812,7 @@ def build_parser() -> argparse.ArgumentParser:
     learning_review.add_argument("--journal-dir", default="runtime/journal")
     learning_review.set_defaults(func=run_learning_review)
 
-    feishu_summary = sub.add_parser("feishu-summary", help="Build a concise Feishu-ready execution summary")
+    feishu_summary = sub.add_parser("feishu-summary", help="Build a concise Feishu-ready analysis summary")
     feishu_summary.add_argument("--date", required=True)
     feishu_summary.add_argument("--session", choices=["pre-market", "post-market", "monitor"], required=True)
     feishu_summary.add_argument("--signals")

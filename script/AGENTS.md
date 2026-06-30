@@ -4,9 +4,9 @@
 - `market_data_provider.py`: provider stack for Longbridge primary market data with Twelve Data fallback.
 - `twelve_data_client.py`: Twelve Data HTTP client, API-key lookup, and cross-process rate limiter used for fallback.
 - `fetch_daily.py`: generic batch fetch into `raw_data/<DATE>/<INTERVAL>/`.
-- `prepare_market_snapshot.py`: canonical daily snapshot builder, writes `raw_data/<DATE>/<INTERVAL>/` and `report/<DATE>/daily-snapshot.json`.
+- `prepare_market_snapshot.py`: canonical daily snapshot builder, refreshes `config/watchlist.json` from configured Longbridge watchlist groups when available, writes `raw_data/<DATE>/<INTERVAL>/` and `report/<DATE>/daily-snapshot.json`.
 - `sp500_universe.py`: S&P 500 holdings fetcher and deterministic dynamic-candidate scorer. Default source is iShares IVV holdings CSV.
-- `prepare_daily_context.py`: pre-market context builder that reads the previous trading day's snapshot and writes `report/<DATE>/pre-market-context.json`.
+- `prepare_daily_context.py`: pre-market context builder that refreshes `config/watchlist.json` from configured Longbridge watchlist groups when available, reads the previous trading day's snapshot, and writes `report/<DATE>/pre-market-context.json`.
 - `pre_market_report.py`: scripted pre-market report generator.
 - `monitor_scan.py`: 5m watchlist/position scan and `report/latest-monitor.json` writer.
 - `intraday_tracker.py`: read-only pre-market plan tracker that appends `report/<DATE>/intraday.md` and updates `runtime/intraday/<DATE>/state.json` / `events.jsonl`.
@@ -14,6 +14,7 @@
 - `validate_intraday_decision_coverage.py`: verifies a Codex-reviewed monitor sidecar has one explicit decision per `intraday-opportunity-context` observation symbol; it must not judge trade quality or call broker APIs.
 - `intraday_review_append.py`: appends Codex-reviewed monitor sidecar decisions and dry-run counts into `report/<DATE>/intraday.md`; it must not call broker APIs.
 - `longbridge_cli_adapter.py`: read-only Longbridge CLI guard. Do not add order/write commands.
+- `longbridge_watchlist_source.py`: read-only Longbridge watchlist group reader that refreshes local `config/watchlist.json`; falls back to the existing local file when Longbridge is unavailable.
 - `longbridge_account_snapshot.py`: read-only account/position snapshot writer under `runtime/account/`.
 - `longbridge_paper_trade_adapter.py`: Longbridge paper-account guard and read-only paper order/execution fetcher.
 - `longbridge_paper_order_adapter.py`: gated Longbridge paper order writer. It must remain paper-only and supports guarded Longbridge paper order submission, cancel, pending order replace, protective stop, TP1, and break-even stop movement through explicit execute/config gates.
@@ -41,7 +42,7 @@
 - `validate_trade_plan.py`: structured Trade Plan Card validator for session sidecars.
 - `plan_review.py`: plan-quality review and candidate lesson writer under `runtime/learning/`.
 - `learning_review.py`: aggregates repeated daily lessons into `pattern_candidates.jsonl`.
-- `feishu_summary.py`: concise Feishu-ready execution panel built from validated sidecars and review artifacts.
+- `feishu_summary.py`: concise Feishu-ready analysis summary built from validated sidecars and review artifacts.
 - `promote_lesson.py`: human-triggered promotion into `knowledge/evolution/validated_lessons.md`; never edits `knowledge/refined/`.
 - `workflow_smoke_test.py`: fixture-based workflow smoke test; must not fetch live market or account data.
 - `report_delivery_guard.py`: idempotent delivery-state helper.
@@ -119,7 +120,7 @@
 - For scheduled report scripts, support `--skip-non-trading-day` and use the market date in `America/New_York`.
 - Agent-facing wrapper responses should keep the shared fields `status`, `workflow`, `date`, `artifacts`, `skipped`, and `reason`.
 - Snapshot builders should continue after per-symbol fetch failures and record failures in `errors`; same-day cache fallback must be marked with `used_cache`.
-- Dynamic S&P 500 candidates should be written to `report/<DATE>/candidate-universe.json` and merged into the snapshot only for that date; do not mutate `config/watchlist.json`.
+- Dynamic S&P 500 candidates should be written to `report/<DATE>/candidate-universe.json` and merged into the snapshot only for that date; do not mutate `config/watchlist.json` for dynamic candidates. The only scheduled mutation of `config/watchlist.json` should be the Longbridge source-group refresh fallback cache.
 
 ## Common pitfalls
 - The normalized market-data contract returns newest bars first. Longbridge raw K-line data returns oldest first and must be normalized before snapshot or monitor analysis.

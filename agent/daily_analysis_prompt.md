@@ -41,7 +41,7 @@
 - 数据周期：1day
 - 来自 report/<PRE_MARKET_DATE>/pre-market-context.json（由脚本预先生成）
 - context 中的 `source_snapshot_date` 是上一个已完成交易日；`snapshot` 是该交易日收盘后的同一份 daily snapshot
-- watchlist: config/watchlist.json
+- watchlist: 默认由长桥自选「持仓 / ibkr持仓 / 老朋友 / AI先进封装HBM / AI Top 10 Research」刷新到 config/watchlist.json；长桥不可用时才回退本地文件
 - 若 `knowledge/evolution/validated_lessons.md` 存在非空经验，可作为近期流程约束参考；它不能覆盖 `knowledge/refined/`
 - 若 snapshot 中存在 `candidate_universe`，它是盘后从 S&P 500 top 100 动态筛出的观察池；分析范围为固定 watchlist + 动态候选去重后的 merged universe
 - 不得把动态候选视为交易建议；它们只代表“值得盘前观察”的流动性/权重/量价结构候选

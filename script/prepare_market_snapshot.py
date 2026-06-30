@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from journal_review import planned_target_date, read_jsonl
+from longbridge_watchlist_source import DEFAULT_SOURCE_GROUPS, refresh_watchlist
 from market_calendar import MARKET_TIMEZONE, resolve_market_date, trading_day_status
 from market_snapshot import build_market_snapshot
 
@@ -72,6 +73,9 @@ def main() -> None:
     parser.add_argument("--fallback-market-data-source", default="twelve", choices=["twelve", "longbridge", "none"], help="Fallback market data provider.")
     parser.add_argument("--longbridge-cli", help="Explicit Longbridge CLI path.")
     parser.add_argument("--longbridge-default-market", default="US", help="Market suffix for bare symbols when using Longbridge.")
+    parser.add_argument("--watchlist-source-method", choices=["auto", "cli", "sdk"], default="auto")
+    parser.add_argument("--longbridge-watchlist-group", action="append", default=[])
+    parser.add_argument("--no-longbridge-watchlist-refresh", dest="refresh_longbridge_watchlist", action="store_false", default=True)
     args = parser.parse_args()
 
     repo_root = Path(__file__).resolve().parents[1]
@@ -80,6 +84,16 @@ def main() -> None:
     if args.skip_non_trading_day and not guard["is_trading_day"]:
         print(json.dumps({"skipped": True, "guard": guard}, ensure_ascii=False, indent=2))
         return
+
+    watchlist_source = None
+    if args.refresh_longbridge_watchlist:
+        watchlist_source = refresh_watchlist(
+            repo_root=repo_root,
+            watchlist_path=args.watchlist,
+            group_names=args.longbridge_watchlist_group or DEFAULT_SOURCE_GROUPS,
+            method=args.watchlist_source_method,
+            longbridge_cli=args.longbridge_cli,
+        )
 
     extra_symbols = list(args.extra_symbol or [])
     if args.include_journal_signals:
@@ -105,6 +119,9 @@ def main() -> None:
         longbridge_cli=args.longbridge_cli,
         longbridge_default_market=args.longbridge_default_market,
     )
+    if watchlist_source:
+        snapshot["watchlist_source"] = watchlist_source
+        path.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
 
     print(json.dumps(
         {
@@ -121,6 +138,7 @@ def main() -> None:
             "errors": len(snapshot["errors"]),
             "latest_bar_dates": snapshot.get("latest_bar_dates", []),
             "stale_data": snapshot.get("stale_data", False),
+            "watchlist_source": watchlist_source,
         },
         ensure_ascii=False,
         indent=2,
