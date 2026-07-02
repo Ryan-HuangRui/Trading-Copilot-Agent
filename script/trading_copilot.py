@@ -3,6 +3,7 @@ import argparse
 from datetime import datetime, timezone
 import hashlib
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -10,6 +11,8 @@ from typing import Any, Dict, List, Optional
 
 
 ROOT = Path(__file__).resolve().parents[1]
+US_MARKET_SUFFIX = ".US"
+MARKET_SUFFIX_RE = re.compile(r"\.[A-Z]{2,4}$")
 
 
 def run_child(args: List[str]) -> subprocess.CompletedProcess[str]:
@@ -64,6 +67,20 @@ def normalize_symbols(symbols: List[str] | None) -> List[str]:
         seen.add(value)
         normalized.append(value)
     return normalized
+
+
+def normalize_us_market_symbols(symbols: List[str] | None) -> List[str]:
+    market_filtered: List[str] = []
+    for symbol in symbols or []:
+        value = str(symbol or "").strip().upper().strip("`，,。.;；:：()（）[]【】")
+        if not value:
+            continue
+        if value.endswith(US_MARKET_SUFFIX):
+            value = value.rsplit(".", 1)[0]
+        elif MARKET_SUFFIX_RE.search(value):
+            continue
+        market_filtered.append(value)
+    return normalize_symbols(market_filtered)
 
 
 def resolve_repo_path(path: str) -> Path:
@@ -154,7 +171,7 @@ def symbols_from_agent_source(path_text: str | None) -> List[str]:
     for item in snapshot.get("symbols", []):
         if isinstance(item, dict) and item.get("symbol"):
             symbols.append(str(item["symbol"]))
-    return normalize_symbols(symbols)
+    return normalize_us_market_symbols(symbols)
 
 
 def run_agent_research_pipeline(
@@ -1516,6 +1533,8 @@ def run_feishu_summary(args: argparse.Namespace) -> None:
         command.extend(["--run-manifest", args.run_manifest])
     if getattr(args, "workflow_review", None):
         command.extend(["--workflow-review", args.workflow_review])
+    if getattr(args, "market_context", None):
+        command.extend(["--market-context", args.market_context])
     if args.output:
         command.extend(["--output", args.output])
 
@@ -1528,6 +1547,48 @@ def run_feishu_summary(args: argparse.Namespace) -> None:
     response["date"] = args.date
     response["artifacts"] = [stdout["output"]] if stdout and stdout.get("output") else []
     response["summary"] = (stdout or {}).get("summary")
+    emit(response)
+
+
+def run_longbridge_market_context(args: argparse.Namespace) -> None:
+    command = [
+        "script/longbridge_market_context.py",
+        "--date",
+        args.date,
+        "--interval",
+        args.interval,
+        "--outputsize",
+        str(args.outputsize),
+    ]
+    for symbol in args.market_symbol:
+        command.extend(["--market-symbol", symbol])
+    for symbol in args.industry_symbol:
+        command.extend(["--industry-symbol", symbol])
+    if args.longbridge_cli:
+        command.extend(["--longbridge-cli", args.longbridge_cli])
+    if args.longbridge_default_market:
+        command.extend(["--longbridge-default-market", args.longbridge_default_market])
+    if args.output:
+        command.extend(["--output", args.output])
+
+    proc = run_child(command)
+    stdout = parse_json_output(proc.stdout)
+    if proc.returncode != 0 or (isinstance(stdout, dict) and stdout.get("status") in {"failed", "fail"}):
+        response = failed_response("longbridge-market-context", command, proc)
+        response["date"] = args.date
+        if isinstance(stdout, dict) and stdout.get("output"):
+            response["artifacts"] = [stdout["output"]]
+        if isinstance(stdout, dict):
+            summary = stdout.get("summary") if isinstance(stdout.get("summary"), dict) else {}
+            response["reason"] = f"Longbridge market context failed; errors={summary.get('errors', 'unknown')}"
+            response["summary"] = summary
+        emit(response, 1)
+
+    response = base_response("longbridge-market-context", command, stdout)
+    response["date"] = args.date
+    response["artifacts"] = [stdout["output"]] if stdout and stdout.get("output") else []
+    response["summary"] = (stdout or {}).get("summary")
+    response["errors"] = (stdout or {}).get("errors", [])
     emit(response)
 
 
@@ -2147,9 +2208,25 @@ def run_post_market_deliver(args: argparse.Namespace) -> None:
         run_manifest_step(manifest=manifest, name="daily-workflow-review", command=workflow_review, allow_failure=True)
         write_manifest(manifest, manifest_file)
 
+    market_context_output = str(ROOT / "report" / date / "longbridge-market-context.json")
+    if not getattr(args, "skip_market_context", False):
+        market_context = [
+            "script/longbridge_market_context.py",
+            "--date",
+            date,
+            "--output",
+            market_context_output,
+        ]
+        if args.longbridge_cli:
+            market_context.extend(["--longbridge-cli", args.longbridge_cli])
+        run_manifest_step(manifest=manifest, name="longbridge-market-context", command=market_context, allow_failure=True)
+        write_manifest(manifest, manifest_file)
+
     feishu = ["script/feishu_summary.py", "--date", date, "--session", session, "--run-manifest", str(manifest_file), "--learning-dir", args.learning_dir]
     if args.signals:
         feishu.extend(["--signals", args.signals])
+    if not getattr(args, "skip_market_context", False):
+        feishu.extend(["--market-context", market_context_output])
     if args.summary_output:
         feishu.extend(["--output", args.summary_output])
     ok, summary_step = run_manifest_step(manifest=manifest, name="feishu-summary", command=feishu)
@@ -3524,6 +3601,7 @@ def build_parser() -> argparse.ArgumentParser:
     post_deliver.add_argument("--skip-self-review", action="store_true")
     post_deliver.add_argument("--append-self-review", action="store_true")
     post_deliver.add_argument("--skip-workflow-review", action="store_true")
+    post_deliver.add_argument("--skip-market-context", action="store_true")
     post_deliver.add_argument("--sync-longbridge", action="store_true")
     post_deliver.add_argument("--execute-sync", action="store_true")
     post_deliver.add_argument("--group-name", default="今日关注")
@@ -3820,9 +3898,21 @@ def build_parser() -> argparse.ArgumentParser:
     feishu_summary.add_argument("--plan-review")
     feishu_summary.add_argument("--run-manifest")
     feishu_summary.add_argument("--workflow-review")
+    feishu_summary.add_argument("--market-context")
     feishu_summary.add_argument("--output")
     feishu_summary.add_argument("--learning-dir", default="runtime/learning")
     feishu_summary.set_defaults(func=run_feishu_summary)
+
+    market_context = sub.add_parser("longbridge-market-context", help="Fetch read-only Longbridge market and industry context")
+    market_context.add_argument("--date", required=True)
+    market_context.add_argument("--interval", default="1day")
+    market_context.add_argument("--outputsize", type=int, default=3)
+    market_context.add_argument("--market-symbol", action="append", default=[])
+    market_context.add_argument("--industry-symbol", action="append", default=[])
+    market_context.add_argument("--longbridge-cli")
+    market_context.add_argument("--longbridge-default-market", default="US")
+    market_context.add_argument("--output")
+    market_context.set_defaults(func=run_longbridge_market_context)
 
     focus = sub.add_parser("focus-selection", help="Build an auditable focus-selection artifact")
     focus.add_argument("--date", required=True)

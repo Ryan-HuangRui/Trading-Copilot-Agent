@@ -1,4 +1,6 @@
+import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -14,7 +16,20 @@ from market_data_provider import (
     longbridge_symbol,
     normalize_longbridge_kline,
 )
-from market_snapshot import build_symbol_snapshot, latest_bar_dates, merge_symbols, snapshot_filename
+from market_snapshot import build_market_snapshot, build_symbol_snapshot, latest_bar_dates, merge_symbols, snapshot_filename
+
+
+class FakeMarketDataClient:
+    name = "fake"
+
+    def time_series(self, symbol: str, interval: str, outputsize: int) -> dict:
+        return {
+            "meta": {"symbol": symbol, "interval": interval, "provider": "fake"},
+            "values": [
+                {"datetime": "2026-06-30", "open": "100", "high": "110", "low": "99", "close": "108", "volume": "1200"},
+                {"datetime": "2026-06-29", "open": "96", "high": "102", "low": "95", "close": "100", "volume": "1000"},
+            ],
+        }
 
 
 class MarketSnapshotContractTest(unittest.TestCase):
@@ -24,6 +39,24 @@ class MarketSnapshotContractTest(unittest.TestCase):
 
     def test_merge_symbols_uppercases_and_deduplicates(self):
         self.assertEqual(merge_symbols(["mu", "NVDA"], ["MU", "pltr"]), ["MU", "NVDA", "PLTR"])
+
+    def test_build_market_snapshot_filters_watchlist_to_us_market(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            watchlist = root / "config" / "watchlist.json"
+            watchlist.parent.mkdir()
+            watchlist.write_text(json.dumps({"symbols": ["MU.US", "7709.HK", "BRK.B.US"]}), encoding="utf-8")
+
+            with patch("market_snapshot.build_market_data_client", return_value=FakeMarketDataClient()):
+                snapshot, _ = build_market_snapshot(
+                    repo_root=root,
+                    snapshot_date="2026-06-30",
+                    trading_day={"date": "2026-06-30", "is_trading_day": True},
+                    watchlist_path="config/watchlist.json",
+                )
+
+        self.assertEqual(snapshot["watchlist_symbols"], ["MU", "BRK.B"])
+        self.assertEqual([item["symbol"] for item in snapshot["symbols"]], ["MU", "BRK.B"])
 
     def test_longbridge_symbol_adds_market_suffix_without_mangling_share_class(self):
         self.assertEqual(longbridge_symbol("MU"), "MU.US")

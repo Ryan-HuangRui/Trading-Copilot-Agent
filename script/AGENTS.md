@@ -14,6 +14,7 @@
 - `validate_intraday_decision_coverage.py`: verifies a Codex-reviewed monitor sidecar has one explicit decision per `intraday-opportunity-context` observation symbol; it must not judge trade quality or call broker APIs.
 - `intraday_review_append.py`: appends Codex-reviewed monitor sidecar decisions and dry-run counts into `report/<DATE>/intraday.md`; it must not call broker APIs.
 - `longbridge_cli_adapter.py`: read-only Longbridge CLI guard. Do not add order/write commands.
+- `longbridge_market_context.py`: read-only Longbridge daily market and industry/sector ETF context for post-market Feishu summaries.
 - `longbridge_watchlist_source.py`: read-only Longbridge watchlist group reader that refreshes local `config/watchlist.json`; falls back to the existing local file when Longbridge is unavailable.
 - `longbridge_account_snapshot.py`: read-only account/position snapshot writer under `runtime/account/`.
 - `longbridge_paper_trade_adapter.py`: Longbridge paper-account guard and read-only paper order/execution fetcher.
@@ -94,6 +95,7 @@
 - Review generated plans: `python3 script/trading_copilot.py plan-review --date 2026-05-06 --append-lessons`.
 - Aggregate candidate lessons: `python3 script/trading_copilot.py learning-review --lookback-days 20`.
 - Build Feishu summary: `python3 script/trading_copilot.py feishu-summary --session pre-market --date 2026-05-06`.
+- Fetch Longbridge market/industry context: `python3 script/trading_copilot.py longbridge-market-context --date 2026-05-06`.
 - Preview lesson promotion: `python3 script/trading_copilot.py promote-lesson --pattern-id <PATTERN_ID> --dry-run`.
 - Run fixture workflow smoke test: `python3 script/workflow_smoke_test.py --date 2026-05-06 --week 2026-W19`.
 - Check trading day through wrapper: `python3 script/trading_copilot.py trading-day-check --date 2026-05-06`.
@@ -115,6 +117,7 @@
 - Intraday event notification must deduplicate with `runtime/intraday/<DATE>/sent-events.json`.
 - Do not enable `paper-trade-submit --session monitor --execute`; use the dedicated `intraday-paper-entry` wrapper for the Phase 3 paper-only path.
 - Longbridge account workflows are read-only. Paper-trading workflows may inspect paper orders/executions and produce dry-run previews/submissions. Broker writes are allowed only through `longbridge_paper_order_adapter.py`, only for paper accounts, and only when the explicit execution gates are enabled.
+- Post-market market/industry summary context should come from Longbridge read-only K-line data via `longbridge_market_context.py`; use sector/industry ETF proxies and disclose errors instead of inventing unavailable sector data.
 - If adding a script that fetches market data, reuse `build_market_data_client()` so Longbridge remains primary and Twelve Data remains fallback.
 - S&P 500 universe fetches may use standard-library HTTP, but per-symbol market-data screening must still use the shared market-data provider stack.
 - For scheduled report scripts, support `--skip-non-trading-day` and use the market date in `America/New_York`.

@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 from statistics import mean
 
+from longbridge_watchlist_source import config_symbol
 from market_data_provider import build_market_data_client
 from twelve_data_client import save_json
 from sp500_universe import (
@@ -223,7 +224,7 @@ def build_market_snapshot(
 ) -> tuple[dict, Path]:
     load_env(repo_root)
     watch = json.loads((repo_root / watchlist_path).read_text(encoding="utf-8"))
-    watchlist_symbols = merge_symbols(watch.get("symbols", []), [])
+    watchlist_symbols = merge_symbols([config_symbol(symbol) for symbol in watch.get("symbols", [])], [])
 
     client = build_market_data_client(
         repo_root=repo_root,

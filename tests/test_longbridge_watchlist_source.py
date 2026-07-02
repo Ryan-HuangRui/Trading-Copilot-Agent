@@ -18,21 +18,24 @@ from longbridge_watchlist_source import (
 
 
 class LongbridgeWatchlistSourceTest(unittest.TestCase):
-    def test_config_symbol_strips_us_suffix_only(self):
+    def test_config_symbol_keeps_only_us_market_symbols(self):
         self.assertEqual(config_symbol("mu.us"), "MU")
-        self.assertEqual(config_symbol("00700.HK"), "00700.HK")
+        self.assertEqual(config_symbol("BRK.B.US"), "BRK.B")
+        self.assertEqual(config_symbol("BRK.B"), "BRK.B")
+        self.assertEqual(config_symbol("00700.HK"), "")
+        self.assertEqual(config_symbol("7709.HK"), "")
 
     def test_collect_source_symbols_uses_named_groups_in_config_order(self):
         snapshots = [
-            {"group_id": "old", "group_name": "老朋友", "symbols": ["NVDA.US", "MU.US"]},
-            {"group_id": "pos", "group_name": "持仓", "symbols": ["MU.US", "TSM.US"]},
+            {"group_id": "old", "group_name": "老朋友", "symbols": ["NVDA.US", "MU.US", "7709.HK"]},
+            {"group_id": "pos", "group_name": "持仓", "symbols": ["MU.US", "TSM.US", "00700.HK"]},
             {"group_id": "skip", "group_name": "其他", "symbols": ["BAD.US"]},
         ]
 
         payload = collect_source_symbols(snapshots, ["持仓", "ibkr持仓", "老朋友"])
 
         self.assertEqual(payload["symbols"], ["MU", "TSM", "NVDA"])
-        self.assertEqual(payload["longbridge_symbols"], ["MU.US", "TSM.US", "NVDA.US"])
+        self.assertEqual(payload["longbridge_symbols"], ["MU.US", "TSM.US", "00700.HK", "NVDA.US", "7709.HK"])
         self.assertEqual(payload["missing_groups"], ["ibkr持仓"])
 
     def test_refresh_watchlist_overwrites_manual_file_from_longbridge_groups(self):
@@ -42,7 +45,7 @@ class LongbridgeWatchlistSourceTest(unittest.TestCase):
             watchlist.parent.mkdir()
             watchlist.write_text(json.dumps({"symbols": ["OLD"]}), encoding="utf-8")
             snapshots = [
-                {"group_id": "pos", "group_name": "持仓", "symbols": ["MU.US", "TSM.US"]},
+                {"group_id": "pos", "group_name": "持仓", "symbols": ["MU.US", "TSM.US", "7709.HK"]},
                 {"group_id": "hbm", "group_name": "AI先进封装HBM", "symbols": ["NVDA.US", "MU.US"]},
             ]
 

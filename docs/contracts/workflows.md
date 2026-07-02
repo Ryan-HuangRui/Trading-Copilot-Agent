@@ -711,6 +711,8 @@ python3 script/trading_copilot.py feishu-summary --session post-market --date <D
 Inputs:
 
 - `report/<DATE>/pre-market-signals.json` or `report/<DATE>/post-market-signals.json`
+- For post-market: `report/<DATE>/longbridge-market-context.json` for Longbridge read-only market index/indicator moves and industry/sector ETF proxy moves
+- For post-market fallback only: `report/<DATE>/daily-snapshot.json` for observation-pool breadth and sector/industry aggregation when Longbridge market context is unavailable
 - Optional `report/<DATE>/position-review.json`
 - Optional `report/<DATE>/plan-review.json`
 - Optional post-market intraday artifacts: `report/<DATE>/intraday.md`, `runtime/intraday/<DATE>/state.json`, `runtime/intraday/<DATE>/events.jsonl`, and `runtime/intraday/<DATE>/sent-events.json`
@@ -725,11 +727,33 @@ Required behavior:
 
 - Put analysis content first: conditional plans, watch candidates, `NO TRADE`, position review summary, plan review summary, and daily lessons.
 - Keep execution bookkeeping out of the main body. Do not list generated artifacts, journal append counts, dirty files, LLM metadata, or full validation step logs in Feishu.
+- For post-market summaries, include a `市场与行业` section before symbol-level analysis. Use `longbridge-market-context` as the primary source for major index/indicator moves and industry/sector ETF proxy strength. If Longbridge context is missing or failed, fall back to daily snapshot observation-pool breadth and clearly label it as watchlist/snapshot evidence rather than full-market coverage.
 - For post-market summaries, include a compact intraday-monitor recap when artifacts exist: focus symbols, final state distribution, and latest state summary. Do not include sent-notification counts or artifact paths.
 - For post-market summaries, include the same-day review conclusion when available: possible missed candidates, touch-fade/invalidated counts, not-triggered counts, and the conclusion.
 - Keep a small trailing workflow check with workflow/date, validation status, data-quality status, and optional watchlist-sync status.
 - Keep the full detailed report in the Markdown report artifacts; Feishu content should stay analysis-first.
 - Do not present conditional plans as deterministic buy/sell instructions.
+
+## longbridge-market-context
+
+Purpose: fetch read-only Longbridge daily bars for broad-market and industry/sector proxy instruments before post-market Feishu delivery.
+
+Canonical command:
+
+```bash
+python3 script/trading_copilot.py longbridge-market-context --date <DATE>
+```
+
+Output:
+
+- `report/<DATE>/longbridge-market-context.json`
+
+Required behavior:
+
+- Use Longbridge read-only K-line data only; do not call broker trading/order APIs.
+- Default market proxies: `SPY`, `QQQ`, `DIA`, `IWM`, `VIX`.
+- Default industry/sector proxies: `XLK`, `XLC`, `XLY`, `XLP`, `XLF`, `XLV`, `XLI`, `XLE`, `XLU`, `XLB`, `XLRE`, `SMH`.
+- Continue after per-symbol failures and record errors in the artifact. Post-market delivery may continue, but Feishu must disclose missing Longbridge context or error counts.
 
 ## promote-lesson
 

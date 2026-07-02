@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -17,6 +18,9 @@ from sync_longbridge_watchlist import (
     watchlist_snapshots,
 )
 
+US_MARKET_SUFFIX = ".US"
+MARKET_SUFFIX_RE = re.compile(r"\.[A-Z]{2,4}$")
+
 
 DEFAULT_SOURCE_GROUPS = [
     "持仓",
@@ -29,8 +33,10 @@ DEFAULT_SOURCE_GROUPS = [
 
 def config_symbol(symbol: object) -> str:
     value = str(symbol or "").strip().upper().strip("`，,。.;；:：()（）[]【】")
-    if value.endswith(".US"):
+    if value.endswith(US_MARKET_SUFFIX):
         return value.rsplit(".", 1)[0]
+    if MARKET_SUFFIX_RE.search(value):
+        return ""
     return value
 
 

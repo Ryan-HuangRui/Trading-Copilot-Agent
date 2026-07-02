@@ -12,6 +12,50 @@ Use this split:
 
 Do not run the same production pre-market or post-market workflow from both cc connect and Codex App automation. Duplicate schedulers can duplicate reports, journal records, Longbridge sync, market-data calls, and Feishu messages.
 
+## Production Wrapper Mode
+
+The production pre-market and post-market report tasks should use a wrapper instead of a direct cc-connect prompt. The wrapper keeps full Codex stdout/stderr in local runtime logs and sends only the final human-facing summary to Feishu.
+
+Use these commands in cc-connect `exec`:
+
+```bash
+/home/admin_ryan/repo/Trading-Copilot-Agent/ops/cc-connect/tca-report-wrapper.sh pre-market
+/home/admin_ryan/repo/Trading-Copilot-Agent/ops/cc-connect/tca-report-wrapper.sh post-market
+```
+
+Wrapper-owned runtime paths:
+
+```text
+runtime/cc-connect/logs/pre-market/
+runtime/cc-connect/logs/post-market/
+runtime/cc-connect/out/pre-market-summary.md
+runtime/cc-connect/out/post-market-summary.md
+runtime/cc-connect/out/pre-market-delivery.env
+runtime/cc-connect/out/post-market-delivery.env
+```
+
+The Codex prompts live in:
+
+```text
+ops/cc-connect/tca-pre-market-wrapper.prompt.md
+ops/cc-connect/tca-post-market-wrapper.prompt.md
+```
+
+Codex must not call `cc-connect send` from those prompts. It writes the final summary and delivery metadata only. The shell wrapper sends the summary outside the Codex sandbox, then runs `script/report_delivery_guard.py --mark-sent` only after Feishu send succeeds.
+
+Recommended live cc-connect fields:
+
+```text
+pre-market task:  exec=/home/admin_ryan/repo/Trading-Copilot-Agent/ops/cc-connect/tca-report-wrapper.sh pre-market
+post-market task: exec=/home/admin_ryan/repo/Trading-Copilot-Agent/ops/cc-connect/tca-report-wrapper.sh post-market
+prompt=UNUSED: production workflow is owned by exec wrapper ...
+mute=true
+session_mode=new_per_run
+work_dir=/home/admin_ryan/repo/Trading-Copilot-Agent
+```
+
+`cc-connect cron edit` does not accept an empty prompt value. Keep a short `UNUSED` placeholder in `prompt` and rely on the `exec` field as the production entrypoint.
+
 ## Server Update Checklist
 
 Apply these changes on the server that runs cc connect before enabling the upgraded workflow.
@@ -42,9 +86,9 @@ python3 -m py_compile script/*.py
 python3 script/trading_copilot.py trading-day-check --date 2026-05-06
 ```
 
-### 2. Update cc connect Production Prompts
+### 2. Update cc connect Production Wrappers
 
-Update the configured cc connect prompts so they require the new artifacts and gates:
+Update the configured cc connect production tasks to execute `ops/cc-connect/tca-report-wrapper.sh`. The wrapper prompts require the following artifacts and gates:
 
 - Pre-market generation must write `exec-brief.md`, `pre-market.md`, and `pre-market-signals.json`.
 - Post-market generation must write `post-market.md` and `post-market-signals.json`.
@@ -61,7 +105,7 @@ Update the configured cc connect prompts so they require the new artifacts and g
 - Post-market must run account/position review before `plan-review --append-lessons` when account context is enabled, so plan review can include position discipline.
 - Post-market must include `learning-review --lookback-days 20` after `plan-review --append-lessons`.
 - Post-market must include `daily-workflow-review` before Feishu delivery so same-day pre-market, intraday, and post-market process gaps are disclosed.
-- Both workflows should generate `feishu-summary.md` through `feishu-summary` and send that summary body instead of dumping the full Markdown report.
+- Both workflows should generate `feishu-summary.md` through `feishu-summary`; Codex should copy that summary into `runtime/cc-connect/out/*-summary.md`, and the outer wrapper sends it instead of dumping the full Markdown report or raw transcript.
 - `promote-lesson --apply` must not be scheduled automatically; run it only after human approval of a specific `pattern_id`.
 - Paper execution must be scheduled as separate execution tasks. Do not add broker write operations to the pre-market or post-market report-generation tasks.
 - Initial paper rollout should execute entries only. Keep paper cancel, protective-stop, and TP1 workflows in dry-run mode until exit-management safety is explicitly upgraded.
