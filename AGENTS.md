@@ -28,6 +28,14 @@
 - S&P 500 dynamic candidates are an observation universe only; they must not be treated as trading recommendations or written back to the fixed watchlist.
 - Do not invent prices, indicators, setup rules, or market state when data or refined rules are missing.
 
+## Longbridge data-source routing
+- For interactive Codex market research and symbol analysis, prefer the connected Longbridge app/MCP read-only tools when they are available.
+- For repository Python scripts, scheduled automations, batch snapshots, report-context generation, and monitor scans, continue using the existing Longbridge CLI provider stack. Do not assume Codex app/MCP tools are directly callable from Python or unattended shell jobs.
+- In interactive work, if Longbridge MCP is unavailable or incomplete, use the repository Longbridge CLI path. Use Twelve Data only after the applicable Longbridge path fails, and disclose the fallback in the user-facing result or generated artifact.
+- In scheduled or scripted work, keep Longbridge CLI as primary and Twelve Data as fallback. MCP fallback requires an explicit Codex-orchestrated workflow that normalizes and persists MCP results; it is not enabled by repository configuration alone.
+- Keep all Longbridge real-account app/MCP usage read-only. Do not call order submission, replacement, cancellation, or other real-account mutation tools.
+- Record the actual provider/backend in generated artifacts whenever the workflow supports source metadata; never label MCP-derived data as CLI-derived data or the reverse.
+
 ## Cross-component workflows
 - Daily snapshot flow:
   - `python3 script/prepare_market_snapshot.py --watchlist config/watchlist.json --skip-non-trading-day`
