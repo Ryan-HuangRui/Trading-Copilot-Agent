@@ -12,7 +12,7 @@ The system must preserve these boundaries:
 - Scripts validate plans, run risk gates, submit paper orders, sync broker state, and write journal facts.
 - Broker write operations are isolated in a dedicated Longbridge paper order adapter.
 - All broker writes must be audit logged, idempotent, and limited to `lb_papertrading`.
-- Paper execution results may create learning candidates, but must not directly modify `knowledge/refined/`.
+- Paper execution results may create learning candidates, but must not directly modify `canonical rulebook/`.
 - Real-money execution is out of scope unless a separate real-trading execution domain is explicitly designed.
 
 ## Architecture Domains
@@ -298,7 +298,7 @@ Review dimensions:
 - Violated skip conditions
 - Candidate lessons
 
-Reviews may create learning candidates, but must not edit `knowledge/refined/`.
+Reviews may create learning candidates, but must not edit `canonical rulebook/`.
 
 Implementation status: `paper-execution-review` writes JSON and Markdown reviews from `paper-trade-preview.json` plus synced `paper-execution-state.json`, including plan adherence, slippage, fill quality, risk discipline, planned RR, result R when exit evidence exists, and candidate lessons without modifying refined rules.
 
@@ -361,7 +361,7 @@ Allowed writes:
 
 Disallowed writes:
 
-- Direct automatic edits to `knowledge/refined/`
+- Direct automatic edits to `canonical rulebook/`
 
 Implementation status: `paper-learning-lessons` extracts candidate lessons from paper execution reviews into `runtime/learning/daily_lessons.jsonl` with idempotent append behavior. Existing `learning-review` and human-approved `promote-lesson` remain the only path toward validated lessons.
 

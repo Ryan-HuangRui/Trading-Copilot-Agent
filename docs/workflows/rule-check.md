@@ -4,8 +4,8 @@ Use when the user asks whether a thesis, setup, report section, or trade plan co
 
 ## Preconditions
 
-- Read `knowledge/refined/global/` before setup-specific files.
-- Read only the relevant `knowledge/refined/setups/` files.
+- Read `canonical rulebook/global/` before setup-specific files.
+- Read only the relevant `canonical rulebook/setups/` files.
 - If the thesis depends on missing market data, mark the result `unclear`.
 
 ## Steps

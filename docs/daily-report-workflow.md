@@ -7,7 +7,7 @@ Paper execution is an execution extension to this report workflow, not a report-
 ## Responsibility split
 - `script/`: deterministic data work, market-date checks, path layout, cache fallback, and context generation.
 - `agent/`: report-generation prompts that Codex automation actually reads.
-- `knowledge/refined/`: the only trading-rule source for analysis conclusions.
+- `canonical rulebook/`: the only trading-rule source for analysis conclusions.
 - `docs/`: runbooks and operational documentation for humans and automation prompts.
 - `AGENTS.md`: engineering guidance for Codex when maintaining this repository. It is not a trading-analysis prompt.
 
@@ -126,7 +126,7 @@ Run:
 python3 script/prepare_market_snapshot.py --watchlist config/watchlist.json --skip-non-trading-day --sp500-screen --sp500-top 100 --sp500-candidates 15 --include-journal-signals --include-position-symbols
 ```
 
-If output contains `skipped=true`, stop. If the generated `daily-snapshot.json` contains `stale_data=true`, write a short status note and stop. Otherwise read `agent/post_market_analysis_prompt.md`, `knowledge/refined/`, and `report/<SNAPSHOT_DATE>/daily-snapshot.json`, then generate `report/<SNAPSHOT_DATE>/post-market.md` and `report/<SNAPSHOT_DATE>/post-market-signals.json`.
+If output contains `skipped=true`, stop. If the generated `daily-snapshot.json` contains `stale_data=true`, write a short status note and stop. Otherwise read `agent/post_market_analysis_prompt.md`, `canonical rulebook/`, and `report/<SNAPSHOT_DATE>/daily-snapshot.json`, then generate `report/<SNAPSHOT_DATE>/post-market.md` and `report/<SNAPSHOT_DATE>/post-market-signals.json`.
 
 The dynamic universe uses iShares IVV holdings CSV as the default source and falls back to Slickcharts if the primary source fails. If the screener itself fails, the snapshot still continues with the fixed watchlist and records the failure in `candidate-universe.json`.
 
@@ -146,7 +146,7 @@ python3 script/trading_copilot.py pre-market-plan --watchlist config/watchlist.j
 
 The wrapper runs `external_disclosure_provider.py` by default and writes `report/<PRE_MARKET_DATE>/external-disclosures/trump-trades.json`. If the disclosure source fails, keep the generated status artifact as message-layer context and continue with the report; the report must state the data gap. Use `--no-external-disclosures` only when this source is intentionally disabled.
 
-If output contains `skipped=true`, stop. Otherwise read `agent/daily_analysis_prompt.md`, `knowledge/refined/`, and `report/<PRE_MARKET_DATE>/pre-market-context.json`, then generate:
+If output contains `skipped=true`, stop. Otherwise read `agent/daily_analysis_prompt.md`, `canonical rulebook/`, and `report/<PRE_MARKET_DATE>/pre-market-context.json`, then generate:
 - `report/<PRE_MARKET_DATE>/exec-brief.md`
 - `report/<PRE_MARKET_DATE>/pre-market.md`
 - `report/<PRE_MARKET_DATE>/pre-market-signals.json`

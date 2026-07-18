@@ -10,7 +10,7 @@ All workflows must preserve the repository safety rules:
 - Current paper write scope is limited to guarded paper entry submission, guarded cancellation of expired unfilled entry orders, guarded pending order quantity/limit replace, guarded protective stop submission, guarded TP1 partial-exit submission, guarded plan-invalidated exit submission, and guarded break-even stop movement. OCO, short selling, native stop-trigger replace, and real-account writes remain out of scope.
 - Do not output deterministic buy/sell instructions.
 - Use scenarios, triggers, invalidation, risk, and `NO TRADE`.
-- Use `knowledge/refined/` as the only rule source for trading conclusions.
+- Use `canonical rulebook/` as the only rule source for trading conclusions.
 - Fetch or prepare real market data before making current/recent symbol claims.
 
 ## Shared Status Envelope
@@ -53,7 +53,7 @@ Inputs:
 - Longbridge watchlist groups `持仓`, `ibkr持仓`, `老朋友`, `AI先进封装HBM`, and `AI Top 10 Research`; `config/watchlist.json` is refreshed from their full union before the context step.
 - `config/watchlist.json`, used only as the fallback when Longbridge watchlist retrieval is unavailable.
 - Prior completed trading day's `report/<SNAPSHOT_DATE>/daily-snapshot.json`
-- `knowledge/refined/`
+- `canonical rulebook/`
 - `agent/daily_analysis_prompt.md`
 
 Deterministic script output:
@@ -91,7 +91,7 @@ Inputs:
 - Longbridge CLI market data by default, with Twelve Data fallback via `.env` or `TWELVE_DATA_API_KEY`
 - Optional S&P 500 dynamic universe flags
 - Optional journal signal and position-symbol merge flags for outcome/position coverage
-- `knowledge/refined/`
+- `canonical rulebook/`
 - `agent/post_market_analysis_prompt.md`
 
 Deterministic script outputs:
@@ -126,7 +126,7 @@ Inputs:
 
 - `config/monitor_state.json` if present, otherwise the script default state
 - Longbridge CLI intraday K-line data by default, with Twelve Data fallback via `.env` or `TWELVE_DATA_API_KEY`
-- `knowledge/refined/`
+- `canonical rulebook/`
 
 Deterministic output:
 
@@ -257,7 +257,7 @@ Inputs:
 - `runtime/intraday/<DATE>/state.json` when present
 - `report/<DATE>/intraday.md` when present
 - `runtime/paper/<DATE>/paper-execution-state.json` when present
-- `knowledge/refined/setups/*.md`
+- `canonical rulebook/setups/*.md`
 
 Output:
 
@@ -540,7 +540,7 @@ Inputs:
 
 - Generated markdown reports under `report/<DATE>/`.
 - Structured `report/<DATE>/<SESSION>-signals.json` sidecar when validating a full session.
-- `knowledge/refined/setups/` for setup filename validation.
+- `canonical rulebook/setups/` for setup filename validation.
 - `pre-market-context.json` or `daily-snapshot.json` when available for stale-data checks.
 
 Output:
@@ -572,7 +572,7 @@ python3 script/trading_copilot.py validate-trade-plan --session post-market --da
 Inputs:
 
 - `report/<DATE>/pre-market-signals.json` or `report/<DATE>/post-market-signals.json`.
-- `knowledge/refined/setups/` for setup filename validation.
+- `canonical rulebook/setups/` for setup filename validation.
 
 Required behavior:
 
@@ -664,7 +664,7 @@ Required behavior:
 - Review the plan, not broad market commentary.
 - Separate plan quality, price touch outcome, and real execution.
 - Include position discipline when position reviews exist: planned symbols without trade records, positions outside the plan, missing trade links, missing `source_signal_id`, and positions near invalidation without complete trade linkage.
-- Lessons are candidate process improvements only; they must not mutate `knowledge/refined/`.
+- Lessons are candidate process improvements only; they must not mutate `canonical rulebook/`.
 
 ## learning-review
 
@@ -695,7 +695,7 @@ Required behavior:
 - Enrich lesson evidence with matching outcome/trade context and synthesize position-discipline learning events from repeated position review records.
 - Only emit candidates that meet the repeat threshold.
 - Mark emitted candidates as `promotion_status=needs_human_review`.
-- Do not mutate `knowledge/refined/`.
+- Do not mutate `canonical rulebook/`.
 
 ## feishu-summary
 
@@ -778,7 +778,7 @@ Required behavior:
 
 - `--dry-run` must show the exact Markdown block without writing.
 - `--apply` may append to `knowledge/evolution/validated_lessons.md`.
-- Promotion is still process guidance only; it must not edit `knowledge/refined/`.
+- Promotion is still process guidance only; it must not edit `canonical rulebook/`.
 
 ## paper-account-snapshot
 
@@ -825,7 +825,7 @@ Inputs:
 
 - `report/<DATE>/pre-market-signals.json` or `report/<DATE>/post-market-signals.json`.
 - `runtime/paper/<DATE>/paper-account-snapshot.json`.
-- `knowledge/refined/setups/` through `validate-trade-plan`.
+- `canonical rulebook/setups/` through `validate-trade-plan`.
 
 Output:
 
@@ -1105,7 +1105,7 @@ Required behavior:
 - Must be review-only; it must not submit, cancel, replace, sync broker state, or modify refined rules.
 - Must report plan adherence, slippage, fill quality, risk discipline, planned RR, realized/result R when exit evidence exists, and unavailable MFE/MAE when intraday path data is missing.
 - Result R must use actual entry-to-exit P/L divided by planned initial risk per share.
-- Candidate lessons may be emitted as review observations, but they must not be promoted into `knowledge/refined/`.
+- Candidate lessons may be emitted as review observations, but they must not be promoted into `canonical rulebook/`.
 
 ## paper-strategy-review
 
@@ -1153,7 +1153,7 @@ Outputs:
 
 Required behavior:
 
-- Must write runtime candidate lessons only; it must not modify `knowledge/refined/`.
+- Must write runtime candidate lessons only; it must not modify `canonical rulebook/`.
 - Must be idempotent for repeated runs of the same paper review lessons.
 - Lessons must use `lesson_type=paper_execution`, `status=candidate`, and preserve symbol/setup/evidence/source ids where available.
 - Promotion remains gated by `learning-review` and explicit human-approved `promote-lesson --apply`.
@@ -1470,7 +1470,7 @@ Inputs:
 - A date or clearly stated analysis timestamp.
 - The latest relevant snapshot/context artifact.
 - Optional user-supplied position or thesis.
-- `knowledge/refined/`.
+- `canonical rulebook/`.
 
 Outputs:
 
@@ -1548,7 +1548,7 @@ Required behavior:
 - Summarize whether pre-market, intraday, and post-market artifacts were present and successful.
 - Classify watch/no-trade observations against price evidence as `possible_process_miss`, `touch_fade_or_invalidated`, `not_triggered`, or `not_evaluable`.
 - Treat `conditional_executable` Trade Plan Cards as execution-review inputs, not as missed watch-only opportunities.
-- Keep the review read-only; it must not mutate journal records, watchlists, broker state, or `knowledge/refined/`.
+- Keep the review read-only; it must not mutate journal records, watchlists, broker state, or `canonical rulebook/`.
 
 ## weekly-review
 
@@ -1688,8 +1688,8 @@ Purpose: turn source material, market observations, or user questions into a reu
 Inputs:
 
 - User-provided topic or source path.
-- Optional `knowledge/source/` material.
-- `knowledge/refined/` for rule consistency checks.
+- Optional `vault raw sources/` material.
+- `canonical rulebook/` for rule consistency checks.
 
 Outputs:
 
@@ -1698,7 +1698,7 @@ Outputs:
 Boundary:
 
 - Research notes do not automatically promote new trading rules.
-- Rule promotion requires an explicit review task and should update `knowledge/refined/` only after checking conflicts.
+- Rule promotion requires an explicit review task and should update `canonical rulebook/` only after checking conflicts.
 
 ## rule-check
 
@@ -1707,8 +1707,8 @@ Purpose: validate a user thesis, report section, or setup idea against the appro
 Inputs:
 
 - User-supplied thesis or artifact path.
-- `knowledge/refined/global/`.
-- Relevant `knowledge/refined/setups/` files.
+- `canonical rulebook/global/`.
+- Relevant `canonical rulebook/setups/` files.
 
 Outputs:
 

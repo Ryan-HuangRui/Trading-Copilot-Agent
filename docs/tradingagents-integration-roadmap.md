@@ -20,7 +20,7 @@
 - 不替换 `script/trading_copilot.py` 作为统一工作流入口。
 - 不允许角色 agent 下单、撤单、改单或自动调仓。
 - 不允许 `decision.json` 直接触发 broker 写操作。
-- 不把 TradingAgents 风格评级直接写入 `knowledge/refined/`。
+- 不把 TradingAgents 风格评级直接写入 `canonical rulebook/`。
 - 在轻量 artifact-first 路线被验证前，不把 LangGraph 变成必需依赖。
 
 ## 目标架构
@@ -61,7 +61,7 @@ Codex / automation
 
 - 采用 artifact-first 融合方式：脚本先写 JSON 证据，角色 agent 再消费这些产物。
 - LLM 推理前必须先有确定性数据；agent 不应在报告中凭空抓取或编造未支持的数据。
-- 现有交易规则仍是最高优先级：交易结论必须服从 `knowledge/refined/`。
+- 现有交易规则仍是最高优先级：交易结论必须服从 `canonical rulebook/`。
 - 现有模拟盘执行保持隔离：决策产物可以辅助生成 Trade Plan Card，但不能绕过验证器或执行门禁。
 - 结构化报告中的每条证据都必须包含 freshness、source、confidence、limitations。
 - 第一版尽量保持标准库优先；新增第三方依赖必须有明确收益。
@@ -304,7 +304,7 @@ Codex / automation
 - Markdown memory 人类可读且 append-only。
 - SQLite memory 可以从 Markdown 与 journal 记录重建或导出。
 - memory 可以注入角色 prompt 作为上下文。
-- memory 不得编辑 `knowledge/refined/`；规则晋升仍走现有人工 approval lesson 流程。
+- memory 不得编辑 `canonical rulebook/`；规则晋升仍走现有人工 approval lesson 流程。
 - memory 只能降低置信度或触发人工 review，不能提高 `execution_status` 或把 `watch_only/no_trade` 升级为可执行计划。
 
 ### 阶段门禁

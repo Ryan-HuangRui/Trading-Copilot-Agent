@@ -166,7 +166,7 @@ python3 script/trading_copilot.py paper-trade-review \
   --append
 ```
 
-Paper lessons are candidate process feedback only. They do not modify `knowledge/refined/`; use `learning-review` and explicit human-approved `promote-lesson --apply` for promotion.
+Paper lessons are candidate process feedback only. They do not modify `canonical rulebook/`; use `learning-review` and explicit human-approved `promote-lesson --apply` for promotion.
 
 ## Exit Management
 

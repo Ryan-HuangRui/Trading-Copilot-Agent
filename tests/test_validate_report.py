@@ -115,6 +115,15 @@ class ValidateReportTest(unittest.TestCase):
         self.assertEqual(payload["status"], "pass")
         self.assertEqual(payload["errors"], [])
 
+    def test_pre_market_news_layer_accepts_numbered_heading(self):
+        report = GOOD_REPORT.replace("## 消息层汇总", "## 四、消息层汇总")
+        temp, root = self.make_repo(report)
+        with temp:
+            payload = self.validate_repo(root)
+
+        self.assertEqual(payload["status"], "pass")
+        self.assertEqual(payload["errors"], [])
+
     def test_pre_market_report_requires_trump_disclosure_news_section(self):
         report = GOOD_REPORT.replace(
             """## 消息层汇总
@@ -155,7 +164,7 @@ class ValidateReportTest(unittest.TestCase):
             payload = self.validate_repo(root)
 
         self.assertEqual(payload["status"], "fail")
-        self.assertTrue(any("does not exist" in error for error in payload["errors"]))
+        self.assertTrue(any("not approved by the canonical rulebook" in error for error in payload["errors"]))
 
     def test_ignores_non_setup_markdown_references_in_body(self):
         report = GOOD_REPORT + "\n补充：参见 docs/contracts/agent-research.md 和 market_regime_preconditions.md。\n"

@@ -231,7 +231,7 @@ Rules:
 - Markdown memory is append-only and idempotent by `decision_id`.
 - SQLite memory is rebuilt/exported from Markdown memory.
 - Memory review is read-only.
-- Memory must not edit `knowledge/refined/`.
+- Memory must not edit `canonical rulebook/`.
 - Memory can lower confidence, add restrictions, or trigger human review only; it cannot raise `execution_status` or upgrade `watch_only/no_trade` to `conditional_executable`.
 
 ## Phase 0 Wrapper Commands

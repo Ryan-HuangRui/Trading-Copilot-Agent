@@ -98,7 +98,7 @@ Update the configured cc connect production tasks to execute `ops/cc-connect/tca
 - Optional agent research enhancement may be enabled with `--include-agent-research` on `pre-market-plan` and `post-market-review`; generated agent artifacts are evidence inputs only.
 - If agent research is enabled, cc connect must also surface `validate-agent-reports` / `validate-agent-decision` failures as blocking status before report generation consumes those artifacts.
 - Agent report validation now fails when `market` or `technicals` evidence is empty. Empty `fundamentals`, `news`, or `sentiment` evidence remains a warning and must be disclosed in the Feishu summary or status note.
-- Agent memory tasks are optional and must remain review-only: `agent-memory-append`, `agent-memory-review`, and `agent-memory-export` cannot modify `knowledge/refined/` or raise execution status.
+- Agent memory tasks are optional and must remain review-only: `agent-memory-append`, `agent-memory-review`, and `agent-memory-export` cannot modify `canonical rulebook/` or raise execution status.
 - Post-market should run `data-quality --date <DATE>` before `feishu-summary` so focused-symbol fallback and stale-data warnings are disclosed.
 - Any `extract-report-signals --require-validation` failure must stop journal append.
 - Any `sync-longbridge-watchlist --require-validation` failure must stop watchlist sync.

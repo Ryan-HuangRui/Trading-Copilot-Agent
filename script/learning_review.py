@@ -235,7 +235,7 @@ def build_markdown(end_date: date, lookback_days: int, candidates: list[dict[str
     lines.extend(
         [
             "## 边界",
-            "- 候选规律只来自运行期复盘，不自动修改 knowledge/refined/。",
+            "- 候选规律只来自运行期复盘，不自动修改 canonical rulebook。",
             "- 进入 validated_lessons.md 需要人工触发 promote-lesson。",
         ]
     )

@@ -1,0 +1,48 @@
+# Vibe-Trading is a separate NAS-hosted research engine.  Codex may call only
+# explicitly listed research tools; broker connectors, filesystem writers,
+# swarms, and all workflow-mutating tools stay outside this integration.
+[mcp_servers.vibe_trading]
+command = "/Volumes/personal_folder/repo/Vibe-Trading/.venv/bin/python"
+args = ["/Volumes/personal_folder/repo/Trading-Copilot-Agent/.codex/vibe_trading_mcp.py"]
+cwd = "/Volumes/personal_folder/repo/Vibe-Trading"
+enabled_tools = [
+  "list_skills",
+  "load_skill",
+  "list_swarm_presets",
+  "run_swarm",
+  "get_swarm_status",
+  "get_run_result",
+  "list_runs",
+  "reap_stale_runs",
+  "retry_run",
+  "backtest",
+  "factor_analysis",
+  "analyze_options",
+  "pattern_recognition",
+  "get_market_data",
+  "get_fund_flow",
+  "get_dragon_tiger",
+  "get_northbound_flow",
+  "get_margin_trading",
+  "get_block_trades",
+  "get_shareholder_count",
+  "get_lockup_expiry",
+  "get_sector_info",
+  "get_research_reports",
+  "get_stock_news",
+  "get_sec_filings",
+  "get_financial_statements",
+  "get_options_chain",
+  "get_stock_profile",
+  "screen_market",
+  "search_symbol",
+  "get_macro_series",
+  "iwencai_search",
+  "analyze_trade_journal",
+  "extract_shadow_strategy",
+  "run_shadow_backtest",
+  "render_shadow_report",
+  "scan_shadow_signals",
+]
+startup_timeout_sec = 60
+tool_timeout_sec = 180

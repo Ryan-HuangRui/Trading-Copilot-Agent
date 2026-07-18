@@ -1,9 +1,0 @@
-# PriceActions 术语映射（清洗标准）
-
-- `liquidity grab` -> `stop run`
-- `liquidity sweep` -> `stop run`
-- `market structure shift` -> `MSS`
-- `break of structure` -> `BOS`
-- `trading range` -> `TR`
-- `trend bar` -> `Trend Bar`
-- `trading range bar` -> `TR Bar`

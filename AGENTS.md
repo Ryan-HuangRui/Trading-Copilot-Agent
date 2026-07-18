@@ -5,8 +5,8 @@
 - `script/`: executable Python tools for market-data fetches, report context generation, monitor scans, read-only account snapshots, paper-trading previews/reviews, report delivery guards, and knowledge import.
 - `agent/`: Codex App automation execution prompts. Keep only prompts that automation actually reads.
 - `docs/`: runbooks for Codex App automation and human operation.
-- `knowledge/refined/`: approved trading rules. Use this for trading conclusions.
-- `knowledge/source/`: raw/imported reference material. Treat as research input, not production rule authority.
+- `config/knowledge_source.json`: canonical Obsidian-vault rulebook location. Use it for all approved trading-rule reads; `TCA_KNOWLEDGE_ROOT` may override it by deployment.
+- The local `knowledge/` directory is limited to runtime learning candidates and is not a source of approved trading rules.
 - `config/`: watchlists and local runtime state paths. Secrets live in `.env`, never in tracked files.
 - Generated runtime data belongs in ignored `raw_data/`, `report/`, `runtime/`, `config/rate_limit_state.json`, and `config/longbridge_rate_limit_state.json`.
 
@@ -16,7 +16,8 @@
 | Scripts | `script/` | market data providers, trading-day guard, daily snapshot generation, report context generation, monitor scan | `python3 script/prepare_market_snapshot.py --watchlist config/watchlist.json --skip-non-trading-day` | `script/AGENTS.md` |
 | Agent prompts | `agent/` | Daily report generation prompts used by automation | Read/edit Markdown prompts | `agent/AGENTS.md` |
 | Docs | `docs/` | Automation runbooks and operation notes | Read Markdown docs | none |
-| Knowledge base | `knowledge/` | Refined trading rules and source imports | `python3 script/import_priceactions_knowledge.py` | `knowledge/AGENTS.md` |
+| Canonical rulebook | `config/knowledge_source.json` → Obsidian vault | Approved price-action rules and raw provenance | `script/knowledge_source.py` consumers | vault `topics/trading` |
+| Runtime learning | `knowledge/evolution/` | Candidate lessons and explicit human-review evidence | `python3 script/learning_review.py` | `knowledge/AGENTS.md` |
 
 ## Trading safety rules
 - `AGENTS.md` is engineering guidance for maintaining this repo; it is not a trading-analysis prompt.
@@ -26,7 +27,7 @@
 - For current/recent symbol analysis, fetch real market data first through the repository market-data provider stack or clearly state that no concrete price conclusion can be made.
 - Batch data fetches must respect provider rate-limit state files. Longbridge is the primary source; Twelve Data is the fallback source.
 - S&P 500 dynamic candidates are an observation universe only; they must not be treated as trading recommendations or written back to the fixed watchlist.
-- Do not invent prices, indicators, setup rules, or market state when data or refined rules are missing.
+- Do not invent prices, indicators, setup rules, or market state when data or canonical rules are missing.
 
 ## Longbridge data-source routing
 - For interactive Codex market research and symbol analysis, prefer the connected Longbridge app/MCP read-only tools when they are available.
@@ -45,7 +46,7 @@
   - `python3 script/prepare_market_snapshot.py --watchlist config/watchlist.json --skip-non-trading-day --sp500-screen --sp500-top 100 --sp500-candidates 15`
   - Uses iShares IVV holdings CSV as the default S&P 500 universe source, writes `report/<SNAPSHOT_DATE>/candidate-universe.json`, and merges selected candidates into the snapshot without editing `config/watchlist.json`.
 - Post-market review flow:
-  - Agent reads `agent/post_market_analysis_prompt.md`, `knowledge/refined/`, and `report/<SNAPSHOT_DATE>/daily-snapshot.json`.
+  - Agent reads `agent/post_market_analysis_prompt.md`, the canonical rulebook returned in `next_agent_inputs`, and `report/<SNAPSHOT_DATE>/daily-snapshot.json`.
   - Agent writes `report/<SNAPSHOT_DATE>/post-market.md` and `report/<SNAPSHOT_DATE>/post-market-signals.json`.
   - Run `python3 script/trading_copilot.py validate-trade-plan --session post-market --date <SNAPSHOT_DATE>` before journal append or sync.
   - Run `python3 script/trading_copilot.py data-quality --date <SNAPSHOT_DATE>` before Feishu summary so focused-symbol fallback and stale data are disclosed.
@@ -55,7 +56,7 @@
   - Run `python3 script/trading_copilot.py feishu-summary --session post-market --date <SNAPSHOT_DATE>` for concise Feishu delivery.
 - Pre-market plan flow:
   - `python3 script/prepare_daily_context.py --watchlist config/watchlist.json --skip-non-trading-day`
-  - Agent reads `agent/daily_analysis_prompt.md`, `knowledge/refined/`, and `report/<PRE_MARKET_DATE>/pre-market-context.json`.
+  - Agent reads `agent/daily_analysis_prompt.md`, the canonical rulebook returned in `next_agent_inputs`, and `report/<PRE_MARKET_DATE>/pre-market-context.json`.
   - Agent writes `report/<PRE_MARKET_DATE>/exec-brief.md`, `report/<PRE_MARKET_DATE>/pre-market.md`, and `report/<PRE_MARKET_DATE>/pre-market-signals.json`.
   - Run `python3 script/trading_copilot.py validate-trade-plan --session pre-market --date <PRE_MARKET_DATE>` before journal append or sync.
 - Direct scripted report flow:
@@ -67,10 +68,10 @@
 - Read-only position review flow:
   - `python3 script/trading_copilot.py account-snapshot --date <DATE>`
   - `python3 script/trading_copilot.py position-review --date <DATE> --append`
-- Knowledge import flow:
-  - Edit/import raw material under `knowledge/source/priceactions/docs/`.
-  - Run `python3 script/import_priceactions_knowledge.py` to refresh metadata under `knowledge/source/priceactions/meta/`.
-  - Promote only reviewed rules into `knowledge/refined/`.
+- Knowledge update flow:
+  - Edit raw materials and approved rules only in the canonical Obsidian vault.
+  - Keep `knowledge/evolution/` as non-authoritative runtime evidence.
+  - Promote candidates into the vault rulebook only after explicit human approval.
 
 ## Verification
 - Install: `python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt`.
@@ -81,6 +82,6 @@
 
 ## Global conventions
 - Keep Python scripts standard-library-only unless `requirements.txt` is intentionally updated.
-- Read large knowledge files only when the task requires them; prefer `knowledge/refined/` before `knowledge/source/`.
+- Read large knowledge files only when the task requires them; prefer the canonical rulebook before raw vault sources.
 - Preserve simplified Chinese output contracts in prompts and generated reports.
 - Never commit `.env`, generated `raw_data/`, generated `report/`, or local runtime state.

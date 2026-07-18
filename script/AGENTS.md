@@ -44,7 +44,7 @@
 - `plan_review.py`: plan-quality review and candidate lesson writer under `runtime/learning/`.
 - `learning_review.py`: aggregates repeated daily lessons into `pattern_candidates.jsonl`.
 - `feishu_summary.py`: concise Feishu-ready analysis summary built from validated sidecars and review artifacts.
-- `promote_lesson.py`: human-triggered promotion into `knowledge/evolution/validated_lessons.md`; never edits `knowledge/refined/`.
+- `promote_lesson.py`: human-triggered promotion into `knowledge/evolution/validated_lessons.md`; never edits the canonical rulebook.
 - `workflow_smoke_test.py`: fixture-based workflow smoke test; must not fetch live market or account data.
 - `report_delivery_guard.py`: idempotent delivery-state helper.
 - `trading_copilot.py`: unified agent-facing workflow wrapper that returns `status/date/artifacts/skipped/reason`.

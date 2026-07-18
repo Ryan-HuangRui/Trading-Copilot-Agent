@@ -30,7 +30,7 @@ If `report/<SNAPSHOT_DATE>/daily-snapshot.json` has `stale_data=true`, write a d
 2. Read:
 
 - `agent/post_market_analysis_prompt.md`
-- `knowledge/refined/`
+- canonical rulebook: run `python3 -c 'from pathlib import Path; from script.knowledge_source import canonical_rulebook_input; print(canonical_rulebook_input(Path.cwd()))'` and read the returned path
 - `report/<SNAPSHOT_DATE>/daily-snapshot.json`
 - `report/<SNAPSHOT_DATE>/intraday.md` when present
 - `runtime/intraday/<SNAPSHOT_DATE>/state.json` and `events.jsonl` when present

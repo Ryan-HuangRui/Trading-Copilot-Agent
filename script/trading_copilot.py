@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from knowledge_source import KnowledgeSourceError, canonical_rulebook_input
 
 ROOT = Path(__file__).resolve().parents[1]
 US_MARKET_SUFFIX = ".US"
@@ -86,6 +87,14 @@ def normalize_us_market_symbols(symbols: List[str] | None) -> List[str]:
 def resolve_repo_path(path: str) -> Path:
     candidate = Path(path)
     return candidate if candidate.is_absolute() else ROOT / candidate
+
+
+def rulebook_input() -> str:
+    """Return the canonical vault path for every Codex report workflow."""
+    try:
+        return canonical_rulebook_input(ROOT)
+    except KnowledgeSourceError as exc:
+        raise RuntimeError(f"canonical Trading Copilot rulebook unavailable: {exc}") from exc
 
 
 def write_json(path: Path, payload: Dict[str, Any]) -> None:
@@ -388,7 +397,7 @@ def run_pre_market(args: argparse.Namespace) -> None:
         response["artifacts"] = [context_path] if context_path else []
         response["next_agent_inputs"] = [
             "agent/daily_analysis_prompt.md",
-            "knowledge/refined/",
+            rulebook_input(),
             context_path,
         ]
         response["expected_agent_outputs"] = [
@@ -491,7 +500,7 @@ def run_post_market(args: argparse.Namespace) -> None:
         response["artifacts"] = artifacts
         response["next_agent_inputs"] = [
             "agent/post_market_analysis_prompt.md",
-            "knowledge/refined/",
+            rulebook_input(),
             stdout.get("snapshot_path"),
             f"report/{stdout.get('snapshot_date')}/intraday.md",
             f"runtime/intraday/{stdout.get('snapshot_date')}/state.json",
@@ -546,7 +555,7 @@ def run_monitor(args: argparse.Namespace) -> None:
     response["artifacts"] = [args.output]
     response["next_agent_inputs"] = [
         args.output,
-        "knowledge/refined/",
+        rulebook_input(),
     ]
     emit(response)
 
@@ -588,7 +597,7 @@ def run_intraday_tracker(args: argparse.Namespace) -> None:
     response["events"] = (stdout or {}).get("events", [])
     response["next_agent_inputs"] = [
         f"report/{response['date']}/intraday.md" if response.get("date") else "report/<DATE>/intraday.md",
-        "knowledge/refined/",
+        rulebook_input(),
     ]
     emit(response)
 
@@ -985,7 +994,7 @@ def run_agent_research_context(args: argparse.Namespace) -> None:
     response = base_response("agent-research-context", ["agent-research-context"], payload)
     response["date"] = args.date
     response["artifacts"] = [str(output)]
-    response["next_agent_inputs"] = [str(output), "knowledge/refined/"]
+    response["next_agent_inputs"] = [str(output), rulebook_input()]
     emit(response)
 
 

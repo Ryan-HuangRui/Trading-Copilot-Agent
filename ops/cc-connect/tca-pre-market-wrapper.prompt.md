@@ -30,7 +30,7 @@ The wrapper may generate `report/<PRE_MARKET_DATE>/external-disclosures/trump-tr
 2. Read:
 
 - `agent/daily_analysis_prompt.md`
-- `knowledge/refined/`
+- canonical rulebook: run `python3 -c 'from pathlib import Path; from script.knowledge_source import canonical_rulebook_input; print(canonical_rulebook_input(Path.cwd()))'` and read the returned path
 - `report/<PRE_MARKET_DATE>/pre-market-context.json`
 - `report/<PRE_MARKET_DATE>/external-disclosures/trump-trades.json` when present
 - `report/<PRE_MARKET_DATE>/agents/**` artifacts when present

@@ -54,7 +54,7 @@ Run the post-market workflow for this repository.
 4. If stale_data=true, write a short status note explaining that the completed daily bars are not ready and stop.
 5. Otherwise read:
    - agent/post_market_analysis_prompt.md
-   - knowledge/refined/
+   - canonical rulebook/
    - report/<SNAPSHOT_DATE>/daily-snapshot.json
    - optional report/<SNAPSHOT_DATE>/intraday.md
    - optional runtime/intraday/<SNAPSHOT_DATE>/state.json
@@ -113,7 +113,7 @@ Run the pre-market workflow for this repository.
 3. Read the generated report/<PRE_MARKET_DATE>/pre-market-context.json.
 4. Read:
    - agent/daily_analysis_prompt.md
-   - knowledge/refined/
+   - canonical rulebook/
    - report/<PRE_MARKET_DATE>/pre-market-context.json
    - optional report/<PRE_MARKET_DATE>/external-disclosures/trump-trades.json
    - optional report/<PRE_MARKET_DATE>/agents/<SYMBOL>/decision.json and role reports when `--include-agent-research` was used

@@ -7,14 +7,14 @@ Use when the user asks for an ad-hoc analysis of a single ticker.
 - For current or recent analysis, prepare or read real market data first.
 - Prefer an existing `report/<DATE>/daily-snapshot.json` or `report/<DATE>/pre-market-context.json`.
 - If no fresh data is available, say that no concrete price conclusion can be made.
-- Use `knowledge/refined/` for setup and risk conclusions.
+- Use `canonical rulebook/` for setup and risk conclusions.
 
 ## Steps
 
 1. Identify the symbol, analysis date, and whether the user has a position.
 2. Locate the latest relevant snapshot/context artifact.
-3. Check market regime and risk preconditions under `knowledge/refined/global/`.
-4. Check relevant setup files under `knowledge/refined/setups/`.
+3. Check market regime and risk preconditions under `canonical rulebook/global/`.
+4. Check relevant setup files under `canonical rulebook/setups/`.
 5. Write the memo with scenarios rather than directives.
 
 ## Output Shape

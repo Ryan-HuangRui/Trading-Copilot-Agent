@@ -1,0 +1,4 @@
+{
+  "canonical_root": "../obsidian-sync",
+  "description": "The Obsidian vault is the sole owner of approved Trading Copilot price-action knowledge. Override with TCA_KNOWLEDGE_ROOT for another deployment."
+}

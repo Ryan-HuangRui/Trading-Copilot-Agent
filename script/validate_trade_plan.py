@@ -74,7 +74,7 @@ def validate(args: argparse.Namespace) -> dict[str, Any]:
     warnings: list[str] = []
 
     if not setup_files:
-        errors.append("missing refined setup directory or setup markdown files")
+        errors.append("missing canonical rulebook or approved setup markdown files")
     if not sidecar.exists():
         errors.append(f"missing structured signal sidecar: {sidecar}")
         return {

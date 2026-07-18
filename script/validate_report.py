@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from knowledge_source import KnowledgeSourceError, approved_setup_files
 from signal_artifacts import legacy_signals_path, read_json, resolve_signals_path, validate_sidecar_payload
 
 
@@ -54,10 +55,10 @@ def expected_signals(repo_root: Path, report_date: str, session: str, explicit_s
 
 
 def refined_setup_files(repo_root: Path) -> set[str]:
-    setup_dir = repo_root / "knowledge" / "refined" / "setups"
-    if not setup_dir.exists():
+    try:
+        return approved_setup_files(repo_root)
+    except KnowledgeSourceError:
         return set()
-    return {path.name for path in setup_dir.glob("*.md")}
 
 
 def split_symbol_sections(markdown: str) -> list[tuple[str, str]]:
@@ -94,8 +95,34 @@ def has_risk(text: str) -> bool:
     return "风险" in text and any(token in text for token in ("<=1%", "<= 1%", "单笔", "止损", "降仓", "放弃", "NO TRADE"))
 
 
+def markdown_section(markdown: str, *, level: int, title: str) -> str | None:
+    marker = "#" * level
+    title_pattern = re.escape(title)
+    heading_re = re.compile(
+        rf"^{marker}\s+(?:[一二三四五六七八九十]+[、.．]\s*)?{title_pattern}\s*$",
+        re.MULTILINE,
+    )
+    match = heading_re.search(markdown)
+    if not match:
+        return None
+    next_heading_re = re.compile(rf"^{marker}\s+", re.MULTILINE)
+    next_match = next_heading_re.search(markdown, match.end())
+    end = next_match.start() if next_match else len(markdown)
+    return markdown[match.end():end]
+
+
 def has_pre_market_news_layer(text: str) -> bool:
-    return "## 消息层汇总" in text and "特朗普持仓与交易变化" in text
+    section = markdown_section(text, level=2, title="消息层汇总")
+    if section is None:
+        return False
+    return (
+        re.search(
+            r"^###\s+(?:[一二三四五六七八九十]+[、.．]\s*)?特朗普持仓与交易变化\s*$",
+            section,
+            re.MULTILINE,
+        )
+        is not None
+    )
 
 
 def is_actionable_section(text: str) -> bool:
@@ -158,7 +185,7 @@ def validate_report_text(
 
     unknown_setups = sorted({name for name in setup_references(text) if name not in setup_files})
     for setup in unknown_setups:
-        errors.append(f"{label}: setup file does not exist in knowledge/refined/setups: {setup}")
+        errors.append(f"{label}: setup file is not approved by the canonical rulebook: {setup}")
 
     for pattern in FORBIDDEN_PATTERNS:
         match = pattern.search(text)
@@ -216,7 +243,7 @@ def validate(args: argparse.Namespace) -> dict[str, Any]:
     require_sidecar = not args.report or bool(explicit_signals)
 
     if not setup_files:
-        errors.append("missing refined setup directory or setup markdown files")
+        errors.append("missing canonical rulebook or approved setup markdown files")
 
     if (
         not explicit_signals

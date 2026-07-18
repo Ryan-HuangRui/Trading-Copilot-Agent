@@ -31,15 +31,15 @@ Every workflow run should return or report the same status fields:
 - Never place real trades or imply real-account order execution. Read-only account snapshots are allowed only through the repository's account snapshot workflow. Paper-trading broker writes are allowed only through dedicated paper workflows, only against `lb_papertrading`, and only when the user explicitly requests simulated execution with both `--execute` and the matching `config/paper_execution.json` action gate enabled.
 - Do not output deterministic buy/sell instructions. Use scenarios, triggers, invalidation, risk, and `NO TRADE`.
 - For current or recent symbol analysis, fetch real market data first through the repository scripts or state that no concrete price conclusion can be made.
-- Use `knowledge/refined/` as the rule source for trading conclusions.
-- Treat `knowledge/source/` as research input only.
+- Use the canonical Obsidian-vault rulebook resolved by `config/knowledge_source.json` (or `TCA_KNOWLEDGE_ROOT`) as the rule source for trading conclusions.
+- Treat vault raw sources as research input only.
 - Preserve simplified Chinese for user-facing reports unless the user asks otherwise.
 
 ## Repository Map
 
 - `script/`: deterministic data and context tools.
 - `agent/`: Codex App automation prompts for scheduled pre-market and post-market reports.
-- `knowledge/refined/`: approved trading rules.
+- `config/knowledge_source.json`: canonical rulebook location; the vault owns approved trading rules.
 - `docs/`: runbooks for automation and human operation.
 - `config/`: watchlists and local runtime state paths.
 - `raw_data/`, `report/`, `runtime/`, `config/rate_limit_state.json`, and `config/longbridge_rate_limit_state.json`: generated or local runtime data, ignored by git.
@@ -49,7 +49,7 @@ Every workflow run should return or report the same status fields:
 ### Pre-Market Plan
 
 1. Run `python3 script/trading_copilot.py pre-market-plan --watchlist config/watchlist.json --skip-non-trading-day`.
-2. Read `agent/daily_analysis_prompt.md`, `knowledge/refined/`, and `report/<DATE>/pre-market-context.json`.
+2. Read `agent/daily_analysis_prompt.md`, the canonical rulebook path returned by the wrapper, and `report/<DATE>/pre-market-context.json`.
 3. Write `report/<DATE>/exec-brief.md`, `report/<DATE>/pre-market.md`, and `report/<DATE>/pre-market-signals.json`.
 4. Validate both generated reports:
    `python3 script/trading_copilot.py validate-report --session pre-market --date <DATE>`.
@@ -68,7 +68,7 @@ Every workflow run should return or report the same status fields:
 ### Post-Market Review
 
 1. Run `python3 script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day --include-journal-signals --include-position-symbols`.
-2. Read `agent/post_market_analysis_prompt.md`, `knowledge/refined/`, `report/<DATE>/daily-snapshot.json`, and optional intraday artifacts `report/<DATE>/intraday.md`, `runtime/intraday/<DATE>/state.json`, and `runtime/intraday/<DATE>/events.jsonl`.
+2. Read `agent/post_market_analysis_prompt.md`, the canonical rulebook path returned by the wrapper, `report/<DATE>/daily-snapshot.json`, and optional intraday artifacts `report/<DATE>/intraday.md`, `runtime/intraday/<DATE>/state.json`, and `runtime/intraday/<DATE>/events.jsonl`.
 3. Write `report/<DATE>/post-market.md` and `report/<DATE>/post-market-signals.json`.
 4. Validate the generated report:
    `python3 script/trading_copilot.py validate-report --session post-market --date <DATE>`.
@@ -131,7 +131,7 @@ Use this for Phase 2 Codex-reviewed intraday decisions before any paper executio
 
 1. For LLM-reviewed opportunities, first run `python3 script/trading_copilot.py intraday-opportunity-context --date <DATE>` and read `report/<DATE>/intraday-opportunity-context.json`.
 2. Treat `observation_scans` and `sidecar_template.signals` as the primary all-symbol decision input. `observation_scans` include `price_evidence` with 5m up to 78 bars, 15m 40 bars, daily 60 bars, key levels, and derived distances. `candidate_scans` are deterministic highlights only and must not limit Codex opportunity discovery.
-3. Codex may write `report/<DATE>/monitor-signals.json` from the context. Keep symbols `watch_only`/`no_trade` unless a complete Trade Plan Card independently satisfies `knowledge/refined/`, risk, invalidation, and RR >= 2.
+3. Codex may write `report/<DATE>/monitor-signals.json` from the context. Keep symbols `watch_only`/`no_trade` unless a complete Trade Plan Card independently satisfies the canonical rulebook, risk, invalidation, and RR >= 2.
 4. Run `python3 script/trading_copilot.py intraday-decision-coverage --date <DATE> --context report/<DATE>/intraday-opportunity-context.json --signals report/<DATE>/monitor-signals.json` to verify Codex wrote one decision per observation symbol.
 5. Run `python3 script/trading_copilot.py intraday-dry-run --date <DATE> --signals report/<DATE>/monitor-signals.json`.
 6. If no LLM-reviewed sidecar is available, run `python3 script/trading_copilot.py intraday-dry-run --date <DATE>` to generate watch-only monitor candidates from deterministic extraction.
@@ -175,7 +175,7 @@ This workflow must not submit broker orders.
 18. Run `python3 script/trading_copilot.py paper-exit-plan --date <DATE>` to prepare a full/remaining-position exit plan when `runtime/intraday/<DATE>/state.json` marks an open paper position as `invalidated` or when `report/<DATE>/paper-exit-decisions.json` contains a complete LLM-reviewed `action=exit_remaining` and `execution_status=conditional_executable` decision. It defaults to dry-run; only when the user explicitly wants simulated plan-invalidated exits and `config/paper_execution.json` enables both `paper_execution.allow_exit_cancel_replace=true` and `paper_execution.allow_exit_submit=true`, run `python3 script/trading_copilot.py paper-exit-plan --date <DATE> --execute`.
 19. Run `python3 script/trading_copilot.py paper-break-even-stop-plan --date <DATE>` to prepare a break-even stop movement plan after TP1 fill evidence exists. The default replacement stop is `sell MIT`; alternative Longbridge order types may use `--order-type` with matching price, trigger, trailing, `gtd`, and session fields. It defaults to dry-run; only when the user explicitly wants simulated stop movement and `config/paper_execution.json` enables `paper_execution.allow_break_even_stop_move=true`, run `python3 script/trading_copilot.py paper-break-even-stop-plan --date <DATE> --execute`.
 20. Run `python3 script/trading_copilot.py paper-trade-review --date <DATE> --session pre-market --append` only after paper executions exist and should be recorded.
-21. Treat paper results as execution feedback. Do not promote paper P/L directly into `knowledge/refined/`.
+21. Treat paper results as execution feedback. Do not promote paper P/L directly into the canonical rulebook.
 
 For repeated lifecycle management, prefer the unified wrapper:
 
@@ -206,19 +206,19 @@ Use this only for Phase 3 after reviewed monitor dry-run evidence exists.
 ### Symbol Analysis
 
 1. For current or recent analysis, first run a data-preparation workflow that covers the symbol, or state that fresh market data is unavailable.
-2. Read the relevant snapshot/context artifact and `knowledge/refined/`.
+2. Read the relevant snapshot/context artifact and the canonical rulebook.
 3. Write a concise symbol memo with setup quality, scenarios, invalidation, risk, and `NO TRADE` when the rules are not satisfied.
 
 ### Research Note
 
-1. Use `knowledge/source/` only as raw research material.
-2. Promote conclusions only when they are consistent with `knowledge/refined/`.
-3. Write the note as a research artifact; do not change refined rules unless the user explicitly asks for a rule promotion task.
+1. Use vault raw sources only as raw research material.
+2. Promote conclusions only when they are consistent with the canonical rulebook.
+3. Write the note as a research artifact; do not change approved rules unless the user explicitly asks for a rule promotion task.
 
 ### Rule Validation
 
 1. Read the relevant artifact or user-supplied thesis.
-2. Check it against `knowledge/refined/global/` first, then the relevant setup files under `knowledge/refined/setups/`.
+2. Check it against canonical global rules first, then the relevant canonical setup files.
 3. Report pass/fail/unclear by rule area. Do not invent missing setup rules.
 
 ## Verification

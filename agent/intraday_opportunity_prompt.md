@@ -7,7 +7,7 @@
 必须先读取：
 
 - `report/<DATE>/intraday-opportunity-context.json`
-- `knowledge/refined/`
+- canonical rulebook path provided by the wrapper's `next_agent_inputs`
 
 可选读取：
 
@@ -27,7 +27,7 @@
 
 - 必须以 `intraday-opportunity-context.json` 的 `observation_scans` 为主输入；其中的 `price_evidence` 是本轮价格证据，默认包含 5m 最多78根、15m 40根、日线60根、关键位和派生距离；`candidate_scans` 只是代码高亮的辅助证据，不能限制你的分析范围。
 - 每次评估都应覆盖 `sidecar_template.signals` 中的观察标的；默认保持 `plan_type=watch_only`、`execution_status=watch_only`，明显不满足交易条件时可写 `no_trade`。
-- 只有当 `intraday-opportunity-context.json` 中的价格行为、盘前计划、盘中状态、paper 状态和 `knowledge/refined/` 同时支持时，才可以将观察标的升级为：
+- 只有当 `intraday-opportunity-context.json` 中的价格行为、盘前计划、盘中状态、paper 状态和 canonical rulebook 同时支持时，才可以将观察标的升级为：
   - `plan_type=trade_plan`
   - `execution_status=conditional_executable`
 - 升级后的 Trade Plan Card 必须包含：

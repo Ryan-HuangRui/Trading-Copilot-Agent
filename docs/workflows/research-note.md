@@ -4,8 +4,8 @@ Use when the user asks to turn a market observation, trading concept, or source 
 
 ## Source Priority
 
-1. `knowledge/refined/` for approved rules.
-2. `knowledge/source/` for raw source material.
+1. `canonical rulebook/` for approved rules.
+2. `vault raw sources/` for raw source material.
 3. User-provided notes or external references.
 
 Raw source material is not a production trading rule until explicitly reviewed and promoted.
@@ -32,4 +32,4 @@ Required sections:
 
 ## Boundary
 
-Do not update `knowledge/refined/` from a research note unless the user explicitly asks for a reviewed rule promotion.
+Do not update `canonical rulebook/` from a research note unless the user explicitly asks for a reviewed rule promotion.

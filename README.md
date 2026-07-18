@@ -7,7 +7,8 @@
 - `script/`：数据获取、分析、报告生成脚本
 - `report/`：自动生成的每日报告（Markdown）
 - `raw_data/`：原始行情数据缓存（JSON/CSV）
-- `knowledge/`：交易知识库（已导入 refined 规则）
+- `knowledge/evolution/`：运行期候选规律与复盘证据；不是规则源
+- `config/knowledge_source.json`：canonical Obsidian rulebook 的位置（可由 `TCA_KNOWLEDGE_ROOT` 覆盖）
 - `agent/`：Codex App automation 实际读取的报告生成 Prompt
 - `docs/`：Codex App automation 与人工操作 runbook
 - `config/`：watchlist 与策略参数
@@ -40,7 +41,7 @@ python3 script/trading_day_guard.py --date 2026-05-06 --format text
 - `script/trading_copilot.py`：面向 agent 的统一 workflow wrapper，返回 `status/date/artifacts/skipped/reason`。
 - `script/agent_market_data.py` / `script/agent_technicals.py` / `script/agent_research_reports.py` / `script/agent_decision.py`：TradingAgents 风格 artifact-first 证据链路。
 - `agent/`：Codex App 自动化生成报告时实际读取的 Prompt，目前只保留盘前和盘后两个执行 Prompt。
-- `knowledge/refined/`：唯一交易规则源。
+- Obsidian vault 的 canonical rulebook：唯一交易规则源。
 - `docs/`：调度流程和运维说明。
 - `AGENTS.md`：Codex 维护本仓库时的工程约束，不作为交易分析 Prompt。
 - `.codex/skills/trading-copilot/SKILL.md`：交易研究 skill 的触发条件、安全边界、标准命令与输出契约。
@@ -125,7 +126,7 @@ python3 script/workflow_smoke_test.py --date <DATE> --week <YYYY-Www>
 - 可选 S&P 500 扩池：收盘后加 `--sp500-screen --sp500-top 100 --sp500-candidates 15`，从 iShares IVV 官方持仓 CSV 获取 S&P 500 权重池，按权重/成交量/成交额/量价结构筛出 15 个动态观察候选，生成：
   - `report/YYYY-MM-DD/candidate-universe.json`
   - 并把动态候选与固定 `config/watchlist.json` 去重合并进 `daily-snapshot.json`
-- 盘后复盘：Agent 读取 `agent/post_market_analysis_prompt.md` + `knowledge/refined/` + snapshot，产出：
+- 盘后复盘：Agent 读取 `agent/post_market_analysis_prompt.md` + canonical rulebook + snapshot，产出：
   - `report/YYYY-MM-DD/post-market.md`
   - `report/YYYY-MM-DD/post-market-signals.json`
 - 次日盘前上下文：`script/prepare_daily_context.py` 读取上一交易日 snapshot，生成：
@@ -133,7 +134,7 @@ python3 script/workflow_smoke_test.py --date <DATE> --week <YYYY-Www>
 - 盘前 wrapper 默认采集特朗普 OGE/Open Cabinet 披露消息层 artifact：
   - `report/YYYY-MM-DD/external-disclosures/trump-trades.json`
   - 可用 `--no-external-disclosures` 关闭；该数据只作为消息层背景，不进入 watchlist 或执行信号
-- 次日盘前分析：Agent 读取 `agent/daily_analysis_prompt.md` + `knowledge/refined/` + pre-market context，产出：
+- 次日盘前分析：Agent 读取 `agent/daily_analysis_prompt.md` + canonical rulebook + pre-market context，产出：
   - `report/YYYY-MM-DD/exec-brief.md`
   - `report/YYYY-MM-DD/pre-market.md`
   - `report/YYYY-MM-DD/pre-market-signals.json`
@@ -221,7 +222,7 @@ python3 script/trading_copilot.py agent-memory-export
 - `runtime/memory/trading_memory.md`
 - `runtime/memory/trading_memory.sqlite`
 
-Memory 只能降低置信度、增加限制或触发人工 review，不能提高 `execution_status`，也不能修改 `knowledge/refined/`。
+Memory 只能降低置信度、增加限制或触发人工 review，不能提高 `execution_status`，也不能修改 canonical rulebook。
 
 ## 复盘闭环
 - 盘后复盘：Agent 生成 `post-market.md` 与 `post-market-signals.json` 后，先跑 `validate-report` 和 `validate-trade-plan`

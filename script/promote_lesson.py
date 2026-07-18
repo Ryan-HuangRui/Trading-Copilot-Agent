@@ -16,8 +16,8 @@ This file contains human-reviewed process lessons that may guide future analysis
 
 Rules:
 - Runtime lessons from runtime/learning/daily_lessons.jsonl are candidates only.
-- Content here is process feedback; it must not override knowledge/refined/.
-- Do not promote a lesson directly into knowledge/refined/ without explicit human approval.
+- Content here is process feedback; it must not override the canonical rulebook.
+- Do not promote a lesson directly into the canonical rulebook without explicit human approval.
 """
 
 
@@ -59,7 +59,7 @@ def markdown_block(candidate: dict[str, Any]) -> str:
             "- Evidence:",
             *evidence_lines,
             "",
-            "Boundary: this lesson may guide prompts, but it does not override knowledge/refined/.",
+            "Boundary: this lesson may guide prompts, but it does not override the canonical rulebook.",
             "",
         ]
     )

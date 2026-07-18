@@ -266,7 +266,7 @@ Consumer rules:
 
 - Daily lessons are runtime learning artifacts, not approved trading rules.
 - They may be summarized into candidate patterns later.
-- Do not promote them into `knowledge/refined/` without human review.
+- Do not promote them into `canonical rulebook/` without human review.
 
 ## `report/latest-monitor.json`
 

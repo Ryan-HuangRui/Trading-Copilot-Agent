@@ -156,7 +156,7 @@ The extractor prefers `report/<DATE>/pre-market-signals.json` or `report/<DATE>/
 
 When position reviews exist, `plan-review` adds a position-discipline section covering planned symbols without trade records, positions outside the plan, missing trade links, missing `source_signal_id`, and positions near invalidation without complete trade linkage.
 
-Learning lessons are candidate process improvements only. They must not be treated as approved trading rules or promoted into `knowledge/refined/` without human review.
+Learning lessons are candidate process improvements only. They must not be treated as approved trading rules or promoted into `canonical rulebook/` without human review.
 
 ## Agent Memory
 
@@ -175,7 +175,7 @@ python3 script/trading_copilot.py agent-memory-review --date <DATE> --symbol <SY
 python3 script/trading_copilot.py agent-memory-export
 ```
 
-Memory is append-only and idempotent by `decision_id`. Review is read-only. Memory can lower confidence or trigger manual review only; it must not raise execution status, upgrade `watch_only/no_trade`, or modify `knowledge/refined/`.
+Memory is append-only and idempotent by `decision_id`. Review is read-only. Memory can lower confidence or trigger manual review only; it must not raise execution status, upgrade `watch_only/no_trade`, or modify `canonical rulebook/`.
 
 Use the outcome backfill after the completed daily snapshot is available:
 

@@ -183,7 +183,7 @@ class LearningReviewTest(unittest.TestCase):
             self.assertTrue(payload["applied"])
             text = validated.read_text(encoding="utf-8")
             self.assertIn("missing_take_profit__breakout_pullback_continuation", text)
-            self.assertIn("knowledge/refined", text)
+            self.assertIn("canonical rulebook", text)
 
 
 if __name__ == "__main__":

@@ -299,7 +299,7 @@ def validate_sidecar_payload(
         if not isinstance(setup, str) or not setup.strip():
             errors.append(f"{item}: missing setup")
         elif setup != "NO VALID SETUP" and setup not in setup_files:
-            errors.append(f"{item}: setup file does not exist in knowledge/refined/setups: {setup}")
+            errors.append(f"{item}: setup file is not approved by the canonical rulebook: {setup}")
 
         status = signal.get("status", "planned")
         if status not in SIGNAL_STATUSES:

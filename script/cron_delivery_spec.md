@@ -37,8 +37,8 @@
    - media/filePath: 完整报告 markdown 文件
 
 ## Codex App Automation Prompt 建议
-- 盘后：先运行 daily snapshot 脚本，默认同时启用 S&P 500 top 100 动态观察池并输出 15 个候选；若非交易日跳过；否则基于 `agent/post_market_analysis_prompt.md`、`knowledge/refined/`、`report/<SNAPSHOT_DATE>/daily-snapshot.json` 生成盘后复盘；生成后全量替换长桥【今日关注】分组。
-- 次日盘前：先运行盘前上下文脚本；若非交易日跳过；否则基于 `agent/daily_analysis_prompt.md`、`knowledge/refined/`、`report/<PRE_MARKET_DATE>/pre-market-context.json` 生成盘前两份报告；生成后只向长桥【今日关注】分组增量添加盘前重点标的。
+- 盘后：先运行 daily snapshot 脚本，默认同时启用 S&P 500 top 100 动态观察池并输出 15 个候选；若非交易日跳过；否则基于 `agent/post_market_analysis_prompt.md`、canonical rulebook、`report/<SNAPSHOT_DATE>/daily-snapshot.json` 生成盘后复盘；生成后全量替换长桥【今日关注】分组。
+- 次日盘前：先运行盘前上下文脚本；若非交易日跳过；否则基于 `agent/daily_analysis_prompt.md`、canonical rulebook、`report/<PRE_MARKET_DATE>/pre-market-context.json` 生成盘前两份报告；生成后只向长桥【今日关注】分组增量添加盘前重点标的。
 - 第一版将节假日判断放在脚本内，automation 只按周一到周五触发。
 
 ## 发送内容规范

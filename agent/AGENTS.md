@@ -9,7 +9,7 @@
 ## Conventions
 - Keep simplified Chinese as the default user-facing output language unless a prompt explicitly requires English.
 - Keep the fixed analysis order: market environment, structure, key levels, behavior at levels, then trade logic.
-- Use `knowledge/refined/` as the rule source for conclusions. Do not let `knowledge/source/` drive a trading conclusion directly.
+- Use the canonical rulebook path provided in `next_agent_inputs` as the rule source for conclusions. Raw vault sources must not drive a trading conclusion directly.
 - For pre-market reports, require both `report/<DATE>/exec-brief.md` and `report/<DATE>/pre-market.md`.
 - For post-market reports, require `report/<SNAPSHOT_DATE>/post-market.md`.
 - Pre-market analysis should read `report/<DATE>/pre-market-context.json`, which references the previous trading day's `daily-snapshot.json`.
