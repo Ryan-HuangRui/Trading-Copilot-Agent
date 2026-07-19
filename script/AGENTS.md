@@ -4,7 +4,8 @@
 - `market_data_provider.py`: provider stack for Longbridge primary market data with Twelve Data fallback.
 - `twelve_data_client.py`: Twelve Data HTTP client, API-key lookup, and cross-process rate limiter used for fallback.
 - `fetch_daily.py`: generic batch fetch into `raw_data/<DATE>/<INTERVAL>/`.
-- `prepare_market_snapshot.py`: canonical daily snapshot builder, refreshes `config/watchlist.json` from configured Longbridge watchlist groups when available, writes `raw_data/<DATE>/<INTERVAL>/` and `report/<DATE>/daily-snapshot.json`.
+- `prepare_market_snapshot.py`: canonical multi-timeframe snapshot builder, refreshes `config/watchlist.json` from configured Longbridge watchlist groups when available, fetches Longbridge-first `1day`/`1h`/`15min`/`5min` by default, and writes `raw_data/<DATE>/<INTERVAL>/` plus `report/<DATE>/daily-snapshot.json`.
+- `prepare_symbol_context.py`: one-ticker Longbridge-first `1day`/`1h`/`15min`/`5min` context builder for `$tca-price-action-analysis`.
 - `sp500_universe.py`: S&P 500 holdings fetcher and deterministic dynamic-candidate scorer. Default source is iShares IVV holdings CSV.
 - `prepare_daily_context.py`: pre-market context builder that refreshes `config/watchlist.json` from configured Longbridge watchlist groups when available, reads the previous trading day's snapshot, and writes `report/<DATE>/pre-market-context.json`.
 - `pre_market_report.py`: scripted pre-market report generator.
@@ -43,6 +44,7 @@
 - `validate_trade_plan.py`: structured Trade Plan Card validator for session sidecars.
 - `plan_review.py`: plan-quality review and candidate lesson writer under `runtime/learning/`.
 - `learning_review.py`: aggregates repeated daily lessons into `pattern_candidates.jsonl`.
+- `vibe_research_context.py`: hash-indexes Codex-orchestrated Vibe Swarm result/summary artifacts for optional agent research input; it must never call MCP, an LLM, or a broker.
 - `feishu_summary.py`: concise Feishu-ready analysis summary built from validated sidecars and review artifacts.
 - `promote_lesson.py`: human-triggered promotion into `knowledge/evolution/validated_lessons.md`; never edits the canonical rulebook.
 - `workflow_smoke_test.py`: fixture-based workflow smoke test; must not fetch live market or account data.
@@ -60,6 +62,7 @@
 - Prepare pre-market context with guard: `python3 script/prepare_daily_context.py --watchlist config/watchlist.json --skip-non-trading-day`.
 - Run unified pre-market workflow: `python3 script/trading_copilot.py pre-market-plan --watchlist config/watchlist.json --skip-non-trading-day`.
 - Run unified post-market workflow: `python3 script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day --include-journal-signals --include-position-symbols`.
+- Index a persisted Vibe Swarm run: `python3 script/trading_copilot.py vibe-research-context --date 2026-05-06 --session research --run-id <RUN_ID> --target NVDA.US --symbol NVDA --objective <QUESTION> --as-of 2026-05-06 --status completed --result <RESULT_JSON> --summary <SUMMARY_MD>`.
 - Run unified monitor workflow: `python3 script/trading_copilot.py monitor-brief --state config/monitor_state.json --interval 5min`.
 - Run read-only intraday tracker: `python3 script/trading_copilot.py intraday-tracker --date 2026-05-06 --top-n 5`.
 - Append Codex intraday review into the daily Markdown log: `python3 script/trading_copilot.py intraday-review-append --date 2026-05-06`.

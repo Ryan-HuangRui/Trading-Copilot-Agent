@@ -48,18 +48,19 @@ Run the post-market workflow for this repository.
 1. Run:
    python3 script/prepare_market_snapshot.py --watchlist config/watchlist.json --skip-non-trading-day --sp500-screen --sp500-top 100 --sp500-candidates 15 --include-journal-signals --include-position-symbols
    Optional wrapper-level agent research enhancement:
-   python3 script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day --sp500-screen --sp500-top 100 --sp500-candidates 15 --include-journal-signals --include-position-symbols --include-agent-research
+   python3 script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day --sp500-screen --sp500-top 100 --sp500-candidates 15 --include-journal-signals --include-position-symbols --include-agent-research --include-vibe-research
 2. If the command output contains skipped=true, stop without generating a report.
 3. Read the generated report/<SNAPSHOT_DATE>/daily-snapshot.json.
 4. If stale_data=true, write a short status note explaining that the completed daily bars are not ready and stop.
 5. Otherwise read:
-   - agent/post_market_analysis_prompt.md
+   - `.codex/skills/tca-post-market-review/SKILL.md`；`agent/post_market_analysis_prompt.md` 仅为兼容触发器
    - canonical rulebook/
    - report/<SNAPSHOT_DATE>/daily-snapshot.json
    - optional report/<SNAPSHOT_DATE>/intraday.md
    - optional runtime/intraday/<SNAPSHOT_DATE>/state.json
    - optional runtime/intraday/<SNAPSHOT_DATE>/events.jsonl
    - optional report/<SNAPSHOT_DATE>/agents/<SYMBOL>/decision.json and role reports when `--include-agent-research` was used
+   - optional report/<SNAPSHOT_DATE>/agents/vibe-research-context.json and completed hash-validated Vibe artifacts when `--include-vibe-research` was used
 6. Generate:
    - report/<SNAPSHOT_DATE>/post-market.md
    - report/<SNAPSHOT_DATE>/post-market-signals.json
@@ -107,16 +108,17 @@ Run the pre-market workflow for this repository.
 1. Run:
    python3 script/trading_copilot.py pre-market-plan --watchlist config/watchlist.json --skip-non-trading-day
    Optional wrapper-level agent research enhancement:
-   python3 script/trading_copilot.py pre-market-plan --watchlist config/watchlist.json --skip-non-trading-day --include-agent-research
+   python3 script/trading_copilot.py pre-market-plan --watchlist config/watchlist.json --skip-non-trading-day --include-agent-research --include-vibe-research
    The wrapper collects report/<PRE_MARKET_DATE>/external-disclosures/trump-trades.json by default. Use --no-external-disclosures only when the disclosure source is intentionally disabled.
 2. If the command output contains skipped=true, stop without generating a report.
 3. Read the generated report/<PRE_MARKET_DATE>/pre-market-context.json.
 4. Read:
-   - agent/daily_analysis_prompt.md
+   - `.codex/skills/tca-pre-market-analysis/SKILL.md`；`agent/daily_analysis_prompt.md` 仅为兼容触发器
    - canonical rulebook/
    - report/<PRE_MARKET_DATE>/pre-market-context.json
    - optional report/<PRE_MARKET_DATE>/external-disclosures/trump-trades.json
    - optional report/<PRE_MARKET_DATE>/agents/<SYMBOL>/decision.json and role reports when `--include-agent-research` was used
+   - optional report/<PRE_MARKET_DATE>/agents/vibe-research-context.json and completed hash-validated Vibe artifacts when `--include-vibe-research` was used
 5. Generate all files:
    - report/<PRE_MARKET_DATE>/exec-brief.md
    - report/<PRE_MARKET_DATE>/pre-market.md

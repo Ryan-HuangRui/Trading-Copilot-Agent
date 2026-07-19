@@ -37,6 +37,7 @@ class MonitorScanTest(unittest.TestCase):
                     "volume": 2000,
                 }
             )
+        bars_1h = bars_15m * 3
         daily_bars = []
         for idx in range(65):
             close = 30 + idx * 0.2
@@ -54,7 +55,11 @@ class MonitorScanTest(unittest.TestCase):
         bars[-1]["high"] = bars[-1]["close"] + 0.2
         bars[-1]["volume"] = 5000
 
-        scan = analyze_long_signal("MU", bars, supplemental_bars={"15min": bars_15m, "1day": daily_bars})
+        scan = analyze_long_signal(
+            "MU",
+            bars,
+            supplemental_bars={"1h": bars_1h, "15min": bars_15m, "1day": daily_bars},
+        )
 
         self.assertEqual(scan["status"], "可执行")
         self.assertEqual(scan["setup"], "strong_breakout_trend_following.md")
@@ -69,7 +74,8 @@ class MonitorScanTest(unittest.TestCase):
         self.assertEqual(scan["price_data_interval"], "scan_interval")
         self.assertEqual(scan["price_evidence"]["primary_interval"], "5min")
         self.assertEqual(len(scan["price_evidence"]["bars"]["5min"]), 60)
-        self.assertEqual(len(scan["price_evidence"]["bars"]["15min"]), 40)
+        self.assertEqual(len(scan["price_evidence"]["bars"]["1h"]), 120)
+        self.assertEqual(len(scan["price_evidence"]["bars"]["15min"]), 50)
         self.assertEqual(len(scan["price_evidence"]["bars"]["1day"]), 60)
         self.assertEqual(scan["price_evidence"]["key_levels"]["previous_day_close"], daily_bars[-2]["close"])
         self.assertEqual(scan["price_evidence"]["key_levels"]["previous_day_high"], daily_bars[-2]["high"])

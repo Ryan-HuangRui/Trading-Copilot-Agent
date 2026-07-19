@@ -1,0 +1,7 @@
+interface:
+  display_name: "TCA Pre-Market Analysis"
+  short_description: "Generate rule-grounded pre-market plans"
+  default_prompt: "Use $tca-pre-market-analysis to run the Trading-Copilot-Agent pre-market analysis workflow."
+
+policy:
+  allow_implicit_invocation: true

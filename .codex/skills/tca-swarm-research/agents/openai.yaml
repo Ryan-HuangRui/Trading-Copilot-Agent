@@ -1,0 +1,13 @@
+interface:
+  display_name: "TCA Swarm Research"
+  short_description: "Run independent Vibe Swarm research"
+  default_prompt: "Use $tca-swarm-research to run an evidence-only Vibe Swarm research review."
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "vibe_trading"
+      description: "Repo-only Vibe Trading research tools and approved Swarm preset"
+
+policy:
+  allow_implicit_invocation: true

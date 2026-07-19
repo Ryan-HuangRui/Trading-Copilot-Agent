@@ -14,6 +14,9 @@ This contract defines the TradingAgents-style research artifacts used by this re
 - Agent research can downgrade confidence or execution readiness, but it is evidence input rather than the final session signal decision.
 - 报告生成 LLM 是 session sidecar 的最终决策者：当 refined rules、价格行为、关键位、risk framing 和完整 Trade Plan Card 同时成立时，可以产出 `trade_plan` / `conditional_executable`。
 - Agent research, memory, sentiment, and message-layer evidence cannot by themselves upgrade a symbol into `conditional_executable`; incomplete plans must remain `watch_only` or `no_trade`.
+- Vibe Swarm is an optional Codex-MCP deep-research provider for the existing
+  analysis chain. It may add evidence or lower confidence, but it cannot replace
+  Longbridge-first price evidence, the canonical rulebook, or validators.
 
 ## Paths
 
@@ -21,6 +24,7 @@ Default paths:
 
 ```text
 report/<DATE>/agents/research-context.json
+report/<DATE>/agents/vibe-research-context.json
 report/<DATE>/agents/<SYMBOL>/market_report.json
 report/<DATE>/agents/<SYMBOL>/technicals_report.json
 report/<DATE>/agents/<SYMBOL>/fundamentals_report.json
@@ -34,6 +38,30 @@ report/<DATE>/agents/<SYMBOL>/decision.md
 runtime/memory/trading_memory.md
 runtime/memory/trading_memory.sqlite
 ```
+
+## Vibe Swarm deep-research context
+
+Codex may escalate at most one focus symbol per scheduled pre/post-market
+session after the normal analyst reports and bull/bear/risk artifacts identify a
+material evidence gap. Python scripts never call MCP directly.
+
+The MCP run is persisted under `report/research/vibe-swarm/<RUN_ID>/` and then
+indexed with:
+
+```bash
+python3 script/trading_copilot.py vibe-research-context \
+  --date <DATE> --session post-market \
+  --run-id <RUN_ID> --target NVDA.US --symbol NVDA \
+  --objective "Audit the demand thesis" --as-of <DATE> \
+  --status completed \
+  --result report/research/vibe-swarm/<RUN_ID>/result.json \
+  --summary report/research/vibe-swarm/<RUN_ID>/summary.md
+```
+
+The context records artifact hashes and policy flags. Only completed,
+hash-valid records are appended to `next_agent_inputs` by
+`--include-vibe-research`. Pending, failed, stale, missing, or hash-mismatched
+runs remain non-blocking and cannot be used as evidence.
 
 ## Evidence Object
 

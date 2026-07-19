@@ -5,9 +5,11 @@ Use when the user asks for an ad-hoc analysis of a single ticker.
 ## Preconditions
 
 - For current or recent analysis, prepare or read real market data first.
+- Prefer `python3 script/trading_copilot.py symbol-analysis-context --symbol <SYMBOL>` when the connected Longbridge app/MCP is unavailable or incomplete. The repository path is Longbridge-first and fetches `1day`, `1h`, `15min`, and `5min` by default.
 - Prefer an existing `report/<DATE>/daily-snapshot.json` or `report/<DATE>/pre-market-context.json`.
 - If no fresh data is available, say that no concrete price conclusion can be made.
 - Use `canonical rulebook/` for setup and risk conclusions.
+- Use only active method cards from the unified Trading Copilot knowledge pack for analysis context. Runtime analysis must not read raw transcripts or video sources.
 
 ## Steps
 
@@ -15,7 +17,8 @@ Use when the user asks for an ad-hoc analysis of a single ticker.
 2. Locate the latest relevant snapshot/context artifact.
 3. Check market regime and risk preconditions under `canonical rulebook/global/`.
 4. Check relevant setup files under `canonical rulebook/setups/`.
-5. Write the memo with scenarios rather than directives.
+5. Read the relevant compiled method card and cite its path when it materially informs the analysis.
+6. Write the memo with scenarios rather than directives.
 
 ## Output Shape
 

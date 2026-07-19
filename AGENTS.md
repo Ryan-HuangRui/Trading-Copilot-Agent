@@ -3,7 +3,7 @@
 ## Scope and layout
 - This is a single Python trading-copilot project, not a monorepo.
 - `script/`: executable Python tools for market-data fetches, report context generation, monitor scans, read-only account snapshots, paper-trading previews/reviews, report delivery guards, and knowledge import.
-- `agent/`: Codex App automation execution prompts. Keep only prompts that automation actually reads.
+- `agent/`: thin Codex App compatibility triggers. Analysis workflows live in repo-only Skills under `.codex/skills/`.
 - `docs/`: runbooks for Codex App automation and human operation.
 - `config/knowledge_source.json`: canonical Obsidian-vault rulebook location. Use it for all approved trading-rule reads; `TCA_KNOWLEDGE_ROOT` may override it by deployment.
 - The local `knowledge/` directory is limited to runtime learning candidates and is not a source of approved trading rules.
@@ -40,13 +40,13 @@
 ## Cross-component workflows
 - Daily snapshot flow:
   - `python3 script/prepare_market_snapshot.py --watchlist config/watchlist.json --skip-non-trading-day`
-  - Writes raw bars to `raw_data/<SNAPSHOT_DATE>/<INTERVAL>/<SYMBOL>.json`.
+  - Writes Longbridge-first raw bars to `raw_data/<SNAPSHOT_DATE>/<INTERVAL>/<SYMBOL>.json`; default intervals are `1day`, `1h`, `15min`, and `5min`.
   - Writes the reusable snapshot to `report/<SNAPSHOT_DATE>/daily-snapshot.json`.
 - Optional S&P 500 dynamic universe:
   - `python3 script/prepare_market_snapshot.py --watchlist config/watchlist.json --skip-non-trading-day --sp500-screen --sp500-top 100 --sp500-candidates 15`
   - Uses iShares IVV holdings CSV as the default S&P 500 universe source, writes `report/<SNAPSHOT_DATE>/candidate-universe.json`, and merges selected candidates into the snapshot without editing `config/watchlist.json`.
 - Post-market review flow:
-  - Agent reads `agent/post_market_analysis_prompt.md`, the canonical rulebook returned in `next_agent_inputs`, and `report/<SNAPSHOT_DATE>/daily-snapshot.json`.
+  - Agent uses `.codex/skills/tca-post-market-review/SKILL.md`, the canonical rulebook returned in `next_agent_inputs`, and `report/<SNAPSHOT_DATE>/daily-snapshot.json`; `agent/post_market_analysis_prompt.md` is only a thin trigger.
   - Agent writes `report/<SNAPSHOT_DATE>/post-market.md` and `report/<SNAPSHOT_DATE>/post-market-signals.json`.
   - Run `python3 script/trading_copilot.py validate-trade-plan --session post-market --date <SNAPSHOT_DATE>` before journal append or sync.
   - Run `python3 script/trading_copilot.py data-quality --date <SNAPSHOT_DATE>` before Feishu summary so focused-symbol fallback and stale data are disclosed.
@@ -56,7 +56,7 @@
   - Run `python3 script/trading_copilot.py feishu-summary --session post-market --date <SNAPSHOT_DATE>` for concise Feishu delivery.
 - Pre-market plan flow:
   - `python3 script/prepare_daily_context.py --watchlist config/watchlist.json --skip-non-trading-day`
-  - Agent reads `agent/daily_analysis_prompt.md`, the canonical rulebook returned in `next_agent_inputs`, and `report/<PRE_MARKET_DATE>/pre-market-context.json`.
+  - Agent uses `.codex/skills/tca-pre-market-analysis/SKILL.md`, the canonical rulebook returned in `next_agent_inputs`, and `report/<PRE_MARKET_DATE>/pre-market-context.json`; `agent/daily_analysis_prompt.md` is only a thin trigger.
   - Agent writes `report/<PRE_MARKET_DATE>/exec-brief.md`, `report/<PRE_MARKET_DATE>/pre-market.md`, and `report/<PRE_MARKET_DATE>/pre-market-signals.json`.
   - Run `python3 script/trading_copilot.py validate-trade-plan --session pre-market --date <PRE_MARKET_DATE>` before journal append or sync.
 - Direct scripted report flow:
@@ -64,7 +64,7 @@
   - Produces generated report files and raw market data under ignored runtime directories.
 - Monitoring flow:
   - `python3 script/monitor_scan.py --state config/monitor_state.json --interval 5min`
-  - Uses Longbridge market data by default, falls back to Twelve Data when configured, and writes `report/latest-monitor.json`.
+  - Uses Longbridge market data by default for 5m, 15m, 1h, and daily evidence, falls back to Twelve Data when configured, and writes `report/latest-monitor.json`.
 - Read-only position review flow:
   - `python3 script/trading_copilot.py account-snapshot --date <DATE>`
   - `python3 script/trading_copilot.py position-review --date <DATE> --append`

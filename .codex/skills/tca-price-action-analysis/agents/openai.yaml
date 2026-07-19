@@ -1,0 +1,7 @@
+interface:
+  display_name: "TCA Price Action Analysis"
+  short_description: "Analyze one ticker with full price-action reasoning"
+  default_prompt: "Use $tca-price-action-analysis to analyze a current US ticker with full price-action reasoning."
+
+policy:
+  allow_implicit_invocation: true

@@ -261,6 +261,7 @@ def validate_sidecar_payload(
     expected_date: str,
     expected_session: str,
     setup_files: set[str],
+    method_card_paths: set[str] | None = None,
 ) -> tuple[list[str], list[str]]:
     errors: list[str] = []
     warnings: list[str] = []
@@ -284,6 +285,7 @@ def validate_sidecar_payload(
         warnings.append(f"{label}: signals contains more than 3 focused candidates")
 
     seen_symbols: set[str] = set()
+    method_card_paths = method_card_paths or set()
     for idx, signal in enumerate(signals):
         item = f"{label}: signals[{idx}]"
         if not isinstance(signal, dict):
@@ -310,6 +312,29 @@ def validate_sidecar_payload(
         execution_status = signal.get("execution_status")
         if execution_status is not None and execution_status not in EXECUTION_STATUSES:
             errors.append(f"{item}: unsupported execution_status: {execution_status}")
+
+        serialized_signal = json.dumps(signal, ensure_ascii=False).lower()
+        for marker in ("raw/", ".srt", "youtube.com", "youtu.be", "bilibili.com"):
+            if marker in serialized_signal:
+                errors.append(f"{item}: runtime signal references compiler-only source: {marker}")
+
+        method_context = signal.get("method_context")
+        if method_context is not None:
+            if not isinstance(method_context, list):
+                errors.append(f"{item}: method_context must be an array")
+            else:
+                for method_idx, method in enumerate(method_context):
+                    method_item = f"{item}: method_context[{method_idx}]"
+                    if not isinstance(method, dict):
+                        errors.append(f"{method_item}: must be an object")
+                        continue
+                    method_path = method.get("path")
+                    if not isinstance(method_path, str) or not method_path.strip():
+                        errors.append(f"{method_item}: missing path")
+                    elif method_path not in method_card_paths:
+                        errors.append(f"{method_item}: path is not an active method card: {method_path}")
+                    if not isinstance(method.get("summary"), str) or not method["summary"].strip():
+                        errors.append(f"{method_item}: missing summary")
 
         actionable = status != "no_trade" and setup != "NO VALID SETUP"
         if actionable:

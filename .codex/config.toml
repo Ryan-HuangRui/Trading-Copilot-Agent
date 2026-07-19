@@ -1,10 +1,13 @@
-# Vibe-Trading is a separate NAS-hosted research engine.  Codex may call only
-# explicitly listed research tools; broker connectors, filesystem writers,
-# swarms, and all workflow-mutating tools stay outside this integration.
+# Vibe-Trading is a separate NAS-hosted research engine. Codex may call only
+# explicitly listed research tools. Broker connectors, Shadow Account, and
+# unrestricted file or shell tools stay outside this integration. Swarm is
+# intentionally enabled as an explicit, independent research workflow; the
+# adapter restricts it to the repo-owned TCA research preset and starts it
+# asynchronously.
 [mcp_servers.vibe_trading]
-command = "/Volumes/personal_folder/repo/Vibe-Trading/.venv/bin/python"
-args = ["/Volumes/personal_folder/repo/Trading-Copilot-Agent/.codex/vibe_trading_mcp.py"]
-cwd = "/Volumes/personal_folder/repo/Vibe-Trading"
+command = "/home/admin_ryan/repo/Vibe-Trading/.venv-linux/bin/python"
+args = ["/home/admin_ryan/repo/Trading-Copilot-Agent/.codex/vibe_trading_mcp.py"]
+cwd = "/home/admin_ryan/repo/Trading-Copilot-Agent"
 enabled_tools = [
   "list_skills",
   "load_skill",
@@ -36,13 +39,15 @@ enabled_tools = [
   "get_stock_profile",
   "screen_market",
   "search_symbol",
-  "get_macro_series",
   "iwencai_search",
-  "analyze_trade_journal",
-  "extract_shadow_strategy",
-  "run_shadow_backtest",
-  "render_shadow_report",
-  "scan_shadow_signals",
 ]
 startup_timeout_sec = 60
 tool_timeout_sec = 180
+
+[mcp_servers.vibe_trading.env]
+LANGCHAIN_PROVIDER = "openai-codex"
+LANGCHAIN_MODEL_NAME = "openai-codex/gpt-5.6-sol"
+LANGCHAIN_REASONING_EFFORT = "medium"
+VIBE_TRADING_GOAL_DB_PATH = "/home/admin_ryan/repo/Trading-Copilot-Agent/runtime/vibe-swarm/sessions.db"
+VIBE_TRADING_ALLOWED_RUN_ROOTS = "/home/admin_ryan/repo/Trading-Copilot-Agent/runtime/vibe-swarm/runs"
+VIBE_TRADING_ALLOWED_WRITE_ROOTS = "/home/admin_ryan/repo/Trading-Copilot-Agent/runtime/vibe-swarm/runs,/home/admin_ryan/repo/Trading-Copilot-Agent/report/research/vibe-swarm"

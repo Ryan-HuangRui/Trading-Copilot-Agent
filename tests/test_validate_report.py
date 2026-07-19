@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -23,6 +24,11 @@ GOOD_REPORT = """# 今日盘前完整报告（2026-05-26）
 - 持仓变化：未获取到可核验的最新披露。
 - 交易变化：未获取到可核验的最新披露。
 - 对今日计划影响：只作为消息层风险背景，不能提升任何标的执行等级。
+
+## 深度研究状态
+- 已完成研究：无
+- 待处理升级：无
+- 边界：Vibe Swarm 仅为二级研究证据，不提升执行等级。
 
 ## 重点执行候选
 ### MU
@@ -143,6 +149,23 @@ class ValidateReportTest(unittest.TestCase):
         self.assertEqual(payload["status"], "fail")
         self.assertTrue(any("Trump disclosure news section" in error for error in payload["errors"]))
 
+    def test_pre_market_report_requires_deep_research_status_section(self):
+        report = GOOD_REPORT.replace(
+            """## 深度研究状态
+- 已完成研究：无
+- 待处理升级：无
+- 边界：Vibe Swarm 仅为二级研究证据，不提升执行等级。
+
+""",
+            "",
+        )
+        temp, root = self.make_repo(report)
+        with temp:
+            payload = self.validate_repo(root)
+
+        self.assertEqual(payload["status"], "fail")
+        self.assertTrue(any("missing ## 深度研究状态" in error for error in payload["errors"]))
+
     def test_fails_missing_setup_and_invalidation(self):
         bad_report = """# 报告
 ### MU
@@ -174,6 +197,36 @@ class ValidateReportTest(unittest.TestCase):
 
         self.assertEqual(payload["status"], "pass")
         self.assertEqual(payload["errors"], [])
+
+    def test_method_context_requires_active_compiled_card(self):
+        method_path = "playbooks/trading-price-action-analysis-methods/breakout-pullback-and-failure.md"
+        report = GOOD_REPORT + f"\n## 方法上下文\n- 突破质量；来源：{method_path}\n"
+        temp, root = self.make_repo(report)
+        with temp, patch("validate_report.active_method_card_paths", return_value={method_path}):
+            payload = self.validate_repo(root)
+        self.assertEqual(payload["status"], "pass")
+
+    def test_rejects_raw_runtime_reference(self):
+        report = GOOD_REPORT + "\n## 方法上下文\n- 来源：raw/transcripts/example.srt\n"
+        temp, root = self.make_repo(report)
+        with temp:
+            payload = self.validate_repo(root)
+        self.assertEqual(payload["status"], "fail")
+        self.assertTrue(any("compiler-only" in error for error in payload["errors"]))
+
+    def test_sidecar_method_context_requires_active_card(self):
+        method_path = "playbooks/trading-price-action-analysis-methods/breakout-pullback-and-failure.md"
+        temp, root = self.make_repo(GOOD_REPORT.replace("今日盘前完整报告", "今日盘前执行简版"))
+        with temp:
+            signal = self.trade_plan_signal(
+                method_context=[{"path": "playbooks/trading-price-action-analysis-methods/missing.md", "summary": "突破"}]
+            )
+            self.write_sidecar(root, [signal])
+            args = argparse.Namespace(repo_root=str(root), date="2026-05-26", session="pre-market", report=None, signals=None)
+            with patch("validate_report.active_method_card_paths", return_value={method_path}):
+                payload = validate(args)
+        self.assertEqual(payload["status"], "fail")
+        self.assertTrue(any("not an active method card" in error for error in payload["errors"]))
 
     def test_default_session_requires_and_validates_signals_sidecar(self):
         temp, root = self.make_repo(GOOD_REPORT.replace("今日盘前完整报告", "今日盘前执行简版"))

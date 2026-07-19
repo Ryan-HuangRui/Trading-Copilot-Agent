@@ -36,11 +36,15 @@ Expected top-level fields:
 - `market_data_source`: effective provider stack, normally `longbridge_with_twelve_data_fallback`.
 - `primary_market_data_source`: primary provider requested by the workflow, default `longbridge`.
 - `fallback_market_data_source`: fallback provider requested by the workflow, default `twelve`.
+- `requested_intervals`: defaults to `1day`, `1h`, `15min`, and `5min`; Longbridge is primary for every interval.
 - `dynamic_universe_symbols`: temporary dynamic candidates included for this snapshot only.
 - `candidate_universe_path`: optional path to `candidate-universe.json`.
 - `latest_bar_dates`: latest completed bar dates seen across symbols.
 - `stale_data`: whether any symbol used stale or fallback data.
 - `errors`: per-symbol or universe-fetch failures.
+- `timeframe_errors`: per-symbol supplemental-interval failures or cache fallback disclosures.
+
+Each symbol includes `price_evidence` with `primary_interval`, `requested_intervals`, `bars`, actual per-interval `providers`, `raw_paths`, and `errors`.
 
 Consumer rules:
 
@@ -48,6 +52,17 @@ Consumer rules:
 - Treat per-symbol `meta.fallback_from` as a data-source limitation worth disclosing when it affects a focused symbol.
 - Do not infer recommendations from `dynamic_universe_symbols`; they are an observation universe.
 - Do not invent missing indicators when a symbol summary lacks data.
+- Treat missing supplemental intervals as unknown evidence. Do not use a method card to infer unobserved 1h/15min/5min behavior.
+
+## `report/<DATE>/symbol-<SYMBOL>-context.json`
+
+Producer:
+
+```bash
+python3 script/trading_copilot.py symbol-analysis-context --symbol <SYMBOL>
+```
+
+The command defaults to Longbridge primary, Twelve Data fallback, and `1day`, `1h`, `15min`, `5min`. `timeframes.<INTERVAL>.meta.provider` records the actual backend. The artifact is read-only price evidence for `$tca-price-action-analysis`; it is not an order input.
 
 ## `report/<DATE>/candidate-universe.json`
 
@@ -145,6 +160,9 @@ python3 script/trading_copilot.py agent-decision --date <DATE> --symbol MU
 Expected artifacts:
 
 - `research-context.json`: workflow context for the selected date and symbols.
+- `vibe-research-context.json`: optional hash-index of completed or pending
+  Codex-orchestrated Vibe Swarm runs. Only completed records with
+  `usable_as_agent_evidence=true` may be injected into report analysis.
 - `<SYMBOL>/market_report.json`: market-data evidence.
 - `<SYMBOL>/technicals_report.json`: technical indicator evidence.
 - `<SYMBOL>/fundamentals_report.json`: fundamentals evidence.
@@ -160,6 +178,9 @@ Consumer rules:
 - Report evidence items must include `source`, `source_type`, freshness via `as_of` or `published_at`, `symbol`, `summary`, `confidence`, and `limitations`.
 - `decision.json` must reuse the existing signal semantics: `plan_type=trade_plan/watch_only/no_trade` and `execution_status=conditional_executable/waiting_trigger/watch_only/no_trade`.
 - `decision.json` must not contain broker order commands.
+- Vibe records must retain run id, preset, objective, as-of date, provider/model,
+  confidence, limitations, artifact paths, and hashes. They are secondary
+  evidence and cannot raise execution status or modify the canonical rulebook.
 
 ## `report/<DATE>/data-quality.json`
 
@@ -182,6 +203,8 @@ Expected top-level fields:
 - `missing_focused_symbols`
 - `fallback_symbols`
 - `focused_fallback_symbols`
+- `timeframe_errors`
+- `focused_timeframe_errors`
 - `account_price_deltas`
 - `abnormal_moves`
 - `snapshot_errors`
@@ -190,13 +213,14 @@ Consumer rules:
 
 - Treat `missing_focused_symbols` as blocking data-quality failure.
 - Disclose `focused_fallback_symbols` in Feishu summaries and focused reports.
+- Disclose `focused_timeframe_errors`; they downgrade quality to `warn` because a requested decision interval is unavailable or cache-backed.
 - Treat `status=warn` as deliverable only with explicit data-quality disclosure.
 
 ## `report/<DATE>/<SESSION>-signals.json`
 
 Producer:
 
-- Codex report generation using `agent/daily_analysis_prompt.md` or `agent/post_market_analysis_prompt.md`.
+- Codex report generation using `$tca-pre-market-analysis` or `$tca-post-market-review`; the files under `agent/` are thin compatibility triggers only.
 
 Consumers:
 

@@ -45,7 +45,7 @@ Canonical command:
 
 ```bash
 python3 script/trading_copilot.py pre-market-plan --watchlist config/watchlist.json --skip-non-trading-day
-python3 script/trading_copilot.py pre-market-plan --watchlist config/watchlist.json --skip-non-trading-day --include-agent-research
+python3 script/trading_copilot.py pre-market-plan --watchlist config/watchlist.json --skip-non-trading-day --include-agent-research --include-vibe-research
 ```
 
 Inputs:
@@ -54,7 +54,8 @@ Inputs:
 - `config/watchlist.json`, used only as the fallback when Longbridge watchlist retrieval is unavailable.
 - Prior completed trading day's `report/<SNAPSHOT_DATE>/daily-snapshot.json`
 - `canonical rulebook/`
-- `agent/daily_analysis_prompt.md`
+- Unified Trading Copilot knowledge pack and active method cards supplied through `next_agent_inputs`.
+- `.codex/skills/tca-pre-market-analysis/SKILL.md` (`agent/daily_analysis_prompt.md` is a thin compatibility trigger)
 
 Deterministic script output:
 
@@ -71,6 +72,11 @@ Skip behavior:
 - If `--skip-non-trading-day` is set and the report date is not a regular US trading day, return `status=skipped`.
 - If the required source snapshot is missing, return `status=failed` with the missing path in `reason`.
 - With `--include-agent-research`, only the wrapper layer runs the independent agent research scripts and appends their artifact paths to `next_agent_inputs`.
+- With `--include-vibe-research`, the wrapper reads an existing
+  `report/<DATE>/agents/vibe-research-context.json`, verifies completed run
+  artifact hashes, and appends usable artifacts to `next_agent_inputs`.
+- This flag never launches MCP. Missing, pending, failed, or invalid Vibe
+  research is reported under `vibe_research` and does not block the main plan.
 - `prepare_daily_context.py` remains deterministic and must not import or call agent research modules.
 
 ## post-market-review
@@ -81,7 +87,7 @@ Canonical command:
 
 ```bash
 python3 script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day --include-journal-signals --include-position-symbols
-python3 script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day --include-agent-research
+python3 script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day --include-agent-research --include-vibe-research
 ```
 
 Inputs:
@@ -92,7 +98,7 @@ Inputs:
 - Optional S&P 500 dynamic universe flags
 - Optional journal signal and position-symbol merge flags for outcome/position coverage
 - `canonical rulebook/`
-- `agent/post_market_analysis_prompt.md`
+- `.codex/skills/tca-post-market-review/SKILL.md` (`agent/post_market_analysis_prompt.md` is a thin compatibility trigger)
 
 Deterministic script outputs:
 
@@ -110,7 +116,25 @@ Skip behavior:
 - If `--skip-non-trading-day` is set and the snapshot date is not a regular US trading day, return `status=skipped`.
 - Per-symbol fetch failures should be recorded in the snapshot `errors` array instead of aborting the whole snapshot when possible.
 - With `--include-agent-research`, only the wrapper layer runs the independent agent research scripts and appends their artifact paths to `next_agent_inputs`.
+- With `--include-vibe-research`, the wrapper consumes only completed,
+  hash-valid Vibe run artifacts already indexed for agent analysis. It never
+  launches MCP and never blocks the snapshot workflow.
 - `prepare_market_snapshot.py` remains deterministic and must not import or call agent research modules.
+
+## vibe-research-context
+
+Purpose: persist and hash-index a Codex-orchestrated Vibe Swarm run for optional
+use by the existing pre/post-market analysis chain.
+
+Required behavior:
+
+- The command must not call MCP, an LLM, or a broker.
+- A completed record requires both raw result and Chinese summary artifacts.
+- Re-running the command with the same `run_id` replaces that record
+  idempotently.
+- The output is secondary research evidence only and cannot raise
+  `execution_status`, create a Trade Plan Card, modify the canonical rulebook,
+  or mutate a watchlist.
 
 ## monitor-brief
 
@@ -141,6 +165,7 @@ Output rules:
 
 - Treat statuses as observation states, not trade instructions.
 - Include data freshness and rule limitations.
+- Use Longbridge-first 5m, 15m, 1h, and daily evidence. Cite active method-card paths when method context is used; raw sources are forbidden at runtime.
 - Use `NO TRADE` when setup quality, data quality, or risk framing is insufficient.
 
 Monitor dry-run sidecar:
@@ -258,6 +283,7 @@ Inputs:
 - `report/<DATE>/intraday.md` when present
 - `runtime/paper/<DATE>/paper-execution-state.json` when present
 - `canonical rulebook/setups/*.md`
+- Unified Trading Copilot knowledge pack; raw transcripts and video URLs are compiler-only.
 
 Output:
 
@@ -265,7 +291,7 @@ Output:
 
 Required behavior:
 
-- The artifact must include `observation_scans` for every monitor scan selected for LLM review, including multi-timeframe `price_evidence` by default: 5m up to 78 bars, 15m 40 bars, daily 60 bars, key levels, and derived distances. It must also include `candidate_scans` for deterministic highlights, matching pre-market plans, intraday state, paper state summary, refined setup file names, and a `sidecar_template`.
+- The artifact must include `observation_scans` for every monitor scan selected for LLM review, including Longbridge-first multi-timeframe `price_evidence` by default: 5m up to 78 bars, 15m up to 80 bars, 1h up to 120 bars, daily 60 bars, key levels, and derived distances. It must also include `candidate_scans` for deterministic highlights, matching pre-market plans, intraday state, paper state summary, refined setup file names, and a `sidecar_template`.
 - `sidecar_template.signals` must cover the full `observation_scans` universe and default to `plan_type=watch_only` and `execution_status=watch_only`.
 - `candidate_scans` must not be used as a pre-filter for Codex decisions; it is supporting evidence only.
 - Only Codex/LLM review may raise a signal to `plan_type=trade_plan` and `execution_status=conditional_executable`; validation still requires the complete Trade Plan Card and RR >= 2.
@@ -366,7 +392,7 @@ Purpose: record provenance for the LLM-authored report artifacts. This command d
 Canonical command:
 
 ```bash
-python3 script/trading_copilot.py llm-generation-manifest --session pre-market --date <DATE> --model <MODEL> --prompt agent/daily_analysis_prompt.md --input report/<DATE>/pre-market-context.json --generated-output report/<DATE>/exec-brief.md --generated-output report/<DATE>/pre-market.md --generated-output report/<DATE>/pre-market-signals.json
+python3 script/trading_copilot.py llm-generation-manifest --session pre-market --date <DATE> --model <MODEL> --prompt .codex/skills/tca-pre-market-analysis/SKILL.md --input report/<DATE>/pre-market-context.json --generated-output report/<DATE>/exec-brief.md --generated-output report/<DATE>/pre-market.md --generated-output report/<DATE>/pre-market-signals.json
 ```
 
 Output:
@@ -519,9 +545,10 @@ Output:
 
 Required behavior:
 
-- Check `stale_data`, `latest_bar_dates`, snapshot errors, provider distribution, and abnormal single-day moves.
+- Check `stale_data`, `latest_bar_dates`, snapshot errors, multi-timeframe errors, provider distribution, and abnormal single-day moves.
 - Flag focused symbols that are missing from the snapshot.
 - Flag focused symbols using fallback data, including `fallback_from` and `primary_error`.
+- Flag focused-symbol multi-timeframe gaps so reports disclose unavailable or cache-backed decision intervals.
 - Flag account last-price vs snapshot close deltas above the configured threshold.
 - Feishu summaries should disclose focused-symbol fallback and quality warnings when the artifact exists.
 
@@ -1471,6 +1498,15 @@ Inputs:
 - The latest relevant snapshot/context artifact.
 - Optional user-supplied position or thesis.
 - `canonical rulebook/`.
+- Unified Trading Copilot knowledge pack and relevant active method cards.
+
+Canonical repository data command when interactive Longbridge MCP is unavailable or incomplete:
+
+```bash
+python3 script/trading_copilot.py symbol-analysis-context --symbol <SYMBOL>
+```
+
+It fetches `1day`, `1h`, `15min`, and `5min` from Longbridge by default, with Twelve Data fallback and per-interval provider metadata.
 
 Outputs:
 
@@ -1480,6 +1516,7 @@ Required sections:
 
 - Data basis.
 - Market context.
+- Method context with active method-card paths, or an explicit statement that no method card was used.
 - Setup candidates.
 - Bull/base/bear scenarios.
 - Triggers and invalidation.
@@ -1489,6 +1526,7 @@ Required sections:
 Boundary:
 
 - Do not analyze current/recent prices without first preparing or reading real market data.
+- Do not read raw vault sources, SRT files, or video URLs during runtime analysis. Method cards cannot independently create a setup or raise the conclusion.
 
 ## daily-self-review
 

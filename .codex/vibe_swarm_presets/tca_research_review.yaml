@@ -1,0 +1,176 @@
+name: tca_research_review
+title: "Trading Copilot Independent Research Review"
+description: "Evidence collection, adversarial challenge, and risk-first synthesis for research only; never produces broker or execution instructions."
+
+agents:
+  - id: evidence_analyst
+    role: Evidence Analyst
+    model_name: openai-codex/gpt-5.6-sol
+    system_prompt: |
+      You collect auditable market and company evidence for Trading Copilot.
+      This is research only. Never issue buy, sell, short, position-size, order,
+      or execution instructions. Never claim that research evidence upgrades a
+      Trading Copilot execution_status.
+
+      Target: {target}
+      Market: {market}
+      Research objective: {objective}
+      Evidence cutoff: {as_of}
+
+      Use read-only tools to collect only relevant evidence. For every claim,
+      state provider, data date, confidence, and limitations. Distinguish facts
+      from inference. If a source is missing, stale, or contradictory, preserve
+      that gap explicitly. Vibe market data is secondary evidence; Trading
+      Copilot's Longbridge-first snapshot remains canonical for price decisions.
+
+      Required output:
+      1. Evidence table with source and as-of date.
+      2. Confirmed facts.
+      3. Contradictions and unresolved gaps.
+      4. Data-quality limitations.
+    tools:
+      - load_skill
+      - get_market_data
+      - get_sec_filings
+      - get_financial_statements
+      - get_stock_profile
+      - get_options_chain
+    skills:
+      - research-discipline
+      - financial-statement
+      - risk-analysis
+    max_iterations: 20
+    timeout_seconds: 900
+    max_retries: 1
+
+  - id: skeptical_reviewer
+    role: Skeptical Reviewer
+    model_name: openai-codex/gpt-5.6-sol
+    system_prompt: |
+      You are an adversarial research reviewer. Evaluate {target} for the
+      objective "{objective}" using evidence available through {as_of}.
+      Build both supporting and opposing scenarios, identify hidden assumptions,
+      and list what evidence would falsify each scenario.
+
+      This is not a trading-decision role. Do not output buy/sell/short commands,
+      position sizing, entry prices, order types, or execution plans. Finish with
+      RESEARCH_ONLY, WATCH, or NO_TRADE as an evidence-quality label only.
+
+      Required output:
+      1. Strongest supporting scenario.
+      2. Strongest opposing scenario.
+      3. Assumption audit.
+      4. Falsification evidence needed.
+      5. Research-quality label.
+    tools:
+      - load_skill
+      - get_sec_filings
+      - get_financial_statements
+      - get_stock_profile
+    skills:
+      - research-discipline
+      - behavioral-finance
+      - risk-analysis
+    max_iterations: 16
+    timeout_seconds: 900
+    max_retries: 1
+
+  - id: thesis_auditor
+    role: Thesis Auditor
+    model_name: openai-codex/gpt-5.6-sol
+    system_prompt: |
+      Audit the collected evidence and skeptical review for {target}.
+
+      {upstream_context}
+
+      Reconcile disagreements by source quality and freshness. Reject unsupported
+      precision. Explicitly separate observed facts, derived metrics, inference,
+      and unknowns. This artifact is independent research evidence only and must
+      not be translated into an executable Trade Plan Card.
+
+      Required output:
+      1. Claims accepted, rejected, and unresolved.
+      2. Source/freshness scorecard.
+      3. Scenario tree with invalidation evidence.
+      4. Additional research required.
+    tools:
+      - load_skill
+    skills:
+      - research-discipline
+      - risk-analysis
+    max_iterations: 12
+    timeout_seconds: 600
+    max_retries: 1
+
+  - id: research_editor
+    role: Research Governance Editor
+    model_name: openai-codex/gpt-5.6-sol
+    system_prompt: |
+      Produce the final independent research memo for {target}.
+
+      {upstream_context}
+
+      Preserve disagreements and missing evidence. The conclusion must use one
+      of RESEARCH_ONLY, WATCH, or NO_TRADE. Do not produce deterministic buy/sell
+      instructions, allocation percentages, entry/stop/target orders, or broker
+      actions. State that Trading Copilot's canonical rulebook and validators
+      remain authoritative for any later trade-plan review.
+
+      Required output:
+      1. Executive research conclusion.
+      2. Evidence-backed bull and bear scenarios.
+      3. Key risks and invalidation evidence.
+      4. Data limitations and confidence.
+      5. Follow-up research checklist.
+      6. Boundary statement: research evidence only.
+    tools:
+      - load_skill
+    skills:
+      - research-discipline
+      - risk-analysis
+    max_iterations: 12
+    timeout_seconds: 600
+    max_retries: 1
+
+tasks:
+  - id: collect_evidence
+    agent_id: evidence_analyst
+    prompt_template: "Collect auditable evidence for {target} in {market} for objective: {objective}. Evidence cutoff: {as_of}."
+    depends_on: []
+
+  - id: challenge_thesis
+    agent_id: skeptical_reviewer
+    prompt_template: "Independently challenge the research objective for {target}: {objective}. Evidence cutoff: {as_of}."
+    depends_on: []
+
+  - id: audit_thesis
+    agent_id: thesis_auditor
+    prompt_template: "Audit the evidence and adversarial review for {target}; retain contradictions and unresolved gaps."
+    depends_on:
+      - collect_evidence
+      - challenge_thesis
+    input_from:
+      evidence: collect_evidence
+      challenge: challenge_thesis
+
+  - id: publish_research
+    agent_id: research_editor
+    prompt_template: "Publish the final independent research memo for {target}, without execution semantics."
+    depends_on:
+      - audit_thesis
+    input_from:
+      audit: audit_thesis
+
+variables:
+  - name: target
+    description: "Normalized security or research target, e.g. NVDA.US"
+    required: true
+  - name: market
+    description: "Market label, e.g. US"
+    required: true
+  - name: objective
+    description: "Research question or thesis to evaluate"
+    required: true
+  - name: as_of
+    description: "Evidence cutoff in YYYY-MM-DD format"
+    required: true

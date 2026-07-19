@@ -28,6 +28,10 @@ class WorkflowSmokeTest(unittest.TestCase):
 - 持仓变化：未获取到可核验的最新披露。
 - 交易变化：未获取到可核验的最新披露。
 - 对今日计划影响：只作为消息层风险背景，不能提升任何标的执行等级。
+## 深度研究状态
+- 已完成研究：无
+- 待处理升级：无
+- 边界：Vibe Swarm 仅为二级研究证据，不提升执行等级。
 ## 执行清单（逐标的）
 ### MU
 - 参考 setup：breakout_pullback_continuation.md

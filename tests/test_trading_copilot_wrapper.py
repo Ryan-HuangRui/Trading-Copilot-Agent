@@ -25,6 +25,11 @@ GOOD_REPORT = """# 今日盘前完整报告（2026-05-26）
 - 交易变化：未获取到可核验的最新披露。
 - 对今日计划影响：只作为消息层风险背景，不能提升任何标的执行等级。
 
+## 深度研究状态
+- 已完成研究：无
+- 待处理升级：无
+- 边界：Vibe Swarm 仅为二级研究证据，不提升执行等级。
+
 ## 重点执行候选
 ### MU
 - 参考 setup：breakout_pullback_continuation.md
@@ -1502,6 +1507,10 @@ class TradingCopilotWrapperTest(unittest.TestCase):
         )
         payload = emit.call_args.args[0]
         self.assertIn("external_disclosures", payload)
+        self.assertEqual(
+            payload["next_agent_inputs"][0],
+            ".codex/skills/tca-pre-market-analysis/SKILL.md",
+        )
         self.assertIn(
             "report/2026-05-26/external-disclosures/trump-trades.json",
             payload["next_agent_inputs"],
@@ -1584,10 +1593,55 @@ class TradingCopilotWrapperTest(unittest.TestCase):
 
         payload = emit.call_args.args[0]
         self.assertIn("--longbridge-watchlist-group", payload["command"])
+        self.assertEqual(
+            payload["next_agent_inputs"][0],
+            ".codex/skills/tca-post-market-review/SKILL.md",
+        )
         self.assertIn("report/2026-05-26/post-market-signals.json", payload["expected_agent_outputs"])
         self.assertIn("report/2026-05-26/intraday.md", payload["next_agent_inputs"])
         self.assertIn("runtime/intraday/2026-05-26/state.json", payload["next_agent_inputs"])
         self.assertIn("runtime/intraday/2026-05-26/events.jsonl", payload["next_agent_inputs"])
+
+    def test_symbol_analysis_context_injects_skill_rulebook_methods_and_four_timeframes(self):
+        output = "report/2026-07-17/symbol-MU-context.json"
+        proc = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "status": "success",
+                    "date": "2026-07-17",
+                    "symbol": "MU",
+                    "requested_intervals": ["1day", "1h", "15min", "5min"],
+                    "market_data_source": "longbridge_with_twelve_data_fallback",
+                    "primary_market_data_source": "longbridge",
+                    "fallback_market_data_source": "twelve",
+                    "output": output,
+                }
+            ),
+            stderr="",
+        )
+        args = Namespace(
+            symbol="MU",
+            date="2026-07-17",
+            timezone="America/New_York",
+            interval=[],
+            market_data_source="longbridge",
+            fallback_market_data_source="twelve",
+            longbridge_cli=None,
+            longbridge_default_market="US",
+            output=None,
+        )
+        with patch.object(trading_copilot, "run_child", return_value=proc), patch.object(
+            trading_copilot, "emit", side_effect=SystemExit
+        ) as emit:
+            with self.assertRaises(SystemExit):
+                trading_copilot.run_symbol_analysis_context(args)
+
+        payload = emit.call_args.args[0]
+        self.assertEqual(payload["next_agent_inputs"][0], ".codex/skills/tca-price-action-analysis/SKILL.md")
+        self.assertIn(output, payload["next_agent_inputs"])
+        self.assertEqual(payload["provider"]["primary_market_data_source"], "longbridge")
 
     def test_post_market_include_agent_research_injects_artifacts_at_wrapper_layer(self):
         proc = subprocess.CompletedProcess(

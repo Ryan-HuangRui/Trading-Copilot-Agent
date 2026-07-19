@@ -8,7 +8,7 @@ from typing import Any
 
 from paper_order_models import validate_order_shape
 from signal_artifacts import read_json, resolve_signals_path, validate_sidecar_payload
-from validate_report import refined_setup_files
+from validate_report import active_method_card_paths, refined_setup_files
 
 
 def as_float(value: Any) -> float | None:
@@ -70,6 +70,7 @@ def validate(args: argparse.Namespace) -> dict[str, Any]:
     repo_root = Path(args.repo_root).resolve()
     sidecar = resolve_signals_path(repo_root, args.date, args.signals, args.session)
     setup_files = refined_setup_files(repo_root)
+    method_card_paths = active_method_card_paths(repo_root)
     errors: list[str] = []
     warnings: list[str] = []
 
@@ -100,6 +101,7 @@ def validate(args: argparse.Namespace) -> dict[str, Any]:
             expected_date=args.date,
             expected_session=args.session,
             setup_files=setup_files,
+            method_card_paths=method_card_paths,
         )
         errors.extend(sidecar_errors)
         warnings.extend(sidecar_warnings)

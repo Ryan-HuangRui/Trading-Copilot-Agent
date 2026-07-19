@@ -120,13 +120,14 @@ python3 script/workflow_smoke_test.py --date <DATE> --week <YYYY-Www>
 
 ## 每日报告流程
 - 交易日判断：`script/trading_day_guard.py`，默认按美股东部时间判断常规交易日
-- 收盘后 daily snapshot：`script/prepare_market_snapshot.py` 拉取最新已完成日线，生成：
+- 收盘后 daily snapshot：`script/prepare_market_snapshot.py` 默认通过长桥拉取最新 `1day`、`1h`、`15min`、`5min` 多周期数据，生成：
   - `raw_data/YYYY-MM-DD/1day/<SYMBOL>.json`
+  - `raw_data/YYYY-MM-DD/{1h,15min,5min}/<SYMBOL>.json`
   - `report/YYYY-MM-DD/daily-snapshot.json`
 - 可选 S&P 500 扩池：收盘后加 `--sp500-screen --sp500-top 100 --sp500-candidates 15`，从 iShares IVV 官方持仓 CSV 获取 S&P 500 权重池，按权重/成交量/成交额/量价结构筛出 15 个动态观察候选，生成：
   - `report/YYYY-MM-DD/candidate-universe.json`
   - 并把动态候选与固定 `config/watchlist.json` 去重合并进 `daily-snapshot.json`
-- 盘后复盘：Agent 读取 `agent/post_market_analysis_prompt.md` + canonical rulebook + snapshot，产出：
+- 盘后复盘：Agent 使用 repo-only `$tca-post-market-review` + canonical rulebook + snapshot，产出：
   - `report/YYYY-MM-DD/post-market.md`
   - `report/YYYY-MM-DD/post-market-signals.json`
 - 次日盘前上下文：`script/prepare_daily_context.py` 读取上一交易日 snapshot，生成：
@@ -134,7 +135,7 @@ python3 script/workflow_smoke_test.py --date <DATE> --week <YYYY-Www>
 - 盘前 wrapper 默认采集特朗普 OGE/Open Cabinet 披露消息层 artifact：
   - `report/YYYY-MM-DD/external-disclosures/trump-trades.json`
   - 可用 `--no-external-disclosures` 关闭；该数据只作为消息层背景，不进入 watchlist 或执行信号
-- 次日盘前分析：Agent 读取 `agent/daily_analysis_prompt.md` + canonical rulebook + pre-market context，产出：
+- 次日盘前分析：Agent 使用 repo-only `$tca-pre-market-analysis` + canonical rulebook + pre-market context，产出：
   - `report/YYYY-MM-DD/exec-brief.md`
   - `report/YYYY-MM-DD/pre-market.md`
   - `report/YYYY-MM-DD/pre-market-signals.json`

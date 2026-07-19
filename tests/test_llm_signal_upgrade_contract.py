@@ -9,8 +9,11 @@ class LlmSignalUpgradeContractTest(unittest.TestCase):
     def read(self, path: str) -> str:
         return (ROOT / path).read_text(encoding="utf-8")
 
-    def test_report_prompts_make_llm_final_sidecar_decision_owner(self):
-        for path in ("agent/daily_analysis_prompt.md", "agent/post_market_analysis_prompt.md"):
+    def test_report_skill_contracts_make_llm_final_sidecar_decision_owner(self):
+        for path in (
+            ".codex/skills/tca-pre-market-analysis/references/report-contract.md",
+            ".codex/skills/tca-post-market-review/references/report-contract.md",
+        ):
             with self.subTest(path=path):
                 text = self.read(path)
                 self.assertIn("最终由报告生成 LLM 判断", text)
@@ -18,6 +21,20 @@ class LlmSignalUpgradeContractTest(unittest.TestCase):
                 self.assertIn("可以在 sidecar 中标记为 `conditional_executable`", text)
                 self.assertNotIn("agent decision 只能帮助降级", text)
                 self.assertNotIn("agent decision 可以降低明日计划等级", text)
+
+    def test_report_prompts_are_thin_skill_triggers(self):
+        cases = {
+            "agent/daily_analysis_prompt.md": "$tca-pre-market-analysis",
+            "agent/post_market_analysis_prompt.md": "$tca-post-market-review",
+            "ops/cc-connect/tca-pre-market-wrapper.prompt.md": "$tca-pre-market-analysis",
+            "ops/cc-connect/tca-post-market-wrapper.prompt.md": "$tca-post-market-review",
+        }
+        for path, skill_name in cases.items():
+            with self.subTest(path=path):
+                text = self.read(path)
+                self.assertIn(skill_name, text)
+                self.assertLessEqual(len(text.splitlines()), 12)
+                self.assertNotIn("【优先使用的 setup 规则池】", text)
 
     def test_agent_research_contract_does_not_block_llm_upgrade(self):
         text = self.read("docs/contracts/agent-research.md")

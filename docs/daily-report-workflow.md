@@ -6,15 +6,17 @@ Paper execution is an execution extension to this report workflow, not a report-
 
 ## Responsibility split
 - `script/`: deterministic data work, market-date checks, path layout, cache fallback, and context generation.
-- `agent/`: report-generation prompts that Codex automation actually reads.
+- `.codex/skills/`: report-analysis workflows and output contracts.
+- `agent/`: thin compatibility triggers that select a dedicated Skill.
 - `canonical rulebook/`: the only trading-rule source for analysis conclusions.
 - `docs/`: runbooks and operational documentation for humans and automation prompts.
 - `AGENTS.md`: engineering guidance for Codex when maintaining this repository. It is not a trading-analysis prompt.
 
-## Prompt loading rules
-- Codex App automation does not automatically load every file under `agent/`.
-- Post-market automation reads only `agent/post_market_analysis_prompt.md` plus the snapshot and refined rules.
-- Pre-market automation reads only `agent/daily_analysis_prompt.md` plus the pre-market context and refined rules.
+## Skill trigger rules
+- Codex App automation does not automatically load every repo-only Skill.
+- Post-market automation explicitly triggers `$tca-post-market-review`; its Skill owns the analysis and artifact contract.
+- Pre-market automation explicitly triggers `$tca-pre-market-analysis`; its Skill owns the analysis and artifact contract.
+- `agent/daily_analysis_prompt.md` and `agent/post_market_analysis_prompt.md` remain thin compatibility triggers only.
 - Legacy OpenClaw/general coaching prompts are archived under `docs/legacy-prompts/` and are not part of scheduled report generation.
 
 ## Canonical data flow
@@ -35,7 +37,7 @@ Paper execution is an execution extension to this report workflow, not a report-
    - `report/<SNAPSHOT_DATE>/post-market-signals.json`
 4. Record LLM report-generation provenance after Codex writes the report artifacts:
    ```bash
-   python3 script/trading_copilot.py llm-generation-manifest --session post-market --date <SNAPSHOT_DATE> --model <MODEL> --prompt agent/post_market_analysis_prompt.md --input report/<SNAPSHOT_DATE>/daily-snapshot.json --generated-output report/<SNAPSHOT_DATE>/post-market.md --generated-output report/<SNAPSHOT_DATE>/post-market-signals.json
+   python3 script/trading_copilot.py llm-generation-manifest --session post-market --date <SNAPSHOT_DATE> --model <MODEL> --prompt .codex/skills/tca-post-market-review/SKILL.md --input report/<SNAPSHOT_DATE>/daily-snapshot.json --generated-output report/<SNAPSHOT_DATE>/post-market.md --generated-output report/<SNAPSHOT_DATE>/post-market-signals.json
    ```
 5. Validate and deliver the generated post-market bundle through the deterministic gates:
    ```bash
@@ -92,7 +94,7 @@ Paper execution is an execution extension to this report workflow, not a report-
    - both Markdown reports must include `## 消息层汇总` with a dedicated `### 特朗普持仓与交易变化` subsection; if no structured or freshly verified disclosure input is available, the subsection must explicitly state the data gap.
 17. Record LLM report-generation provenance after Codex writes the report artifacts:
    ```bash
-   python3 script/trading_copilot.py llm-generation-manifest --session pre-market --date <PRE_MARKET_DATE> --model <MODEL> --prompt agent/daily_analysis_prompt.md --input report/<PRE_MARKET_DATE>/pre-market-context.json --generated-output report/<PRE_MARKET_DATE>/exec-brief.md --generated-output report/<PRE_MARKET_DATE>/pre-market.md --generated-output report/<PRE_MARKET_DATE>/pre-market-signals.json
+   python3 script/trading_copilot.py llm-generation-manifest --session pre-market --date <PRE_MARKET_DATE> --model <MODEL> --prompt .codex/skills/tca-pre-market-analysis/SKILL.md --input report/<PRE_MARKET_DATE>/pre-market-context.json --generated-output report/<PRE_MARKET_DATE>/exec-brief.md --generated-output report/<PRE_MARKET_DATE>/pre-market.md --generated-output report/<PRE_MARKET_DATE>/pre-market-signals.json
    ```
 18. Validate and deliver the generated pre-market bundle through the deterministic gates:
    ```bash
@@ -126,13 +128,13 @@ Run:
 python3 script/prepare_market_snapshot.py --watchlist config/watchlist.json --skip-non-trading-day --sp500-screen --sp500-top 100 --sp500-candidates 15 --include-journal-signals --include-position-symbols
 ```
 
-If output contains `skipped=true`, stop. If the generated `daily-snapshot.json` contains `stale_data=true`, write a short status note and stop. Otherwise read `agent/post_market_analysis_prompt.md`, `canonical rulebook/`, and `report/<SNAPSHOT_DATE>/daily-snapshot.json`, then generate `report/<SNAPSHOT_DATE>/post-market.md` and `report/<SNAPSHOT_DATE>/post-market-signals.json`.
+If output contains `skipped=true`, stop. If the generated `daily-snapshot.json` contains `stale_data=true`, write a short status note and stop. Otherwise use `$tca-post-market-review` with the canonical rulebook and `report/<SNAPSHOT_DATE>/daily-snapshot.json`, then generate `report/<SNAPSHOT_DATE>/post-market.md` and `report/<SNAPSHOT_DATE>/post-market-signals.json`.
 
 The dynamic universe uses iShares IVV holdings CSV as the default source and falls back to Slickcharts if the primary source fails. If the screener itself fails, the snapshot still continues with the fixed watchlist and records the failure in `candidate-universe.json`.
 
 After `post-market.md` is generated, record the LLM generation manifest and hand the bundle to the deterministic delivery wrapper:
 ```bash
-python3 script/trading_copilot.py llm-generation-manifest --session post-market --date <SNAPSHOT_DATE> --model <MODEL> --prompt agent/post_market_analysis_prompt.md --input report/<SNAPSHOT_DATE>/daily-snapshot.json --generated-output report/<SNAPSHOT_DATE>/post-market.md --generated-output report/<SNAPSHOT_DATE>/post-market-signals.json
+python3 script/trading_copilot.py llm-generation-manifest --session post-market --date <SNAPSHOT_DATE> --model <MODEL> --prompt .codex/skills/tca-post-market-review/SKILL.md --input report/<SNAPSHOT_DATE>/daily-snapshot.json --generated-output report/<SNAPSHOT_DATE>/post-market.md --generated-output report/<SNAPSHOT_DATE>/post-market-signals.json
 python3 script/trading_copilot.py post-market-deliver --date <SNAPSHOT_DATE> --sync-longbridge --execute-sync --append-outcomes --append-lessons --append-self-review
 ```
 
@@ -146,7 +148,7 @@ python3 script/trading_copilot.py pre-market-plan --watchlist config/watchlist.j
 
 The wrapper runs `external_disclosure_provider.py` by default and writes `report/<PRE_MARKET_DATE>/external-disclosures/trump-trades.json`. If the disclosure source fails, keep the generated status artifact as message-layer context and continue with the report; the report must state the data gap. Use `--no-external-disclosures` only when this source is intentionally disabled.
 
-If output contains `skipped=true`, stop. Otherwise read `agent/daily_analysis_prompt.md`, `canonical rulebook/`, and `report/<PRE_MARKET_DATE>/pre-market-context.json`, then generate:
+If output contains `skipped=true`, stop. Otherwise use `$tca-pre-market-analysis` with the canonical rulebook and `report/<PRE_MARKET_DATE>/pre-market-context.json`, then generate:
 - `report/<PRE_MARKET_DATE>/exec-brief.md`
 - `report/<PRE_MARKET_DATE>/pre-market.md`
 - `report/<PRE_MARKET_DATE>/pre-market-signals.json`
@@ -155,7 +157,7 @@ The two Markdown reports must include a `## 消息层汇总` section with a dedi
 
 After `exec-brief.md` and `pre-market.md` are generated, record the LLM generation manifest and hand the bundle to the deterministic delivery wrapper:
 ```bash
-python3 script/trading_copilot.py llm-generation-manifest --session pre-market --date <PRE_MARKET_DATE> --model <MODEL> --prompt agent/daily_analysis_prompt.md --input report/<PRE_MARKET_DATE>/pre-market-context.json --generated-output report/<PRE_MARKET_DATE>/exec-brief.md --generated-output report/<PRE_MARKET_DATE>/pre-market.md --generated-output report/<PRE_MARKET_DATE>/pre-market-signals.json
+python3 script/trading_copilot.py llm-generation-manifest --session pre-market --date <PRE_MARKET_DATE> --model <MODEL> --prompt .codex/skills/tca-pre-market-analysis/SKILL.md --input report/<PRE_MARKET_DATE>/pre-market-context.json --generated-output report/<PRE_MARKET_DATE>/exec-brief.md --generated-output report/<PRE_MARKET_DATE>/pre-market.md --generated-output report/<PRE_MARKET_DATE>/pre-market-signals.json
 python3 script/trading_copilot.py pre-market-deliver --date <PRE_MARKET_DATE> --sync-longbridge --execute-sync
 ```
 

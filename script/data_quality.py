@@ -177,6 +177,23 @@ def abnormal_moves(symbols: dict[str, dict[str, Any]], threshold_pct: float) -> 
     return rows
 
 
+def timeframe_error_rows(snapshot: dict[str, Any], focus: set[str] | None = None) -> list[dict[str, Any]]:
+    rows = []
+    raw_rows = snapshot.get("timeframe_errors")
+    if not isinstance(raw_rows, list):
+        return rows
+    for raw in raw_rows:
+        if not isinstance(raw, dict):
+            continue
+        symbol = normalized_symbol(raw.get("symbol"))
+        if focus is not None and symbol not in focus:
+            continue
+        row = dict(raw)
+        row["symbol"] = symbol
+        rows.append(row)
+    return rows
+
+
 def load_snapshot(repo_root: Path, date: str, explicit_snapshot: str | None) -> tuple[dict[str, Any], str]:
     if explicit_snapshot:
         path = resolve_path(repo_root, explicit_snapshot, repo_root / explicit_snapshot)
@@ -266,7 +283,13 @@ def phase_freshness(
 def status_for(payload: dict[str, Any]) -> str:
     if payload["missing_focused_symbols"]:
         return "fail"
-    if payload["stale_data"] or payload["focused_fallback_symbols"] or payload["account_price_deltas"] or payload["abnormal_moves"]:
+    if (
+        payload["stale_data"]
+        or payload["focused_fallback_symbols"]
+        or payload["focused_timeframe_errors"]
+        or payload["account_price_deltas"]
+        or payload["abnormal_moves"]
+    ):
         return "warn"
     return "pass"
 
@@ -294,6 +317,12 @@ def markdown(payload: dict[str, Any]) -> str:
     if payload["focused_fallback_symbols"]:
         for row in payload["focused_fallback_symbols"]:
             lines.append(f"- {row['symbol']}: {row.get('provider')} fallback_from={row.get('fallback_from')} error={row.get('primary_error')}")
+    else:
+        lines.append("- none")
+    lines.extend(["", "## Focused Timeframe Errors"])
+    if payload["focused_timeframe_errors"]:
+        for row in payload["focused_timeframe_errors"]:
+            lines.append(f"- {json.dumps(row, ensure_ascii=False, sort_keys=True)}")
     else:
         lines.append("- none")
     lines.extend(["", "## Missing Focused Symbols"])
@@ -332,6 +361,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     focus_set = set(focus)
     missing_focus = sorted(symbol for symbol in focus if symbol not in symbols)
     focused_fallback = fallback_rows(symbols, focus_set)
+    timeframe_errors = timeframe_error_rows(snapshot)
+    focused_timeframe_errors = timeframe_error_rows(snapshot, focus_set)
     freshness = phase_freshness(session=args.session, date=args.date, snapshot=snapshot, symbols=symbols)
     provider_fields = provider_phase_summary(symbols, focused_fallback)
     account_deltas, account_path = account_price_deltas(
@@ -358,6 +389,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "missing_focused_symbols": missing_focus,
         "fallback_symbols": fallback_rows(symbols),
         "focused_fallback_symbols": focused_fallback,
+        "timeframe_errors": timeframe_errors,
+        "focused_timeframe_errors": focused_timeframe_errors,
         "account_price_deltas": account_deltas,
         "abnormal_moves": abnormal_moves(symbols, args.abnormal_move_threshold_pct),
         "snapshot_errors": snapshot.get("errors", []),
@@ -376,6 +409,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "quality_status": payload["status"],
         "artifacts": [str(json_path), str(md_path)],
         "focused_fallback_symbols": payload["focused_fallback_symbols"],
+        "focused_timeframe_errors": payload["focused_timeframe_errors"],
         "missing_focused_symbols": payload["missing_focused_symbols"],
         "account_price_deltas": payload["account_price_deltas"],
         "abnormal_moves": payload["abnormal_moves"],

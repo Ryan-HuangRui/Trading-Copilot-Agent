@@ -1,0 +1,7 @@
+interface:
+  display_name: "TCA Post-Market Review"
+  short_description: "Review market close and next-day plans"
+  default_prompt: "Use $tca-post-market-review to run the Trading-Copilot-Agent post-market review workflow."
+
+policy:
+  allow_implicit_invocation: true

@@ -57,6 +57,12 @@ class MarketSnapshotContractTest(unittest.TestCase):
 
         self.assertEqual(snapshot["watchlist_symbols"], ["MU", "BRK.B"])
         self.assertEqual([item["symbol"] for item in snapshot["symbols"]], ["MU", "BRK.B"])
+        self.assertEqual(snapshot["requested_intervals"], ["1day", "1h", "15min", "5min"])
+        for item in snapshot["symbols"]:
+            self.assertEqual(
+                list(item["price_evidence"]["bars"]),
+                ["1day", "1h", "15min", "5min"],
+            )
 
     def test_longbridge_symbol_adds_market_suffix_without_mangling_share_class(self):
         self.assertEqual(longbridge_symbol("MU"), "MU.US")

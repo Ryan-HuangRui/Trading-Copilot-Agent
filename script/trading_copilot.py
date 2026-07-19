@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from knowledge_source import KnowledgeSourceError, canonical_rulebook_input
+from knowledge_source import KnowledgeSourceError, analysis_methods_input, canonical_rulebook_input
 
 ROOT = Path(__file__).resolve().parents[1]
 US_MARKET_SUFFIX = ".US"
@@ -95,6 +95,14 @@ def rulebook_input() -> str:
         return canonical_rulebook_input(ROOT)
     except KnowledgeSourceError as exc:
         raise RuntimeError(f"canonical Trading Copilot rulebook unavailable: {exc}") from exc
+
+
+def analysis_methods_input_path() -> str:
+    """Return direct-consumption external price-action methods context."""
+    try:
+        return analysis_methods_input(ROOT)
+    except KnowledgeSourceError as exc:
+        raise RuntimeError(f"Trading Copilot analysis methods unavailable: {exc}") from exc
 
 
 def write_json(path: Path, payload: Dict[str, Any]) -> None:
@@ -277,6 +285,148 @@ def run_agent_research_pipeline(
     }
 
 
+def attach_vibe_research_inputs(
+    *,
+    response: Dict[str, Any],
+    date: str,
+    session: str,
+    include: bool,
+    explicit_path: str | None,
+) -> None:
+    """Attach completed Vibe research artifacts without invoking MCP.
+
+    The Codex-orchestrated MCP workflow persists and indexes runs separately.
+    Scheduled Python workflows only validate and consume existing artifacts, so
+    missing, pending, or failed deep research never blocks the main workflow.
+    """
+    if not include and not explicit_path:
+        return
+    context_path = (
+        resolve_repo_path(explicit_path)
+        if explicit_path
+        else ROOT / "report" / date / "agents" / "vibe-research-context.json"
+    )
+    try:
+        context_path.resolve().relative_to(ROOT.resolve())
+    except ValueError:
+        response["vibe_research"] = {
+            "status": "failed",
+            "reason": f"Vibe research context must stay inside repository: {context_path}",
+            "artifacts": [],
+            "usable_runs": 0,
+        }
+        return
+    if not context_path.exists():
+        response["vibe_research"] = {
+            "status": "skipped",
+            "reason": f"optional Vibe research context not found: {relative_artifact(str(context_path))}",
+            "artifacts": [],
+            "usable_runs": 0,
+        }
+        return
+    try:
+        payload = load_json(context_path)
+        if payload.get("schema_version") != 1:
+            raise ValueError("unsupported schema_version")
+        runs = payload.get("runs")
+        if not isinstance(runs, list):
+            raise ValueError("runs must be an array")
+        usable_runs: List[Dict[str, Any]] = []
+        pending_runs = 0
+        artifacts = [relative_artifact(str(context_path))]
+        for row in runs:
+            if not isinstance(row, dict):
+                continue
+            if row.get("status") != "completed" or not row.get("usable_as_agent_evidence"):
+                if row.get("status") in {"pending", "running"}:
+                    pending_runs += 1
+                continue
+            row_artifacts = row.get("artifacts")
+            if not isinstance(row_artifacts, list) or not row_artifacts:
+                raise ValueError(f"completed run {row.get('run_id')} has no artifacts")
+            for artifact in row_artifacts:
+                if not isinstance(artifact, dict) or not artifact.get("path"):
+                    raise ValueError(f"completed run {row.get('run_id')} has invalid artifact metadata")
+                artifact_path = resolve_repo_path(str(artifact["path"]))
+                try:
+                    artifact_path.resolve().relative_to(ROOT.resolve())
+                except ValueError as exc:
+                    raise ValueError(
+                        f"Vibe artifact must stay inside repository: {artifact_path}"
+                    ) from exc
+                if not artifact_path.exists():
+                    raise ValueError(f"missing Vibe artifact: {relative_artifact(str(artifact_path))}")
+                expected_hash = artifact.get("sha256")
+                if expected_hash and hash_file(artifact_path) != expected_hash:
+                    raise ValueError(f"Vibe artifact hash mismatch: {relative_artifact(str(artifact_path))}")
+                artifacts.append(relative_artifact(str(artifact_path)))
+            usable_runs.append(row)
+        status = "success" if usable_runs else "skipped"
+        reason = None if usable_runs else "no completed Vibe research run is available"
+        response["vibe_research"] = {
+            "status": status,
+            "reason": reason,
+            "context_date": payload.get("date"),
+            "session": session,
+            "artifacts": sorted(dict.fromkeys(artifacts)),
+            "usable_runs": len(usable_runs),
+            "pending_runs": pending_runs,
+            "run_ids": [str(row.get("run_id")) for row in usable_runs],
+            "policy": payload.get("policy", {}),
+        }
+        if usable_runs:
+            response["artifacts"].extend(response["vibe_research"]["artifacts"])
+            response["next_agent_inputs"].extend(response["vibe_research"]["artifacts"])
+    except Exception as exc:
+        response["vibe_research"] = {
+            "status": "failed",
+            "reason": str(exc),
+            "artifacts": [relative_artifact(str(context_path))],
+            "usable_runs": 0,
+        }
+
+
+def run_vibe_research_context(args: argparse.Namespace) -> None:
+    command = [
+        "script/vibe_research_context.py",
+        "--date",
+        args.date,
+        "--session",
+        args.session,
+        "--run-id",
+        args.run_id,
+        "--target",
+        args.target,
+        "--objective",
+        args.objective,
+        "--as-of",
+        args.as_of,
+        "--status",
+        args.status,
+        "--quality-label",
+        args.quality_label,
+        "--confidence",
+        str(args.confidence),
+    ]
+    for symbol in args.symbol or []:
+        command.extend(["--symbol", symbol])
+    for name in ("result", "summary", "provider", "model", "output"):
+        value = getattr(args, name, None)
+        if value:
+            command.extend([f"--{name.replace('_', '-')}", str(value)])
+    for limitation in args.limitation or []:
+        command.extend(["--limitation", limitation])
+    proc = run_child(command)
+    stdout = parse_json_output(proc.stdout)
+    if proc.returncode != 0:
+        emit(failed_response("vibe-research-context", command, proc), 1)
+    response = base_response("vibe-research-context", command, stdout)
+    response["date"] = args.date
+    response["artifacts"] = (stdout or {}).get("artifacts", [])
+    response["run"] = (stdout or {}).get("run")
+    emit(response)
+
+
 def run_external_disclosure_pipeline(
     *,
     date: str,
@@ -383,7 +533,6 @@ def run_pre_market(args: argparse.Namespace) -> None:
         command.extend(["--snapshot-date", args.snapshot_date])
     if args.skip_non_trading_day:
         command.append("--skip-non-trading-day")
-
     proc = run_child(command)
     stdout = parse_json_output(proc.stdout)
     if proc.returncode != 0:
@@ -396,8 +545,9 @@ def run_pre_market(args: argparse.Namespace) -> None:
         context_path = stdout.get("context_path")
         response["artifacts"] = [context_path] if context_path else []
         response["next_agent_inputs"] = [
-            "agent/daily_analysis_prompt.md",
+            ".codex/skills/tca-pre-market-analysis/SKILL.md",
             rulebook_input(),
+            analysis_methods_input_path(),
             context_path,
         ]
         response["expected_agent_outputs"] = [
@@ -438,6 +588,13 @@ def run_pre_market(args: argparse.Namespace) -> None:
                 emit(response, 1)
             response["artifacts"].extend(research.get("artifacts", []))
             response["next_agent_inputs"].extend(research.get("artifacts", []))
+        attach_vibe_research_inputs(
+            response=response,
+            date=str(stdout.get("report_date")),
+            session="pre-market",
+            include=bool(getattr(args, "include_vibe_research", False)),
+            explicit_path=getattr(args, "vibe_research_context", None),
+        )
     emit(response)
 
 
@@ -471,6 +628,10 @@ def run_post_market(args: argparse.Namespace) -> None:
         command.extend(["--date", args.date])
     if args.skip_non_trading_day:
         command.append("--skip-non-trading-day")
+    if getattr(args, "no_multi_timeframe", False):
+        command.append("--no-multi-timeframe")
+    for supplemental_interval in getattr(args, "supplemental_interval", []) or []:
+        command.extend(["--supplemental-interval", supplemental_interval])
     if args.sp500_screen:
         command.append("--sp500-screen")
         command.extend(["--sp500-top", str(args.sp500_top)])
@@ -499,8 +660,9 @@ def run_post_market(args: argparse.Namespace) -> None:
         response["watchlist_source"] = stdout.get("watchlist_source")
         response["artifacts"] = artifacts
         response["next_agent_inputs"] = [
-            "agent/post_market_analysis_prompt.md",
+            ".codex/skills/tca-post-market-review/SKILL.md",
             rulebook_input(),
+            analysis_methods_input_path(),
             stdout.get("snapshot_path"),
             f"report/{stdout.get('snapshot_date')}/intraday.md",
             f"runtime/intraday/{stdout.get('snapshot_date')}/state.json",
@@ -525,6 +687,58 @@ def run_post_market(args: argparse.Namespace) -> None:
                 emit(response, 1)
             response["artifacts"].extend(research.get("artifacts", []))
             response["next_agent_inputs"].extend(research.get("artifacts", []))
+        attach_vibe_research_inputs(
+            response=response,
+            date=str(stdout.get("snapshot_date")),
+            session="post-market",
+            include=bool(getattr(args, "include_vibe_research", False)),
+            explicit_path=getattr(args, "vibe_research_context", None),
+        )
+    emit(response)
+
+
+def run_symbol_analysis_context(args: argparse.Namespace) -> None:
+    command = [
+        "script/prepare_symbol_context.py",
+        "--symbol",
+        args.symbol,
+        "--timezone",
+        args.timezone,
+        "--market-data-source",
+        args.market_data_source,
+        "--fallback-market-data-source",
+        args.fallback_market_data_source,
+    ]
+    if args.date:
+        command.extend(["--date", args.date])
+    for interval in args.interval or []:
+        command.extend(["--interval", interval])
+    if args.longbridge_cli:
+        command.extend(["--longbridge-cli", args.longbridge_cli])
+    if args.longbridge_default_market:
+        command.extend(["--longbridge-default-market", args.longbridge_default_market])
+    if args.output:
+        command.extend(["--output", args.output])
+
+    proc = run_child(command)
+    stdout = parse_json_output(proc.stdout)
+    if proc.returncode != 0:
+        emit(failed_response("symbol-analysis-context", command, proc), 1)
+    response = base_response("symbol-analysis-context", command, stdout)
+    response["date"] = (stdout or {}).get("date")
+    output = (stdout or {}).get("output")
+    response["artifacts"] = [output] if output else []
+    response["provider"] = {
+        "market_data_source": (stdout or {}).get("market_data_source"),
+        "primary_market_data_source": (stdout or {}).get("primary_market_data_source"),
+        "fallback_market_data_source": (stdout or {}).get("fallback_market_data_source"),
+    }
+    response["next_agent_inputs"] = [
+        ".codex/skills/tca-price-action-analysis/SKILL.md",
+        rulebook_input(),
+        analysis_methods_input_path(),
+        output,
+    ]
     emit(response)
 
 
@@ -556,6 +770,7 @@ def run_monitor(args: argparse.Namespace) -> None:
     response["next_agent_inputs"] = [
         args.output,
         rulebook_input(),
+        analysis_methods_input_path(),
     ]
     emit(response)
 
@@ -598,6 +813,7 @@ def run_intraday_tracker(args: argparse.Namespace) -> None:
     response["next_agent_inputs"] = [
         f"report/{response['date']}/intraday.md" if response.get("date") else "report/<DATE>/intraday.md",
         rulebook_input(),
+        analysis_methods_input_path(),
     ]
     emit(response)
 
@@ -1794,6 +2010,8 @@ def manifest_base(date: str, session: str, workflow: str, args: argparse.Namespa
             "watchlist": hash_file(resolve_repo_path(getattr(args, "watchlist", "config/watchlist.json"))),
             "daily_prompt": hash_file(ROOT / "agent" / "daily_analysis_prompt.md"),
             "post_market_prompt": hash_file(ROOT / "agent" / "post_market_analysis_prompt.md"),
+            "pre_market_skill": hash_file(ROOT / ".codex" / "skills" / "tca-pre-market-analysis" / "SKILL.md"),
+            "post_market_skill": hash_file(ROOT / ".codex" / "skills" / "tca-post-market-review" / "SKILL.md"),
             "knowledge_refined": hash_tree(ROOT / "knowledge" / "refined"),
             "signals": hash_file(signals_path),
             "llm_generation": hash_file(llm_manifest),
@@ -3556,6 +3774,8 @@ def build_parser() -> argparse.ArgumentParser:
     pre.add_argument("--no-longbridge-watchlist-refresh", dest="refresh_longbridge_watchlist", action="store_false", default=True)
     pre.add_argument("--include-agent-research", action="store_true")
     pre.add_argument("--agent-symbol", action="append", default=[])
+    pre.add_argument("--include-vibe-research", action="store_true")
+    pre.add_argument("--vibe-research-context")
     pre.add_argument("--include-external-disclosures", dest="include_external_disclosures", action="store_true", default=True)
     pre.add_argument("--no-external-disclosures", dest="include_external_disclosures", action="store_false")
     pre.add_argument("--external-disclosure-symbol", action="append", default=[])
@@ -3629,6 +3849,8 @@ def build_parser() -> argparse.ArgumentParser:
     post.add_argument("--watchlist", default="config/watchlist.json")
     post.add_argument("--interval", default="1day")
     post.add_argument("--outputsize", type=int, default=200)
+    post.add_argument("--supplemental-interval", action="append")
+    post.add_argument("--no-multi-timeframe", action="store_true")
     post.add_argument("--date")
     post.add_argument("--timezone", default="America/New_York")
     post.add_argument("--skip-non-trading-day", action="store_true")
@@ -3648,7 +3870,24 @@ def build_parser() -> argparse.ArgumentParser:
     post.add_argument("--no-longbridge-watchlist-refresh", dest="refresh_longbridge_watchlist", action="store_false", default=True)
     post.add_argument("--include-agent-research", action="store_true")
     post.add_argument("--agent-symbol", action="append", default=[])
+    post.add_argument("--include-vibe-research", action="store_true")
+    post.add_argument("--vibe-research-context")
     post.set_defaults(func=run_post_market)
+
+    symbol_context = sub.add_parser(
+        "symbol-analysis-context",
+        help="Fetch Longbridge-first multi-timeframe context for one ticker",
+    )
+    symbol_context.add_argument("--symbol", required=True)
+    symbol_context.add_argument("--date")
+    symbol_context.add_argument("--timezone", default="America/New_York")
+    symbol_context.add_argument("--interval", action="append")
+    symbol_context.add_argument("--market-data-source", choices=["longbridge", "twelve"], default="longbridge")
+    symbol_context.add_argument("--fallback-market-data-source", choices=["twelve", "longbridge", "none"], default="twelve")
+    symbol_context.add_argument("--longbridge-cli")
+    symbol_context.add_argument("--longbridge-default-market", default="US")
+    symbol_context.add_argument("--output")
+    symbol_context.set_defaults(func=run_symbol_analysis_context)
 
     monitor = sub.add_parser("monitor-brief", help="Run intraday monitor scan")
     monitor.add_argument("--state", default="config/monitor_state.json")
@@ -3773,6 +4012,40 @@ def build_parser() -> argparse.ArgumentParser:
     agent_context.add_argument("--config", default="config/agent_research.json")
     agent_context.add_argument("--output")
     agent_context.set_defaults(func=run_agent_research_context)
+
+    vibe_context = sub.add_parser(
+        "vibe-research-context",
+        help="Index a persisted Vibe Swarm run for optional agent research input",
+    )
+    vibe_context.add_argument("--date", required=True)
+    vibe_context.add_argument(
+        "--session",
+        choices=["pre-market", "post-market", "research"],
+        required=True,
+    )
+    vibe_context.add_argument("--run-id", required=True)
+    vibe_context.add_argument("--target", required=True)
+    vibe_context.add_argument("--symbol", action="append", required=True)
+    vibe_context.add_argument("--objective", required=True)
+    vibe_context.add_argument("--as-of", required=True)
+    vibe_context.add_argument(
+        "--status",
+        choices=["pending", "running", "completed", "failed", "stale"],
+        required=True,
+    )
+    vibe_context.add_argument("--result")
+    vibe_context.add_argument("--summary")
+    vibe_context.add_argument("--provider")
+    vibe_context.add_argument("--model")
+    vibe_context.add_argument(
+        "--quality-label",
+        choices=["RESEARCH_ONLY", "WATCH", "NO_TRADE"],
+        default="RESEARCH_ONLY",
+    )
+    vibe_context.add_argument("--confidence", type=float, default=0.5)
+    vibe_context.add_argument("--limitation", action="append", default=[])
+    vibe_context.add_argument("--output")
+    vibe_context.set_defaults(func=run_vibe_research_context)
 
     agent_reports = sub.add_parser("agent-research-reports", help="Write Phase 0 placeholder agent research reports")
     agent_reports.add_argument("--date", required=True)

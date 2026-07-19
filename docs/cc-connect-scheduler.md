@@ -96,6 +96,10 @@ Update the configured cc connect production tasks to execute `ops/cc-connect/tca
 - Market-data preparation should use the repo default provider stack: Longbridge CLI primary, Twelve Data fallback.
 - Both workflows should call `pre-market-deliver` or `post-market-deliver` after report generation. These wrappers run `validate-report`, `validate-trade-plan`, `data-quality`, `focus-selection`, journal append, Feishu summary, run manifest, and optional Longbridge sync. Post-market delivery also runs `daily-workflow-review` before `feishu-summary`.
 - Optional agent research enhancement may be enabled with `--include-agent-research` on `pre-market-plan` and `post-market-review`; generated agent artifacts are evidence inputs only.
+- Optional completed Vibe Swarm research may be consumed with
+  `--include-vibe-research`. MCP invocation remains Codex-orchestrated; Python
+  only hash-indexes persisted artifacts. Missing or pending Swarm runs are
+  non-blocking, and each scheduled session may escalate at most one symbol.
 - If agent research is enabled, cc connect must also surface `validate-agent-reports` / `validate-agent-decision` failures as blocking status before report generation consumes those artifacts.
 - Agent report validation now fails when `market` or `technicals` evidence is empty. Empty `fundamentals`, `news`, or `sentiment` evidence remains a warning and must be disclosed in the Feishu summary or status note.
 - Agent memory tasks are optional and must remain review-only: `agent-memory-append`, `agent-memory-review`, and `agent-memory-export` cannot modify `canonical rulebook/` or raise execution status.
@@ -286,9 +290,9 @@ Repository workflow stages:
 ```bash
 python3 script/trading_copilot.py pre-market-plan --watchlist config/watchlist.json --skip-non-trading-day
 # Or replace the previous line with this optional evidence-enhanced wrapper call:
-python3 script/trading_copilot.py pre-market-plan --watchlist config/watchlist.json --skip-non-trading-day --include-agent-research
+python3 script/trading_copilot.py pre-market-plan --watchlist config/watchlist.json --skip-non-trading-day --include-agent-research --include-vibe-research
 # Codex generates report/<DATE>/exec-brief.md, report/<DATE>/pre-market.md, report/<DATE>/pre-market-signals.json
-python3 script/trading_copilot.py llm-generation-manifest --session pre-market --date <DATE> --model <MODEL> --prompt agent/daily_analysis_prompt.md --input report/<DATE>/pre-market-context.json --generated-output report/<DATE>/exec-brief.md --generated-output report/<DATE>/pre-market.md --generated-output report/<DATE>/pre-market-signals.json
+python3 script/trading_copilot.py llm-generation-manifest --session pre-market --date <DATE> --model <MODEL> --prompt .codex/skills/tca-pre-market-analysis/SKILL.md --input report/<DATE>/pre-market-context.json --generated-output report/<DATE>/exec-brief.md --generated-output report/<DATE>/pre-market.md --generated-output report/<DATE>/pre-market-signals.json
 python3 script/trading_copilot.py pre-market-deliver --date <DATE> --sync-longbridge --execute-sync
 ```
 
@@ -314,9 +318,9 @@ Repository workflow stages:
 ```bash
 python3 script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day --include-journal-signals --include-position-symbols
 # Or replace the previous line with this optional evidence-enhanced wrapper call:
-python3 script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day --include-journal-signals --include-position-symbols --include-agent-research
+python3 script/trading_copilot.py post-market-review --watchlist config/watchlist.json --skip-non-trading-day --include-journal-signals --include-position-symbols --include-agent-research --include-vibe-research
 # Codex reads optional report/<DATE>/intraday.md and runtime/intraday/<DATE>/{state.json,events.jsonl}, then generates report/<DATE>/post-market.md and report/<DATE>/post-market-signals.json
-python3 script/trading_copilot.py llm-generation-manifest --session post-market --date <DATE> --model <MODEL> --prompt agent/post_market_analysis_prompt.md --input report/<DATE>/daily-snapshot.json --generated-output report/<DATE>/post-market.md --generated-output report/<DATE>/post-market-signals.json
+python3 script/trading_copilot.py llm-generation-manifest --session post-market --date <DATE> --model <MODEL> --prompt .codex/skills/tca-post-market-review/SKILL.md --input report/<DATE>/daily-snapshot.json --generated-output report/<DATE>/post-market.md --generated-output report/<DATE>/post-market-signals.json
 python3 script/trading_copilot.py post-market-deliver --date <DATE> --sync-longbridge --execute-sync --append-outcomes --append-lessons --append-self-review
 ```
 

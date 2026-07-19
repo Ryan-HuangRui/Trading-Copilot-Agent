@@ -16,6 +16,10 @@ from sp500_universe import (
 )
 
 
+DEFAULT_SUPPLEMENTAL_INTERVALS = ("1h", "15min", "5min")
+SUPPLEMENTAL_OUTPUTSIZE = {"1h": 120, "15min": 120, "5min": 120}
+
+
 def load_env(repo_root: Path) -> None:
     env_file = repo_root / ".env"
     if not env_file.exists():
@@ -135,6 +139,17 @@ def merge_symbols(primary: list[str], secondary: list[str]) -> list[str]:
     return merged
 
 
+def normalize_intervals(values: list[str] | tuple[str, ...]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        interval = str(value or "").strip().lower()
+        if interval and interval not in seen:
+            seen.add(interval)
+            result.append(interval)
+    return result
+
+
 def fetch_symbol_snapshot(
     client,
     symbol: str,
@@ -146,6 +161,66 @@ def fetch_symbol_snapshot(
     data = client.time_series(symbol=symbol, interval=interval, outputsize=outputsize)
     save_json(path, data)
     return build_symbol_snapshot(symbol, data, path), path
+
+
+def attach_price_evidence(
+    *,
+    client,
+    repo_root: Path,
+    snapshot_date: str,
+    symbol_snapshot: dict,
+    primary_interval: str,
+    supplemental_intervals: list[str],
+) -> list[dict]:
+    symbol = str(symbol_snapshot.get("symbol") or "").upper()
+    bars_by_interval = {primary_interval: list(symbol_snapshot.get("bars") or [])}
+    providers = {
+        primary_interval: str((symbol_snapshot.get("meta") or {}).get("provider") or "unknown")
+    }
+    raw_paths = {primary_interval: str(symbol_snapshot.get("raw_path") or "")}
+    errors: dict[str, str] = {}
+    error_rows: list[dict] = []
+
+    for interval in supplemental_intervals:
+        if interval == primary_interval or interval in bars_by_interval:
+            continue
+        raw_dir = raw_data_dir(repo_root, snapshot_date, interval)
+        raw_dir.mkdir(parents=True, exist_ok=True)
+        raw_path = raw_dir / f"{symbol}.json"
+        try:
+            data = client.time_series(
+                symbol=symbol,
+                interval=interval,
+                outputsize=SUPPLEMENTAL_OUTPUTSIZE.get(interval, 120),
+            )
+            save_json(raw_path, data)
+            bars_by_interval[interval] = list(data.get("values") or [])[:120]
+            providers[interval] = str((data.get("meta") or {}).get("provider") or "unknown")
+            raw_paths[interval] = str(raw_path)
+        except Exception as exc:
+            cached = load_cached_json(raw_path)
+            if cached is not None:
+                bars_by_interval[interval] = list(cached.get("values") or [])[:120]
+                providers[interval] = str((cached.get("meta") or {}).get("provider") or "cached")
+                raw_paths[interval] = str(raw_path)
+                errors[interval] = f"{exc}; used_cache=true"
+                error_rows.append(
+                    {"symbol": symbol, "interval": interval, "error": str(exc), "used_cache": True}
+                )
+            else:
+                bars_by_interval[interval] = []
+                errors[interval] = str(exc)
+                error_rows.append({"symbol": symbol, "interval": interval, "error": str(exc)})
+
+    symbol_snapshot["price_evidence"] = {
+        "primary_interval": primary_interval,
+        "requested_intervals": [primary_interval, *supplemental_intervals],
+        "bars": bars_by_interval,
+        "providers": providers,
+        "raw_paths": raw_paths,
+        "errors": errors,
+    }
+    return error_rows
 
 
 def build_sp500_screen(
@@ -221,6 +296,7 @@ def build_market_snapshot(
     fallback_market_data_source: str = "twelve",
     longbridge_cli: str | None = None,
     longbridge_default_market: str = "US",
+    supplemental_intervals: list[str] | None = None,
 ) -> tuple[dict, Path]:
     load_env(repo_root)
     watch = json.loads((repo_root / watchlist_path).read_text(encoding="utf-8"))
@@ -274,6 +350,9 @@ def build_market_snapshot(
 
     extra_symbols = merge_symbols(extra_symbols or [], [])
     symbols = merge_symbols(merge_symbols(watchlist_symbols, dynamic_symbols), extra_symbols)
+    supplemental_intervals = normalize_intervals(
+        DEFAULT_SUPPLEMENTAL_INTERVALS if supplemental_intervals is None else supplemental_intervals
+    )
 
     snapshot = {
         "snapshot_date": snapshot_date,
@@ -284,12 +363,14 @@ def build_market_snapshot(
         "market_data_source": getattr(client, "name", market_data_source),
         "primary_market_data_source": market_data_source,
         "fallback_market_data_source": fallback_market_data_source,
+        "requested_intervals": [interval, *[item for item in supplemental_intervals if item != interval]],
         "trading_day": trading_day,
         "dynamic_universe_enabled": sp500_screen,
         "dynamic_universe_symbols": dynamic_symbols,
         "extra_symbols": extra_symbols,
         "symbols": [],
         "errors": [],
+        "timeframe_errors": [],
     }
     if screen_payload:
         snapshot["candidate_universe_path"] = str(candidate_universe_path(repo_root, snapshot_date))
@@ -311,6 +392,16 @@ def build_market_snapshot(
             if symbol in extra_symbols:
                 sources.add("extra_symbols")
             symbol_snapshot["sources"] = sorted(sources)
+            snapshot["timeframe_errors"].extend(
+                attach_price_evidence(
+                    client=client,
+                    repo_root=repo_root,
+                    snapshot_date=snapshot_date,
+                    symbol_snapshot=symbol_snapshot,
+                    primary_interval=interval,
+                    supplemental_intervals=supplemental_intervals,
+                )
+            )
             snapshot["symbols"].append(symbol_snapshot)
             continue
 
@@ -340,6 +431,16 @@ def build_market_snapshot(
         if symbol in extra_symbols:
             sources.append("extra_symbols")
         symbol_snapshot["sources"] = sources
+        snapshot["timeframe_errors"].extend(
+            attach_price_evidence(
+                client=client,
+                repo_root=repo_root,
+                snapshot_date=snapshot_date,
+                symbol_snapshot=symbol_snapshot,
+                primary_interval=interval,
+                supplemental_intervals=supplemental_intervals,
+            )
+        )
         snapshot["symbols"].append(symbol_snapshot)
 
     dates = latest_bar_dates(snapshot["symbols"])

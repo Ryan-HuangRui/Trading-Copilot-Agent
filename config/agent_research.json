@@ -66,6 +66,31 @@
         "confidence",
         "limitations"
       ]
+    },
+    "vibe_swarm": {
+      "mode": "codex_mcp_artifact",
+      "live_enabled": true,
+      "preset_name": "tca_research_review",
+      "default_provider": "openai-codex",
+      "default_model": "openai-codex/gpt-5.6-sol",
+      "effective_model": "gpt-5.6-sol",
+      "reasoning_effort": "medium",
+      "output": "report/<DATE>/agents/vibe-research-context.json",
+      "scheduled_max_escalations": 1,
+      "can_raise_execution_status": false,
+      "can_call_broker": false,
+      "required_run_fields": [
+        "run_id",
+        "status",
+        "target",
+        "symbols",
+        "objective",
+        "as_of",
+        "quality_label",
+        "confidence",
+        "artifacts",
+        "limitations"
+      ]
     }
   },
   "safety": {

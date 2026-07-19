@@ -244,6 +244,59 @@ class DataQualityTest(unittest.TestCase):
             self.assertTrue(payload["stale_data"])
             self.assertEqual(payload["stale_reason"], "intraday latest bar date 2026-06-12 != expected 2026-06-15")
 
+    def test_data_quality_warns_for_focused_timeframe_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            report_dir = root / "report" / "2026-06-16"
+            report_dir.mkdir(parents=True)
+            (report_dir / "daily-snapshot.json").write_text(
+                json.dumps(
+                    {
+                        "snapshot_date": "2026-06-16",
+                        "stale_data": False,
+                        "latest_bar_dates": ["2026-06-16"],
+                        "symbols": [
+                            {
+                                "symbol": "AMD",
+                                "meta": {"provider": "longbridge"},
+                                "latest": {"datetime": "2026-06-16", "close": "123"},
+                            }
+                        ],
+                        "errors": [],
+                        "timeframe_errors": [
+                            {"symbol": "AMD", "interval": "1h", "error": "timeout"},
+                            {"symbol": "MU", "interval": "15min", "error": "timeout"},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (report_dir / "post-market-signals.json").write_text(
+                json.dumps({"signals": [{"symbol": "AMD"}]}),
+                encoding="utf-8",
+            )
+
+            result = data_quality.run(
+                Namespace(
+                    repo_root=str(root),
+                    date="2026-06-16",
+                    session="post-market",
+                    snapshot=None,
+                    account_snapshot=None,
+                    output_json=None,
+                    output_md=None,
+                    account_delta_threshold_pct=5.0,
+                    abnormal_move_threshold_pct=20.0,
+                )
+            )
+
+            self.assertEqual(result["quality_status"], "warn")
+            self.assertEqual(result["focused_timeframe_errors"][0]["interval"], "1h")
+            payload = json.loads((report_dir / "data-quality.json").read_text(encoding="utf-8"))
+            self.assertEqual(len(payload["timeframe_errors"]), 2)
+            self.assertEqual(len(payload["focused_timeframe_errors"]), 1)
+            self.assertIn("Focused Timeframe Errors", (report_dir / "data-quality.md").read_text(encoding="utf-8"))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -6,7 +6,7 @@ from pathlib import Path
 from journal_review import planned_target_date, read_jsonl
 from longbridge_watchlist_source import DEFAULT_SOURCE_GROUPS, refresh_watchlist
 from market_calendar import MARKET_TIMEZONE, resolve_market_date, trading_day_status
-from market_snapshot import build_market_snapshot
+from market_snapshot import DEFAULT_SUPPLEMENTAL_INTERVALS, build_market_snapshot
 
 
 def normalized_symbol(value: object) -> str:
@@ -59,6 +59,16 @@ def main() -> None:
     parser.add_argument("--watchlist", default="config/watchlist.json")
     parser.add_argument("--interval", default="1day")
     parser.add_argument("--outputsize", type=int, default=200)
+    parser.add_argument(
+        "--supplemental-interval",
+        action="append",
+        help="Additional interval to fetch for each included symbol. Defaults to 1h, 15min, and 5min.",
+    )
+    parser.add_argument(
+        "--no-multi-timeframe",
+        action="store_true",
+        help="Fetch only --interval and omit default supplemental intervals.",
+    )
     parser.add_argument("--date", help="Snapshot trading date in YYYY-MM-DD. Defaults to today in America/New_York.")
     parser.add_argument("--timezone", default=MARKET_TIMEZONE)
     parser.add_argument("--skip-non-trading-day", action="store_true")
@@ -101,6 +111,11 @@ def main() -> None:
     if args.include_position_symbols:
         extra_symbols.extend(extra_symbols_from_account(repo_root, snapshot_date.isoformat()))
     extra_symbols = ordered_unique(extra_symbols)
+    supplemental_intervals = (
+        []
+        if args.no_multi_timeframe
+        else list(args.supplemental_interval or DEFAULT_SUPPLEMENTAL_INTERVALS)
+    )
 
     snapshot, path = build_market_snapshot(
         repo_root=repo_root,
@@ -118,6 +133,7 @@ def main() -> None:
         fallback_market_data_source=args.fallback_market_data_source,
         longbridge_cli=args.longbridge_cli,
         longbridge_default_market=args.longbridge_default_market,
+        supplemental_intervals=supplemental_intervals,
     )
     if watchlist_source:
         snapshot["watchlist_source"] = watchlist_source
@@ -134,8 +150,10 @@ def main() -> None:
             "market_data_source": snapshot.get("market_data_source"),
             "primary_market_data_source": snapshot.get("primary_market_data_source"),
             "fallback_market_data_source": snapshot.get("fallback_market_data_source"),
+            "requested_intervals": snapshot.get("requested_intervals", []),
             "candidate_universe_path": snapshot.get("candidate_universe_path"),
             "errors": len(snapshot["errors"]),
+            "timeframe_errors": len(snapshot.get("timeframe_errors", [])),
             "latest_bar_dates": snapshot.get("latest_bar_dates", []),
             "stale_data": snapshot.get("stale_data", False),
             "watchlist_source": watchlist_source,

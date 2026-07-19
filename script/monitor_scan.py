@@ -148,7 +148,8 @@ def price_evidence_fields(
             "primary_interval": primary_interval,
             "bars": {
                 primary_interval: limited_bars(bars, 78),
-                "15min": limited_bars(supplemental_bars.get("15min", []), 40),
+                "1h": limited_bars(supplemental_bars.get("1h", []), 120),
+                "15min": limited_bars(supplemental_bars.get("15min", []), 80),
                 "1day": limited_bars(daily, 60),
             },
             "key_levels": key_levels,
@@ -354,7 +355,7 @@ def main():
         bars = parse_series(d.get("values", []))
         supplemental_bars: Dict[str, List[Dict]] = {}
         supplemental_errors: Dict[str, str] = {}
-        for extra_interval, outputsize in (("15min", 40), ("1day", 60)):
+        for extra_interval, outputsize in (("1h", 120), ("15min", 80), ("1day", 60)):
             extra_bars, extra_error = fetch_optional_bars(client, s, interval=extra_interval, outputsize=outputsize)
             supplemental_bars[extra_interval] = extra_bars
             if extra_error:

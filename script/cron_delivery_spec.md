@@ -9,7 +9,7 @@
 ## 盘后推荐流程
 1. 运行 `python script/prepare_market_snapshot.py --watchlist config/watchlist.json --skip-non-trading-day --sp500-screen --sp500-top 100 --sp500-candidates 15`
 2. 若脚本输出 `skipped=true`，直接结束，不发送报告
-3. 调用 Agent（使用 `agent/post_market_analysis_prompt.md`）读取：
+3. 调用 Agent（显式触发 `$tca-post-market-review`）读取：
    - `report/<SNAPSHOT_DATE>/daily-snapshot.json`
 4. 生成：
    - `report/<SNAPSHOT_DATE>/post-market.md`
@@ -24,7 +24,7 @@
 ## 次日盘前推荐流程
 1. 运行 `python script/prepare_daily_context.py --watchlist config/watchlist.json --skip-non-trading-day`
 2. 若脚本输出 `skipped=true`，直接结束，不发送报告
-3. 调用 Agent（使用 `agent/daily_analysis_prompt.md`）读取：
+3. 调用 Agent（显式触发 `$tca-pre-market-analysis`）读取：
    - `report/<PRE_MARKET_DATE>/pre-market-context.json`
 4. 生成两个报告文件：
    - `report/<PRE_MARKET_DATE>/exec-brief.md`
@@ -37,8 +37,8 @@
    - media/filePath: 完整报告 markdown 文件
 
 ## Codex App Automation Prompt 建议
-- 盘后：先运行 daily snapshot 脚本，默认同时启用 S&P 500 top 100 动态观察池并输出 15 个候选；若非交易日跳过；否则基于 `agent/post_market_analysis_prompt.md`、canonical rulebook、`report/<SNAPSHOT_DATE>/daily-snapshot.json` 生成盘后复盘；生成后全量替换长桥【今日关注】分组。
-- 次日盘前：先运行盘前上下文脚本；若非交易日跳过；否则基于 `agent/daily_analysis_prompt.md`、canonical rulebook、`report/<PRE_MARKET_DATE>/pre-market-context.json` 生成盘前两份报告；生成后只向长桥【今日关注】分组增量添加盘前重点标的。
+- 盘后：先运行 daily snapshot 脚本，默认同时启用 S&P 500 top 100 动态观察池并输出 15 个候选；若非交易日跳过；否则由 `$tca-post-market-review` 基于 canonical rulebook 和 `report/<SNAPSHOT_DATE>/daily-snapshot.json` 生成盘后复盘；生成后全量替换长桥【今日关注】分组。
+- 次日盘前：先运行盘前上下文脚本；若非交易日跳过；否则由 `$tca-pre-market-analysis` 基于 canonical rulebook 和 `report/<PRE_MARKET_DATE>/pre-market-context.json` 生成盘前两份报告；生成后只向长桥【今日关注】分组增量添加盘前重点标的。
 - 第一版将节假日判断放在脚本内，automation 只按周一到周五触发。
 
 ## 发送内容规范

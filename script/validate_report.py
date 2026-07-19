@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from knowledge_source import KnowledgeSourceError, approved_setup_files
+from knowledge_source import KnowledgeSourceError, approved_method_card_paths, approved_setup_files
 from signal_artifacts import legacy_signals_path, read_json, resolve_signals_path, validate_sidecar_payload
 
 
@@ -18,6 +18,7 @@ REPORT_FILES = {
 
 SETUP_RE = re.compile(r"\b[a-z0-9][a-z0-9_-]+\.md\b")
 SETUP_REFERENCE_LINE_RE = re.compile(r"(参考\s*setup|setup\s*file|setup_files?|参考\s*规则|setup：|setup:)", re.IGNORECASE)
+METHOD_CARD_RE = re.compile(r"playbooks/trading-price-action-analysis-methods/[a-z0-9-]+(?:\.md)?")
 SYMBOL_RE = re.compile(r"\b[A-Z][A-Z0-9.-]{0,9}\b")
 SYMBOL_HEADING_RE = re.compile(r"^###\s+`?([A-Z][A-Z0-9.-]{0,9})`?\s*$", re.MULTILINE)
 SKIP_TOKENS = {"AI", "API", "BOS", "CLI", "ETF", "MA20", "MA50", "NO", "R", "S", "US"}
@@ -59,6 +60,26 @@ def refined_setup_files(repo_root: Path) -> set[str]:
         return approved_setup_files(repo_root)
     except KnowledgeSourceError:
         return set()
+
+
+def active_method_card_paths(repo_root: Path) -> set[str]:
+    try:
+        return approved_method_card_paths(repo_root)
+    except KnowledgeSourceError:
+        return set()
+
+
+def method_context_section(markdown: str) -> str | None:
+    match = re.search(r"^##\s+方法上下文(?:（如使用）|\s*\(optional\))?\s*$", markdown, re.MULTILINE | re.IGNORECASE)
+    if not match:
+        return None
+    next_match = re.search(r"^##\s+", markdown[match.end():], re.MULTILINE)
+    end = match.end() + next_match.start() if next_match else len(markdown)
+    return markdown[match.end():end]
+
+
+def normalize_method_path(path: str) -> str:
+    return path if path.endswith(".md") else f"{path}.md"
 
 
 def split_symbol_sections(markdown: str) -> list[tuple[str, str]]:
@@ -173,6 +194,7 @@ def validate_report_text(
     text: str,
     session: str,
     setup_files: set[str],
+    method_card_paths: set[str],
     stale_data: bool,
 ) -> tuple[list[str], list[str]]:
     errors: list[str] = []
@@ -192,6 +214,26 @@ def validate_report_text(
         if match:
             errors.append(f"{label}: forbidden deterministic wording: {match.group(0)}")
 
+    lowered = text.lower()
+    for marker in ("raw/", ".srt", "youtube.com", "youtu.be", "bilibili.com"):
+        if marker in lowered:
+            errors.append(f"{label}: runtime report references compiler-only source: {marker}")
+
+    method_refs = {normalize_method_path(item) for item in METHOD_CARD_RE.findall(text)}
+    for method_path in sorted(method_refs - method_card_paths):
+        errors.append(f"{label}: method path is not an active knowledge-pack card: {method_path}")
+    method_section = method_context_section(text)
+    if method_section is not None:
+        substantive = method_section.strip()
+        explicitly_unused = bool(
+            re.fullmatch(
+                r"(?:[-*]\s*)?(?:未使用(?:方法卡)?|不适用|无方法卡|无)(?:[。.]\s*)?",
+                substantive,
+            )
+        )
+        if substantive and not explicitly_unused and not method_refs:
+            errors.append(f"{label}: method context must cite an active method-card path")
+
     if stale_data and not mentions_stale_data_limit(text):
         errors.append(f"{label}: snapshot.stale_data=true but report does not disclose data limitation")
 
@@ -205,6 +247,10 @@ def validate_report_text(
         errors.append(
             f"{label}: missing Trump disclosure news section under ## 消息层汇总"
         )
+
+    deep_research_title = "深度研究状态" if session == "pre-market" else "深度研究复盘"
+    if markdown_section(text, level=2, title=deep_research_title) is None:
+        errors.append(f"{label}: missing ## {deep_research_title} section")
 
     if not is_brief and not has_trigger(text):
         errors.append(f"{label}: missing trigger condition wording")
@@ -232,6 +278,7 @@ def validate(args: argparse.Namespace) -> dict[str, Any]:
     explicit_signals = getattr(args, "signals", None)
     sidecar = expected_signals(repo_root, args.date, args.session, explicit_signals)
     setup_files = refined_setup_files(repo_root)
+    method_card_paths = active_method_card_paths(repo_root)
     snapshot = snapshot_payload(repo_root, args.date, args.session) or {}
     stale_data = bool(snapshot.get("stale_data"))
 
@@ -266,6 +313,7 @@ def validate(args: argparse.Namespace) -> dict[str, Any]:
             text=text,
             session=args.session,
             setup_files=setup_files,
+            method_card_paths=method_card_paths,
             stale_data=stale_data,
         )
         errors.extend(report_errors)
@@ -285,6 +333,7 @@ def validate(args: argparse.Namespace) -> dict[str, Any]:
                 expected_date=args.date,
                 expected_session=args.session,
                 setup_files=setup_files,
+                method_card_paths=method_card_paths,
             )
             errors.extend(sidecar_errors)
             warnings.extend(sidecar_warnings)

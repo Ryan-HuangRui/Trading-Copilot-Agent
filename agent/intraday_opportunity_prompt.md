@@ -8,6 +8,7 @@
 
 - `report/<DATE>/intraday-opportunity-context.json`
 - canonical rulebook path provided by the wrapper's `next_agent_inputs`
+- unified Trading Copilot knowledge pack path provided by `next_agent_inputs`
 
 可选读取：
 
@@ -25,7 +26,9 @@
 
 ## 决策规则
 
-- 必须以 `intraday-opportunity-context.json` 的 `observation_scans` 为主输入；其中的 `price_evidence` 是本轮价格证据，默认包含 5m 最多78根、15m 40根、日线60根、关键位和派生距离；`candidate_scans` 只是代码高亮的辅助证据，不能限制你的分析范围。
+- 必须以 `intraday-opportunity-context.json` 的 `observation_scans` 为主输入；其中的 `price_evidence` 是本轮价格证据，默认使用长桥优先的数据，包含 5m 最多78根、15m 最多80根、1h 最多120根、日线60根、关键位和派生距离；`candidate_scans` 只是代码高亮的辅助证据，不能限制你的分析范围。
+- 可使用 knowledge pack 中相关 active 方法卡解释环境、结构、突破/失败和风险，并在 signal 的 `method_context` 数组记录 `path` 与 `summary`。方法卡不能创建 approved setup、覆盖 canonical rulebook 或单独提升 `execution_status`。
+- 运行期不得读取或引用 `raw/`、SRT、YouTube/Bilibili URL。方法卡不足时记录知识缺口并维持 `watch_only/no_trade`。
 - 每次评估都应覆盖 `sidecar_template.signals` 中的观察标的；默认保持 `plan_type=watch_only`、`execution_status=watch_only`，明显不满足交易条件时可写 `no_trade`。
 - 只有当 `intraday-opportunity-context.json` 中的价格行为、盘前计划、盘中状态、paper 状态和 canonical rulebook 同时支持时，才可以将观察标的升级为：
   - `plan_type=trade_plan`
