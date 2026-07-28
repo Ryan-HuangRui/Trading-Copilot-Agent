@@ -190,6 +190,11 @@ def analysis_report_digest(repo_root: Path, date: str, session: str, symbols: li
     )
     focus_section = section_by_title(sections, ["今日最多3个重点标的", "明日观察清单", "明日最多3个重点观察标的"])
     risk_section = section_by_title(sections, ["组合风控", "组合与流程风控", "NO TRADE"])
+    position_advice_section = section_by_title(
+        sections,
+        ["持仓交易建议", "持仓与组合风险", "持仓与组合风险复盘"],
+    )
+    trade_review_section = section_by_title(sections, ["当日交易复盘"])
 
     symbol_sections = []
     seen = set()
@@ -213,6 +218,8 @@ def analysis_report_digest(repo_root: Path, date: str, session: str, symbols: li
         "focus": content_lines(focus_section, max_lines=6),
         "symbols": symbol_sections,
         "risk": content_lines(risk_section, max_lines=5),
+        "position_advice": content_lines(position_advice_section, max_lines=10),
+        "trade_review": content_lines(trade_review_section, max_lines=12),
     }
 
 
@@ -740,6 +747,16 @@ def build_markdown(
     digest_focus = analysis_digest.get("focus") if isinstance(analysis_digest.get("focus"), list) else []
     digest_symbols = analysis_digest.get("symbols") if isinstance(analysis_digest.get("symbols"), list) else []
     digest_risk = analysis_digest.get("risk") if isinstance(analysis_digest.get("risk"), list) else []
+    digest_position_advice = (
+        analysis_digest.get("position_advice")
+        if isinstance(analysis_digest.get("position_advice"), list)
+        else []
+    )
+    digest_trade_review = (
+        analysis_digest.get("trade_review")
+        if isinstance(analysis_digest.get("trade_review"), list)
+        else []
+    )
     digest_market = analysis_digest.get("market") if isinstance(analysis_digest.get("market"), list) else []
     digest_industries = analysis_digest.get("industries") if isinstance(analysis_digest.get("industries"), list) else []
     market_snapshot = market_snapshot_payload or {}
@@ -831,30 +848,76 @@ def build_markdown(
         lines.extend(["", "【风控与放弃条件】"])
         append_bullets(lines, digest_risk)
 
-    focused_fallback = data_quality.get("focused_fallback_symbols")
-    lines.extend(
-        [
-            "",
-            "【数据质量】",
-            f"- 状态：{data_quality.get('quality_status') or data_quality.get('status', 'unknown')}",
-        ]
+    position_rows = (
+        position_review.get("position_reviews")
+        if isinstance(position_review.get("position_reviews"), list)
+        else []
     )
+    lines.extend(["", "【持仓与组合风险】"])
+    if digest_position_advice:
+        lines.append("- 报告条件化建议：")
+        for item in digest_position_advice[:10]:
+            lines.append(f"  - {item}")
+    if not position_rows:
+        lines.append("- 未取得可用持仓复核；本节不对账户仓位作推断。")
+    else:
+        brokers = position_summary.get("brokers")
+        overlaps = position_summary.get("cross_broker_overlaps")
+        lines.append(
+            f"- 券商覆盖：{', '.join(brokers) if isinstance(brokers, list) and brokers else '未知'}；"
+            f"持仓数：{position_summary.get('positions', len(position_rows))}；"
+            f"需人工复核：{position_summary.get('review_required', 0)}"
+        )
+        lines.append(
+            "- 跨账户重复持仓："
+            + (", ".join(overlaps) if isinstance(overlaps, list) and overlaps else "无")
+        )
+        if position_summary.get("concentration_currency_limited"):
+            lines.append(
+                f"- {position_summary.get('concentration_currency_limited')} 个持仓与账户净资产币种不可比；"
+                "未计算组合集中度。"
+            )
+        flagged = [row for row in position_rows if isinstance(row, dict) and row.get("review_required")]
+        for row in (flagged or [row for row in position_rows if isinstance(row, dict)])[:5]:
+            broker_text = ",".join(row.get("brokers", [])) if isinstance(row.get("brokers"), list) else "未知"
+            lines.append(
+                f"- {row.get('symbol')}：risk={row.get('risk_state', 'unknown')}；"
+                f"brokers={broker_text}；计划内={'是' if row.get('in_today_signals') else '否'}；"
+                f"集中度={row.get('concentration_pct', '未知')}%"
+            )
+        lines.append("- 仅作持仓一致性与风险复核，不产生加仓、减仓或卖出指令。")
+
+    if session == "post-market":
+        lines.extend(["", "【当日交易复盘】"])
+        if digest_trade_review:
+            append_bullets(lines, digest_trade_review)
+        else:
+            lines.append("- 未取得可核验的当日成交复盘；不能据此推断当日无交易。")
+        lines.append("- 订单上下文不等于成交；本节只评价已发生的 executions。")
+
+    focused_fallback = data_quality.get("focused_fallback_symbols")
+    quality_parts = [
+        f"状态：{data_quality.get('quality_status') or data_quality.get('status', 'unknown')}"
+    ]
     if data_quality.get("stale_data"):
         dates = data_quality.get("latest_bar_dates")
         date_text = ", ".join(str(item) for item in dates) if isinstance(dates, list) else "unknown"
-        lines.append(
-            f"- stale_data：True；reason={data_quality.get('stale_reason') or 'unknown'}；"
+        quality_parts.append(
+            f"stale_data=True，reason={data_quality.get('stale_reason') or 'unknown'}，"
             f"latest_bar_dates={date_text}"
         )
     if isinstance(focused_fallback, list) and focused_fallback:
+        fallback_items = []
         for row in focused_fallback:
             if isinstance(row, dict):
-                lines.append(
-                    f"- {row.get('symbol')} 使用 {row.get('provider')} fallback；"
-                    f"primary={row.get('fallback_from')}；原因：{row.get('primary_error')}"
+                fallback_items.append(
+                    f"{row.get('symbol')} 使用 {row.get('provider')} fallback"
+                    f"（primary={row.get('fallback_from')}，原因={row.get('primary_error')}）"
                 )
+        quality_parts.append("focused fallback：" + "、".join(fallback_items))
     else:
-        lines.append("- 无 focused fallback 风险。")
+        quality_parts.append("无 focused fallback 风险")
+    lines.extend(["", "【数据质量】", f"- {'；'.join(quality_parts)}。"])
 
     if session == "monitor":
         summary = signal_source_summary or {}
@@ -925,24 +988,21 @@ def build_markdown(
 
     focus_payload = focus_selection_payload or {}
     selected_focus = focus_payload.get("selected") if isinstance(focus_payload.get("selected"), list) else []
-    lines.extend(
-        [
-            "",
-            "【运行校验】",
-            f"- validation：{compact_validation_status(run_manifest)}；"
-            f"data_quality：{data_quality.get('quality_status') or data_quality.get('status', 'unknown')}；"
-            f"持仓数：{position_summary.get('positions', 0)}；"
-            f"重点标的数：{len(selected_focus) if selected_focus else len(focus_signals)}",
-        ]
-    )
+    validation_parts = [
+        f"validation：{compact_validation_status(run_manifest)}",
+        f"data_quality：{data_quality.get('quality_status') or data_quality.get('status', 'unknown')}",
+        f"持仓数：{position_summary.get('positions', 0)}",
+        f"重点标的数：{len(selected_focus) if selected_focus else len(focus_signals)}",
+    ]
     if source_snapshot_date:
-        lines.append(f"- source_snapshot_date：{source_snapshot_date}")
+        validation_parts.append(f"source_snapshot_date：{source_snapshot_date}")
     sync = step_summary(run_manifest, "sync-longbridge-watchlist")
     if sync:
-        lines.append(
-            f"- watchlist_sync：{step_status(run_manifest, 'sync-longbridge-watchlist')}；"
+        validation_parts.append(
+            f"watchlist_sync：{step_status(run_manifest, 'sync-longbridge-watchlist')}，"
             f"symbols={', '.join(sync.get('symbols', []) or [])}"
         )
+    lines.extend(["", "【运行校验】", f"- {'；'.join(validation_parts)}。"])
 
     llm_generation = llm_generation_payload(repo_root, date, session)
     focus_payload = focus_selection_payload or {}
@@ -974,22 +1034,21 @@ def build_markdown(
         for item in selected_focus
         if isinstance(item, dict) and item.get("execution_status") == "no_trade"
     )
-    lines.extend(["", "【交付审计】"])
-    lines.append(f"- workflow/date：{workflow or session}-{date}")
+    audit_parts = [f"workflow/date：{workflow or session}-{date}"]
     if llm_generation:
         outputs = llm_generation.get("outputs") if isinstance(llm_generation.get("outputs"), list) else []
         output_paths = [str(item.get("path")) for item in outputs if isinstance(item, dict) and item.get("path")]
-        lines.append(
-            f"- LLM generation：model={llm_generation.get('model') or 'unknown'}；"
+        audit_parts.append(
+            f"LLM generation：model={llm_generation.get('model') or 'unknown'}，"
             f"manifest={llm_generation.get('_path')}"
         )
-        lines.append(f"- generated artifacts：{', '.join(output_paths) if output_paths else '未记录'}")
+        audit_parts.append(f"generated artifacts：{', '.join(output_paths) if output_paths else '未记录'}")
     else:
-        lines.append("- LLM generation：未记录")
-    lines.append(
-        f"- focus-selection：selected={len(selected_focus)}；"
-        f"conditional_executable={focus_conditional_count}；"
-        f"watch_only={focus_watch_count}；"
+        audit_parts.append("LLM generation：未记录")
+    audit_parts.append(
+        f"focus-selection：selected={len(selected_focus)}，"
+        f"conditional_executable={focus_conditional_count}，"
+        f"watch_only={focus_watch_count}，"
         f"no_trade={focus_no_trade_count}"
     )
     appended = extract_stdout.get("appended") if isinstance(extract_stdout.get("appended"), list) else []
@@ -1009,14 +1068,14 @@ def build_markdown(
     self_review_appended = (
         self_review_stdout.get("appended") if isinstance(self_review_stdout.get("appended"), list) else []
     )
-    lines.append(
-        f"- journal append：signals_appended={len(appended)}；"
-        f"outcomes_appended={len(outcome_appended)}；"
-        f"self_review_appended={len(self_review_appended)}；"
+    audit_parts.append(
+        f"journal append：signals_appended={len(appended)}，"
+        f"outcomes_appended={len(outcome_appended)}，"
+        f"self_review_appended={len(self_review_appended)}，"
         f"skipped_duplicates={len(skipped_duplicates) + len(outcome_skipped)}"
     )
-    lines.append(
-        f"- position review：positions={position_stdout_summary.get('positions', position_summary.get('positions', 0))}；"
+    audit_parts.append(
+        f"position review：positions={position_stdout_summary.get('positions', position_summary.get('positions', 0))}，"
         f"planned_signals={position_stdout_summary.get('planned_signals', len(focus_signals))}"
     )
     plan_artifacts = plan_stdout.get("artifacts") if isinstance(plan_stdout.get("artifacts"), list) else []
@@ -1027,31 +1086,23 @@ def build_markdown(
         else []
     )
     self_review_output = self_review_stdout.get("output")
-    lines.append(
-        f"- review artifacts：plan={', '.join(relative_path(repo_root, item) for item in plan_artifacts) or '未记录'}；"
-        f"learning={', '.join(relative_path(repo_root, item) for item in learning_artifacts) or '未记录'}；"
-        f"self={relative_path(repo_root, self_review_output) or '未记录'}；"
+    audit_parts.append(
+        f"review artifacts：plan={', '.join(relative_path(repo_root, item) for item in plan_artifacts) or '未记录'}，"
+        f"learning={', '.join(relative_path(repo_root, item) for item in learning_artifacts) or '未记录'}，"
+        f"self={relative_path(repo_root, self_review_output) or '未记录'}，"
         f"workflow={', '.join(relative_path(repo_root, item) for item in workflow_artifacts) or '未记录'}"
     )
     if decision_paths:
-        lines.append(
-            "- agent decision artifacts："
+        audit_parts.append(
+            "agent decision artifacts："
             + ", ".join(f"{symbol}={path}" for symbol, path in decision_paths)
         )
     if manifest_artifacts:
-        lines.append(
-            "- workflow artifacts："
+        audit_parts.append(
+            "workflow artifacts："
             + ", ".join(relative_path(repo_root, artifact) for artifact in manifest_artifacts[:8])
         )
-
-    lines.extend(
-        [
-            "",
-            "【边界】",
-            "- 本摘要优先展示分析结论、复盘和风险提示，不构成投资建议。",
-            "- 不自动下单；不调用券商交易 API；Longbridge 实盘账户流程仅只读。",
-        ]
-    )
+    lines.extend(["", "【交付审计】", f"- {'；'.join(audit_parts)}。"])
     return "\n".join(lines) + "\n"
 
 

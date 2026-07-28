@@ -21,6 +21,10 @@ READ_ONLY_ROOTS = {
     "intraday",
     "static",
 }
+READ_ONLY_ORDER_COMMANDS = {
+    ("order",),
+    ("order", "executions"),
+}
 WRITE_TOKENS = {
     "order",
     "submit",
@@ -42,6 +46,16 @@ def ensure_read_only_command(args: list[str]) -> None:
     if not args:
         raise ValueError("Longbridge command args are required")
     root = args[0].lower()
+    if root == "order":
+        command_args = [str(token).lower() for token in args]
+        if "--format" in command_args:
+            index = command_args.index("--format")
+            if index + 1 >= len(command_args) or command_args[index + 1] != "json":
+                raise ValueError(f"Longbridge order read command requires --format json: {args}")
+            del command_args[index : index + 2]
+        if tuple(command_args) in READ_ONLY_ORDER_COMMANDS:
+            return
+        raise ValueError(f"Longbridge order command is not in the read-only allowlist: {args}")
     tokens = {str(token).lower() for token in args}
     if root not in READ_ONLY_ROOTS:
         raise ValueError(f"Longbridge command is not in the read-only allowlist: {args}")
@@ -77,3 +91,10 @@ def fetch_account_snapshot(cli: str) -> dict[str, Any]:
     account = run_read_only_json(cli, ["assets", "--format", "json"])
     positions = run_read_only_json(cli, ["positions", "--format", "json"])
     return {"account": account, "positions": positions}
+
+
+def fetch_trade_snapshot(cli: str) -> dict[str, Any]:
+    return {
+        "orders": run_read_only_json(cli, ["order", "--format", "json"]),
+        "executions": run_read_only_json(cli, ["order", "executions", "--format", "json"]),
+    }

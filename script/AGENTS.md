@@ -18,6 +18,12 @@
 - `longbridge_market_context.py`: read-only Longbridge daily market and industry/sector ETF context for post-market Feishu summaries.
 - `longbridge_watchlist_source.py`: read-only Longbridge watchlist group reader that refreshes local `config/watchlist.json`; falls back to the existing local file when Longbridge is unavailable.
 - `longbridge_account_snapshot.py`: read-only account/position snapshot writer under `runtime/account/`.
+- `plugin_account_snapshot.py`: normalizes persisted read-only IBKR and Longbridge
+  Codex app payloads into a broker-aware combined snapshot; it never calls apps,
+  MCP, broker mutations, or market-data APIs.
+- `plugin_trade_snapshot.py`: normalizes read-only IBKR/Longbridge daily executions
+  and order context, with an exact-allowlisted Longbridge CLI read fallback. It never
+  writes the formal trade journal or calls broker mutation commands.
 - `longbridge_paper_trade_adapter.py`: Longbridge paper-account guard and read-only paper order/execution fetcher.
 - `longbridge_paper_order_adapter.py`: gated Longbridge paper order writer. It must remain paper-only and supports guarded Longbridge paper order submission, cancel, pending order replace, protective stop, TP1, and break-even stop movement through explicit execute/config gates.
 - `paper_account_snapshot.py`: read-only paper account, order, and execution snapshot writer under `runtime/paper/`.

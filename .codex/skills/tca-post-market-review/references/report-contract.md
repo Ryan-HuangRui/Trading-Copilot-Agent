@@ -63,6 +63,8 @@
   - `runtime/intraday/<SNAPSHOT_DATE>/events.jsonl`
   - 盘中监控只用于复盘“盘前计划是否被盘中验证、否定、错过或保持等待”，不能作为订单输入，不能单独提升任何标的 execution_status。
   - 若盘中 artifacts 缺失，必须在「盘中监控回顾」中说明今日无盘中监控产物。
+- 若存在 `runtime/account/<SNAPSHOT_DATE>/plugin-account-snapshot.json`，必须按券商保留 provenance，并在组合层按 symbol/currency 聚合。复盘每个持仓的当日行为、计划覆盖、失效证据与次日人工复核条件；跨券商重复标的不能被当作两个互不相关的风险。缺少价格、汇率或券商输入必须显式披露。
+- 若存在 `runtime/account/<SNAPSHOT_DATE>/plugin-trade-snapshot.json`，其中 `executions` 是当日真实成交证据，`orders` 只作订单上下文。必须逐笔或按同标的同方向成交组复盘：计划关联、成交时点、成交价相对 5m/15m 结构、是否追价、失效纪律、重复交易、佣金与券商提供的已实现盈亏。不得因某一券商 scope 失败就推断该账户当日无交易，也不得自动写入 formal `trades.jsonl`。
 
 【输出文件（必须生成）】
 - report/<SNAPSHOT_DATE>/post-market.md
@@ -88,6 +90,27 @@
 - 盘前计划验证/否定：
 - 未触发/继续等待：
 - 数据或流程问题：
+
+## 当日交易复盘
+- 数据覆盖：<IBKR / Longbridge / 部分覆盖>；未授权或失败来源：<明确列出>
+- 成交汇总：<只统计 executions；按券商、方向、标的和币种分别汇总>
+- 逐笔/成交组：
+  - <BROKER / SYMBOL / SIDE / QTY / PRICE / TIME>
+  - 计划关联：<planned / unplanned / unknown + 证据>
+  - 时点与价格质量：<相对 5m/15m 结构、触发、失效和 no-chase；缺数据则 unknown>
+  - 仓位影响：<开仓/加仓/减仓/退出/unknown，仅基于前后持仓与方向证据>
+  - 纪律评价：<做得好 / 需改进 / 无法评价 + 原因>
+- 当日行为模式：<追价、过度交易、亏损加仓、及时止损、过早止盈等；只写有证据者>
+- 改进项：<可验证的流程改进，不直接修改 canonical rulebook>
+- 边界：复盘只评价已发生交易，不产生下一笔订单或自动写入 trades.jsonl。
+
+## 持仓与组合风险复盘
+- 数据覆盖：<IBKR / Longbridge / 部分可用 / 均不可用>；快照时间：<generated_at>
+- 跨账户重复持仓：<标的或“无”>
+- 集中度与相关性：<仅使用可比币种和可靠净资产口径；否则写“无法可靠聚合”>
+- 逐持仓：<当日行为 / 结构结论 / 计划与失效一致性 / 次日人工复核条件>
+- 特殊风险：<杠杆 ETF、保证金、缺失价格、未纳入计划>
+- 边界：只读复盘，不生成加仓、减仓、卖出或订单动作。
 
 ## 深度研究复盘
 - 已完成研究：<run_id / 标的 / as_of / RESEARCH_ONLY|WATCH|NO_TRADE；没有则写“无”>
@@ -202,3 +225,5 @@
 - regime 无法识别时，默认 `NO TRADE / 仅复盘不计划`
 - 缺少 `## 深度研究复盘`，或引用未完成/未记录 provenance 的 Swarm 结论 -> 视为无效
 - 使用外部价格行为方法时，Markdown 必须保留统一方法卡路径；raw 视频和字幕不得进入运行期报告输入
+- 缺少 `## 持仓与组合风险复盘`，或在插件持仓存在时未披露券商覆盖/重复暴露/数据限制 -> 视为无效
+- 缺少 `## 当日交易复盘`，或将 orders 当成 executions、未披露失败券商来源、未区分事实与推断 -> 视为无效

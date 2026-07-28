@@ -35,22 +35,59 @@ Also use:
    ```
 
 2. Stop when the wrapper returns `failed`, `skipped=true`, or a non-trading-day result. Report the exact reason; do not fabricate missing analysis.
-3. Resolve the report date from the wrapper response. Read every existing `next_agent_inputs` entry, including:
+3. Resolve the report date from the wrapper response. Then capture the user's current positions through the connected apps, read-only:
+   - IBKR: open positions, account financial metrics, and currency balances;
+   - Longbridge: current stock positions and account balance.
+   Persist only each tool's structured payload, without account identifiers, under
+   `runtime/account/<DATE>/plugin-inputs/`, then normalize the available inputs:
+
+   ```bash
+   python3 script/trading_copilot.py plugin-account-snapshot \
+     --date <DATE> \
+     --ibkr-positions runtime/account/<DATE>/plugin-inputs/ibkr-positions.json \
+     --ibkr-account runtime/account/<DATE>/plugin-inputs/ibkr-account.json \
+     --ibkr-balances runtime/account/<DATE>/plugin-inputs/ibkr-balances.json \
+     --longbridge-positions runtime/account/<DATE>/plugin-inputs/longbridge-positions.json \
+     --longbridge-account runtime/account/<DATE>/plugin-inputs/longbridge-account.json
+   ```
+
+   Omit an option when that plugin call failed or is unavailable. If at least one broker
+   succeeds, use `runtime/account/<DATE>/plugin-account-snapshot.json` as an additional
+   analysis input. If both fail, disclose the failure and let the delivery workflow fall
+   back to the existing read-only Longbridge CLI account snapshot. Never call order,
+   instruction, submit, cancel, replace, or other mutation capabilities.
+   For each held symbol missing from `pre-market-context.json`, run the repo's
+   read-only `symbol-analysis-context` workflow and add the resulting context artifact
+   to analysis provenance. If price retrieval fails, keep the holding in the report
+   with an explicit `price_evidence_missing` limitation.
+4. Read every existing `next_agent_inputs` entry, plus the normalized plugin account snapshot when available, including:
    - this Skill;
    - the canonical rulebook;
    - the unified Trading Copilot knowledge pack and relevant method card, when supplied;
    - `report/<DATE>/pre-market-context.json`;
    - optional agent research, external disclosure, and completed Vibe artifacts.
-4. Complete the normal analysis first in this order: market environment, structure, key levels, behavior at levels, setup/trade logic. Analyze the merged fixed watchlist and dynamic observation universe without treating dynamic candidates as recommendations.
-5. Use the unified knowledge pack and its relevant method card as direct method context when it clarifies regime, structure, breakouts, pullbacks, failed breaks, targets, or risk/reward. Cite the method card in the Markdown. Raw sources are compiler-only and unavailable to the report workflow; if a card has a material gap or conflict, record it rather than opening raw content. Do not treat a method card as an approved setup or let it independently raise `execution_status`.
-6. Use normal agent research only as evidence. Make the final sidecar classification independently from canonical rules, current price structure, complete Trade Plan Card fields, and risk constraints.
-7. Consume only completed and hash-validated Vibe runs. They may maintain or lower confidence but cannot independently raise `execution_status`.
-8. If a material evidence conflict remains, use `$tca-swarm-research` for at most one focus symbol. Start it asynchronously, persist `pending`, and continue the pre-market report without waiting.
-9. Write all required artifacts atomically:
+5. Complete the normal analysis first in this order: market environment, structure, key levels, behavior at levels, setup/trade logic. Analyze the merged fixed watchlist and dynamic observation universe without treating dynamic candidates as recommendations.
+   Add a dedicated `持仓与组合风险` section that:
+   - states broker coverage and snapshot time;
+   - reviews every aggregated holding against current structure, key levels, today's plan, and invalidation evidence;
+   - highlights cross-broker overlap, concentration, leveraged-ETF exposure, missing prices, and positions absent from today's plan;
+   - preserves broker-level rows without double-counting duplicated symbols;
+   - gives one conditional advice label per holding:
+     `HOLD_WATCH`, `NO_ADD`, `RISK_REVIEW`, `EXIT_IF_INVALIDATED`, or
+     `DATA_INSUFFICIENT`;
+   - states the condition that would maintain the position thesis, the invalidation
+     or exit-review trigger, whether adding is prohibited, and the maximum risk
+     constraint;
+   - uses scenarios and human-review flags only, never deterministic add/reduce/sell instructions.
+6. Use the unified knowledge pack and its relevant method card as direct method context when it clarifies regime, structure, breakouts, pullbacks, failed breaks, targets, or risk/reward. Cite the method card in the Markdown. Raw sources are compiler-only and unavailable to the report workflow; if a card has a material gap or conflict, record it rather than opening raw content. Do not treat a method card as an approved setup or let it independently raise `execution_status`.
+7. Use normal agent research only as evidence. Make the final sidecar classification independently from canonical rules, current price structure, complete Trade Plan Card fields, and risk constraints.
+8. Consume only completed and hash-validated Vibe runs. They may maintain or lower confidence but cannot independently raise `execution_status`.
+9. If a material evidence conflict remains, use `$tca-swarm-research` for at most one focus symbol. Start it asynchronously, persist `pending`, and continue the pre-market report without waiting.
+10. Write all required artifacts atomically:
    - `report/<DATE>/exec-brief.md`
    - `report/<DATE>/pre-market.md`
    - `report/<DATE>/pre-market-signals.json`
-10. Record generation provenance with this Skill as the analysis source:
+11. Record generation provenance with this Skill as the analysis source:
 
    ```bash
    python3 script/trading_copilot.py llm-generation-manifest \
@@ -62,16 +99,21 @@ Also use:
      --generated-output report/<DATE>/pre-market-signals.json
    ```
 
+   Add `--input runtime/account/<DATE>/plugin-account-snapshot.json` when consumed.
    Add one `--input` for each optional agent-research, disclosure, or Vibe context artifact actually consumed; omit paths that do not exist.
 
-11. Run the audited outer workflow:
+12. Run the audited outer workflow:
 
-    ```bash
-    python3 script/trading_copilot.py pre-market-deliver \
-      --date <DATE> --sync-longbridge --execute-sync
-    ```
+   ```bash
+   python3 script/trading_copilot.py pre-market-deliver \
+     --date <DATE> \
+     --account-snapshot runtime/account/<DATE>/plugin-account-snapshot.json \
+     --sync-longbridge --execute-sync
+   ```
 
-12. Stop before external delivery if validation, data quality, agent research, or delivery guard fails. When cc-connect invokes the workflow, let its outer wrapper own `guard -> send -> mark-sent`.
+   Omit `--account-snapshot` only when no plugin snapshot was produced.
+
+13. Stop before external delivery if validation, data quality, agent research, or delivery guard fails. When cc-connect invokes the workflow, let its outer wrapper own `guard -> send -> mark-sent`.
 
 ## Scheduled cc-connect handoff
 

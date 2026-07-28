@@ -40,6 +40,8 @@ def build_markdown(
     signals: list[dict[str, Any]],
     trades: list[dict[str, Any]],
     position_reviews: list[dict[str, Any]],
+    broker_executions: list[dict[str, Any]],
+    broker_sources: dict[str, Any],
     post_market_exists: bool,
 ) -> str:
     outcome_summary = summarize(outcomes)
@@ -66,6 +68,8 @@ def build_markdown(
         f"- 计划/观察信号数：{len(signals)}",
         f"- 已回填 outcome 数：{len(outcomes)}",
         f"- 人工交易记录数：{len(trades)}",
+        f"- 券商只读成交证据数：{len(broker_executions)}",
+        f"- 券商成交覆盖：{json.dumps(broker_sources, ensure_ascii=False, sort_keys=True)}",
         f"- 持仓复核记录数：{len(position_reviews)}",
         "",
         "## 计划质量复盘",
@@ -82,7 +86,13 @@ def build_markdown(
         "## 真实执行复盘",
         f"- 交易记录状态：{json.dumps(dict(by_trade), ensure_ascii=False, sort_keys=True)}",
         f"- 人工交易记录数：{len(trades)}",
-        f"- 真实执行层：{'暂无 trade record，本日不能评价真实交易表现。' if not trades else '仅按 trades.jsonl 中的人工记录评价真实执行。'}",
+        f"- formal trade journal：{'暂无 trade record。' if not trades else '仅按 trades.jsonl 中的人工记录评价。'}",
+        (
+            f"- broker execution evidence：{len(broker_executions)} 笔只读成交；"
+            "详细质量评价见 post-market.md 的「当日交易复盘」。"
+            if broker_executions
+            else "- broker execution evidence：未取得可核验成交；不能据此推断当日无交易。"
+        ),
         f"- 持仓交易关联：{json.dumps(dict(by_trade_link), ensure_ascii=False, sort_keys=True)}",
         f"- 持仓需人工复核：{position_review_required}",
         "",
@@ -112,7 +122,7 @@ def build_markdown(
         [
             "",
             "## 今日纪律结论",
-            "- 不把触发记录等同于真实入场结果；真实执行只从 trades.jsonl 判断。",
+            "- 不把触发记录等同于真实入场结果；formal 统计只从 trades.jsonl 判断，券商只读成交证据单独披露。",
             "- 对不可评估信号补充结构化 trigger/invalidation 价格，减少后续回填噪音。",
             "- 若 outcome 显示触发后又失效，次日降低同类追突破场景的执行优先级。",
         ]
@@ -162,6 +172,25 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         for record in read_jsonl(position_reviews_file)
         if record.get("kind") == "position_review" and record.get("date") == args.date
     ]
+    broker_trade_path = (
+        Path(args.broker_trade_snapshot)
+        if getattr(args, "broker_trade_snapshot", None)
+        else repo_root / "runtime" / "account" / args.date / "plugin-trade-snapshot.json"
+    )
+    if not broker_trade_path.is_absolute():
+        broker_trade_path = repo_root / broker_trade_path
+    broker_payload = {}
+    if broker_trade_path.exists():
+        try:
+            broker_payload = json.loads(broker_trade_path.read_text(encoding="utf-8"))
+        except Exception:
+            broker_payload = {}
+    broker_executions = (
+        broker_payload.get("executions")
+        if isinstance(broker_payload.get("executions"), list)
+        else []
+    )
+    broker_sources = broker_payload.get("sources") if isinstance(broker_payload.get("sources"), dict) else {}
 
     post_market = repo_root / "report" / args.date / "post-market.md"
     output = Path(args.output) if args.output else report_path(repo_root, args.date)
@@ -173,6 +202,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         signals=signals,
         trades=trades,
         position_reviews=position_reviews,
+        broker_executions=broker_executions,
+        broker_sources=broker_sources,
         post_market_exists=post_market.exists(),
     )
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -201,6 +232,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "summary": summarize(outcomes),
         "signals_count": len(signals),
         "trades_count": len(trades),
+        "broker_executions_count": len(broker_executions),
+        "broker_trade_snapshot": str(broker_trade_path) if broker_trade_path.exists() else None,
         "position_reviews_count": len(position_reviews),
         "append": args.append,
         "appended": appended,
@@ -214,6 +247,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--append", action="store_true")
     parser.add_argument("--output")
     parser.add_argument("--journal-dir", default="runtime/journal")
+    parser.add_argument("--broker-trade-snapshot")
     parser.add_argument("--repo-root", default=str(Path(__file__).resolve().parents[1]))
     return parser
 

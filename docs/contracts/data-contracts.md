@@ -421,6 +421,43 @@ Consumer rules:
 - Use it only for read-only position review.
 - Do not use it to place, cancel, replace, or modify orders.
 
+## `runtime/account/<DATE>/plugin-account-snapshot.json`
+
+Producer:
+
+```bash
+python3 script/trading_copilot.py plugin-account-snapshot --date <DATE> \
+  --ibkr-positions <IBKR_POSITIONS_JSON> \
+  --ibkr-account <IBKR_ACCOUNT_JSON> \
+  --ibkr-balances <IBKR_BALANCES_JSON> \
+  --longbridge-positions <LONGBRIDGE_POSITIONS_JSON> \
+  --longbridge-account <LONGBRIDGE_ACCOUNT_JSON>
+```
+
+The input JSON files are ignored, short-lived structured payloads captured by Codex
+from the connected IBKR and Longbridge apps. Repository Python and unattended shell
+jobs do not call app/MCP tools directly.
+
+Expected fields:
+
+- `source=codex-app-plugins`
+- `accounts`: broker-scoped account metrics with original currencies.
+- `broker_positions`: broker-scoped position rows.
+- `positions`: symbol/currency aggregates with `brokers` and
+  `cross_broker_overlap`.
+- `summary.brokers` and `summary.cross_broker_overlaps`.
+- `account.aggregation_status`: combined account totals are present only when all
+  available account totals share one currency and are complete.
+
+Consumer rules:
+
+- Preserve broker provenance and do not double-count duplicated symbols.
+- Do not synthesize FX conversions. If currencies or account totals are not
+  comparable, keep combined concentration unavailable.
+- Partial plugin coverage is usable only with explicit disclosure.
+- This artifact is read-only research evidence. It must never authorize broker
+  mutations or deterministic position-change instructions.
+
 ## `report/<DATE>/position-review.json`
 
 Producer:
@@ -444,7 +481,41 @@ Consumer rules:
 - Review thresholds and core holding handling come from `config/position_review.json` unless an alternate `--config` path is passed.
 - `summary.trade_link_state` summarizes whether positions were linked to `trades.jsonl` records and their `source_signal_id`.
 - `position_reviews[].estimated_r` is an estimate from read-only position price plus human-entered `entry/stop`; it is not a broker-confirmed realized result.
+- `summary.brokers` and `summary.cross_broker_overlaps` disclose plugin coverage
+  when a plugin snapshot was used.
 - Do not convert risk states into automatic trading actions.
+
+## `runtime/account/<DATE>/plugin-trade-snapshot.json`
+
+Producer:
+
+```bash
+python3 script/trading_copilot.py plugin-trade-snapshot --date <DATE> \
+  --ibkr-trades <IBKR_TRADES_JSON> \
+  --longbridge-executions <LONGBRIDGE_EXECUTIONS_JSON> \
+  --longbridge-orders <LONGBRIDGE_ORDERS_JSON> \
+  --longbridge-cli-fallback
+```
+
+Expected fields:
+
+- `sources`: per-broker status and actual backend (`codex-app-plugin` or
+  `longbridge-cli`).
+- `executions`: normalized completed trades with broker, symbol, side, quantity,
+  price, time, currency, and optional commission/realized P&L.
+- `orders`: Longbridge order context; these are not completed-trade facts.
+- `summary`: execution counts and notionals separated by currency and side.
+- `limitations` and `safety_note`.
+
+Consumer rules:
+
+- Treat only `executions` as completed trades.
+- Preserve partial/unauthorized broker status; missing coverage is not an empty
+  trading day.
+- Use broker timestamps converted to `America/New_York` to filter the market date.
+- Do not combine notionals or P&L across currencies without verified FX conversion.
+- Do not append real-account executions automatically to `runtime/journal/trades.jsonl`.
+- This artifact is review evidence only and cannot authorize broker actions.
 
 ## Wrapper Status JSON
 

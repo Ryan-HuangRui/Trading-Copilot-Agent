@@ -30,6 +30,11 @@ GOOD_REPORT = """# 今日盘前完整报告（2026-05-26）
 - 待处理升级：无
 - 边界：Vibe Swarm 仅为二级研究证据，不提升执行等级。
 
+## 持仓与组合风险
+- 数据覆盖：未取得插件持仓快照。
+- 跨账户重复持仓：未知。
+- 边界：只读风险复核，不生成仓位调整指令。
+
 ## 重点执行候选
 ### MU
 - 参考 setup：breakout_pullback_continuation.md
@@ -165,6 +170,76 @@ class ValidateReportTest(unittest.TestCase):
 
         self.assertEqual(payload["status"], "fail")
         self.assertTrue(any("missing ## 深度研究状态" in error for error in payload["errors"]))
+
+    def test_pre_market_report_requires_position_risk_section(self):
+        report = GOOD_REPORT.replace(
+            """## 持仓与组合风险
+- 数据覆盖：未取得插件持仓快照。
+- 跨账户重复持仓：未知。
+- 边界：只读风险复核，不生成仓位调整指令。
+
+""",
+            "",
+        )
+        temp, root = self.make_repo(report)
+        with temp:
+            payload = self.validate_repo(root)
+
+        self.assertEqual(payload["status"], "fail")
+        self.assertTrue(any("missing ## 持仓与组合风险" in error for error in payload["errors"]))
+
+    def test_post_market_report_requires_daily_trade_review(self):
+        report = """# 今日盘后复盘（2026-05-26）
+
+## 总览
+- 明日最多3个重点观察标的：MU
+
+## 持仓与组合风险复盘
+- 数据覆盖：IBKR。
+- 边界：只读复盘，不生成订单动作。
+
+## 当日交易复盘
+- 数据覆盖：IBKR；Longbridge 未授权。
+- 订单上下文不等于成交，只复盘 executions。
+
+## 深度研究复盘
+- 已完成研究：无
+- 待升级研究：无
+
+## 重点标的复盘
+### MU
+- 参考 setup：breakout_pullback_continuation.md
+- 触发条件：突破 100 后回踩站稳。
+- 失效/放弃条件：跌破 95。
+- 风险提醒：单笔风险 <=1%，止损过宽则放弃。
+"""
+        temp, root = self.make_repo(report)
+        with temp:
+            path = root / "report" / "2026-05-26" / "post-market.md"
+            path.write_text(report, encoding="utf-8")
+            args = argparse.Namespace(
+                repo_root=str(root),
+                date="2026-05-26",
+                session="post-market",
+                report=str(path),
+            )
+            passing = validate(args)
+            path.write_text(
+                report.replace(
+                    """## 当日交易复盘
+- 数据覆盖：IBKR；Longbridge 未授权。
+- 订单上下文不等于成交，只复盘 executions。
+
+""",
+                    "",
+                ),
+                encoding="utf-8",
+            )
+            failing = validate(args)
+
+        self.assertEqual(passing["status"], "pass")
+        self.assertEqual(failing["status"], "fail")
+        self.assertTrue(any("missing ## 当日交易复盘" in error for error in failing["errors"]))
 
     def test_fails_missing_setup_and_invalidation(self):
         bad_report = """# 报告

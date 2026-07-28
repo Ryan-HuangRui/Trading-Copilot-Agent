@@ -1629,6 +1629,8 @@ def run_daily_self_review(args: argparse.Namespace) -> None:
     ]
     if args.output:
         command.extend(["--output", args.output])
+    if args.broker_trade_snapshot:
+        command.extend(["--broker-trade-snapshot", args.broker_trade_snapshot])
     if args.append:
         command.append("--append")
 
@@ -2098,6 +2100,8 @@ def run_pre_market_deliver(args: argparse.Namespace) -> None:
             emit(manifest | {"artifacts": [str(manifest_file)]}, 1)
 
     data_quality = ["script/data_quality.py", "--date", date, "--session", session]
+    if args.account_snapshot:
+        data_quality.extend(["--account-snapshot", args.account_snapshot])
     ok, dq_step = run_manifest_step(manifest=manifest, name="data-quality", command=data_quality)
     quality_status = ((dq_step.get("stdout") or {}).get("quality_status") if isinstance(dq_step.get("stdout"), dict) else None)
     if not ok or quality_status == "fail":
@@ -2141,15 +2145,21 @@ def run_pre_market_deliver(args: argparse.Namespace) -> None:
 
     account_snapshot_path = args.account_snapshot
     if not args.skip_account:
-        account = ["script/longbridge_account_snapshot.py"]
-        if args.date:
-            account.extend(["--date", date])
-        if args.longbridge_cli:
-            account.extend(["--longbridge-cli", args.longbridge_cli])
-        ok, account_step = run_manifest_step(manifest=manifest, name="account-snapshot", command=account, allow_failure=True)
-        stdout = account_step.get("stdout") if isinstance(account_step.get("stdout"), dict) else {}
-        if isinstance(stdout, dict):
-            account_snapshot_path = stdout.get("output") or account_snapshot_path
+        if not account_snapshot_path:
+            account = ["script/longbridge_account_snapshot.py"]
+            if args.date:
+                account.extend(["--date", date])
+            if args.longbridge_cli:
+                account.extend(["--longbridge-cli", args.longbridge_cli])
+            ok, account_step = run_manifest_step(
+                manifest=manifest,
+                name="account-snapshot",
+                command=account,
+                allow_failure=True,
+            )
+            stdout = account_step.get("stdout") if isinstance(account_step.get("stdout"), dict) else {}
+            if isinstance(stdout, dict):
+                account_snapshot_path = stdout.get("output") or account_snapshot_path
         position = ["script/position_review.py", "--date", date, "--append", "--journal-dir", args.journal_dir]
         if account_snapshot_path:
             position.extend(["--account-snapshot", account_snapshot_path])
@@ -2293,6 +2303,8 @@ def run_post_market_deliver(args: argparse.Namespace) -> None:
             emit(manifest | {"artifacts": [str(manifest_file)]}, 1)
 
     data_quality = ["script/data_quality.py", "--date", date, "--session", session]
+    if args.account_snapshot:
+        data_quality.extend(["--account-snapshot", args.account_snapshot])
     ok, dq_step = run_manifest_step(manifest=manifest, name="data-quality", command=data_quality)
     quality_status = ((dq_step.get("stdout") or {}).get("quality_status") if isinstance(dq_step.get("stdout"), dict) else None)
     if not ok or quality_status == "fail":
@@ -2351,14 +2363,20 @@ def run_post_market_deliver(args: argparse.Namespace) -> None:
 
     account_snapshot_path = args.account_snapshot
     if not args.skip_account:
-        account = ["script/longbridge_account_snapshot.py"]
-        account.extend(["--date", date])
-        if args.longbridge_cli:
-            account.extend(["--longbridge-cli", args.longbridge_cli])
-        ok, account_step = run_manifest_step(manifest=manifest, name="account-snapshot", command=account, allow_failure=True)
-        stdout = account_step.get("stdout") if isinstance(account_step.get("stdout"), dict) else {}
-        if isinstance(stdout, dict):
-            account_snapshot_path = stdout.get("output") or account_snapshot_path
+        if not account_snapshot_path:
+            account = ["script/longbridge_account_snapshot.py"]
+            account.extend(["--date", date])
+            if args.longbridge_cli:
+                account.extend(["--longbridge-cli", args.longbridge_cli])
+            ok, account_step = run_manifest_step(
+                manifest=manifest,
+                name="account-snapshot",
+                command=account,
+                allow_failure=True,
+            )
+            stdout = account_step.get("stdout") if isinstance(account_step.get("stdout"), dict) else {}
+            if isinstance(stdout, dict):
+                account_snapshot_path = stdout.get("output") or account_snapshot_path
         position = ["script/position_review.py", "--date", date, "--append", "--journal-dir", args.journal_dir, "--session", session]
         if account_snapshot_path:
             position.extend(["--account-snapshot", account_snapshot_path])
@@ -2388,6 +2406,9 @@ def run_post_market_deliver(args: argparse.Namespace) -> None:
 
     if not args.skip_self_review:
         self_review = ["script/daily_self_review.py", "--date", date, "--journal-dir", args.journal_dir]
+        broker_trade_snapshot = ROOT / "runtime" / "account" / date / "plugin-trade-snapshot.json"
+        if broker_trade_snapshot.exists():
+            self_review.extend(["--broker-trade-snapshot", str(broker_trade_snapshot)])
         if args.append_self_review:
             self_review.append("--append")
         run_manifest_step(manifest=manifest, name="daily-self-review", command=self_review, allow_failure=True)
@@ -2601,6 +2622,69 @@ def run_account_snapshot(args: argparse.Namespace) -> None:
     response["date"] = (stdout or {}).get("date") or args.date
     response["artifacts"] = [stdout["output"]] if stdout and stdout.get("output") else []
     response["positions_count"] = (stdout or {}).get("positions_count")
+    emit(response)
+
+
+def run_plugin_account_snapshot(args: argparse.Namespace) -> None:
+    command = ["script/plugin_account_snapshot.py", "--date", args.date]
+    for attr, option in (
+        ("ibkr_positions", "--ibkr-positions"),
+        ("ibkr_account", "--ibkr-account"),
+        ("ibkr_balances", "--ibkr-balances"),
+        ("longbridge_positions", "--longbridge-positions"),
+        ("longbridge_account", "--longbridge-account"),
+        ("output", "--output"),
+    ):
+        value = getattr(args, attr, None)
+        if value:
+            command.extend([option, value])
+
+    proc = run_child(command)
+    stdout = parse_json_output(proc.stdout)
+    if proc.returncode != 0:
+        emit(failed_response("plugin-account-snapshot", command, proc), 1)
+
+    response = base_response("plugin-account-snapshot", command, stdout)
+    response["date"] = (stdout or {}).get("date") or args.date
+    response["artifacts"] = [stdout["output"]] if stdout and stdout.get("output") else []
+    response["positions_count"] = (stdout or {}).get("positions_count")
+    response["brokers"] = (stdout or {}).get("brokers", [])
+    response["cross_broker_overlaps"] = (stdout or {}).get("cross_broker_overlaps", [])
+    emit(response)
+
+
+def run_plugin_trade_snapshot(args: argparse.Namespace) -> None:
+    command = [
+        "script/plugin_trade_snapshot.py",
+        "--date",
+        args.date,
+        "--timezone",
+        args.timezone,
+    ]
+    for attr, option in (
+        ("ibkr_trades", "--ibkr-trades"),
+        ("longbridge_executions", "--longbridge-executions"),
+        ("longbridge_orders", "--longbridge-orders"),
+        ("longbridge_cli", "--longbridge-cli"),
+        ("output", "--output"),
+    ):
+        value = getattr(args, attr, None)
+        if value:
+            command.extend([option, value])
+    if args.longbridge_cli_fallback:
+        command.append("--longbridge-cli-fallback")
+
+    proc = run_child(command)
+    stdout = parse_json_output(proc.stdout)
+    if proc.returncode != 0:
+        emit(failed_response("plugin-trade-snapshot", command, proc), 1)
+
+    response = base_response("plugin-trade-snapshot", command, stdout)
+    response["date"] = (stdout or {}).get("date") or args.date
+    response["artifacts"] = [stdout["output"]] if stdout and stdout.get("output") else []
+    response["executions_count"] = (stdout or {}).get("executions_count")
+    response["sources"] = (stdout or {}).get("sources", {})
+    response["symbols"] = (stdout or {}).get("symbols", [])
     emit(response)
 
 
@@ -4141,6 +4225,7 @@ def build_parser() -> argparse.ArgumentParser:
     daily_review.add_argument("--append", action="store_true")
     daily_review.add_argument("--output")
     daily_review.add_argument("--journal-dir", default="runtime/journal")
+    daily_review.add_argument("--broker-trade-snapshot")
     daily_review.set_defaults(func=run_daily_self_review)
 
     workflow_review = sub.add_parser("daily-workflow-review", help="Review same-day workflow execution and price evidence")
@@ -4268,6 +4353,33 @@ def build_parser() -> argparse.ArgumentParser:
     account.add_argument("--output")
     account.add_argument("--longbridge-cli")
     account.set_defaults(func=run_account_snapshot)
+
+    plugin_account = sub.add_parser(
+        "plugin-account-snapshot",
+        help="Normalize read-only IBKR and Longbridge Codex app snapshots",
+    )
+    plugin_account.add_argument("--date", required=True)
+    plugin_account.add_argument("--ibkr-positions")
+    plugin_account.add_argument("--ibkr-account")
+    plugin_account.add_argument("--ibkr-balances")
+    plugin_account.add_argument("--longbridge-positions")
+    plugin_account.add_argument("--longbridge-account")
+    plugin_account.add_argument("--output")
+    plugin_account.set_defaults(func=run_plugin_account_snapshot)
+
+    plugin_trades = sub.add_parser(
+        "plugin-trade-snapshot",
+        help="Normalize read-only IBKR and Longbridge daily trade activity",
+    )
+    plugin_trades.add_argument("--date", required=True)
+    plugin_trades.add_argument("--timezone", default="America/New_York")
+    plugin_trades.add_argument("--ibkr-trades")
+    plugin_trades.add_argument("--longbridge-executions")
+    plugin_trades.add_argument("--longbridge-orders")
+    plugin_trades.add_argument("--longbridge-cli-fallback", action="store_true")
+    plugin_trades.add_argument("--longbridge-cli")
+    plugin_trades.add_argument("--output")
+    plugin_trades.set_defaults(func=run_plugin_trade_snapshot)
 
     paper_account = sub.add_parser("paper-account-snapshot", help="Write a read-only Longbridge paper account snapshot")
     paper_account.add_argument("--date")

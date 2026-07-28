@@ -9,6 +9,7 @@
 - The local `knowledge/` directory is limited to runtime learning candidates and is not a source of approved trading rules.
 - `config/`: watchlists and local runtime state paths. Secrets live in `.env`, never in tracked files.
 - Generated runtime data belongs in ignored `raw_data/`, `report/`, `runtime/`, `config/rate_limit_state.json`, and `config/longbridge_rate_limit_state.json`.
+- Feishu summaries render `数据质量`, `运行校验`, and `交付审计` as one sentence each and omit a standalone `边界` section.
 
 ## Component map
 | Area | Path | Owns | Primary commands | Nested guidance |
@@ -36,6 +37,23 @@
 - In scheduled or scripted work, keep Longbridge CLI as primary and Twelve Data as fallback. MCP fallback requires an explicit Codex-orchestrated workflow that normalizes and persists MCP results; it is not enabled by repository configuration alone.
 - Keep all Longbridge real-account app/MCP usage read-only. Do not call order submission, replacement, cancellation, or other real-account mutation tools.
 - Record the actual provider/backend in generated artifacts whenever the workflow supports source metadata; never label MCP-derived data as CLI-derived data or the reverse.
+- Daily Codex pre-market/post-market analysis may read both IBKR and Longbridge
+  connected-app positions and account metrics through read-only tools. Persist
+  structured payloads only under ignored `runtime/account/<DATE>/`, normalize them
+  with `plugin-account-snapshot`, retain broker provenance, and pass the normalized
+  artifact explicitly to delivery. Repository Python and unattended shell jobs must
+  not assume they can call app/MCP tools directly.
+- Cross-broker holdings must be aggregated by symbol/currency for portfolio exposure
+  while preserving broker rows. Never synthesize FX conversions or combined
+  concentration when currencies/account totals are incomplete.
+- Post-market Codex analysis may read IBKR/Longbridge completed executions and order
+  context through read-only tools. Normalize them with `plugin-trade-snapshot`;
+  executions are facts, orders are context only. Never infer "no trades" from a
+  failed broker scope, and never auto-append real-account fills to `trades.jsonl`.
+- Pre-market holding advice must remain conditional: use `HOLD_WATCH`, `NO_ADD`,
+  `RISK_REVIEW`, `EXIT_IF_INVALIDATED`, or `DATA_INSUFFICIENT` with explicit
+  structure, invalidation, and risk conditions. Never issue deterministic position
+  changes; losing positions default to `NO_ADD`.
 
 ## Cross-component workflows
 - Daily snapshot flow:
@@ -66,6 +84,7 @@
   - `python3 script/monitor_scan.py --state config/monitor_state.json --interval 5min`
   - Uses Longbridge market data by default for 5m, 15m, 1h, and daily evidence, falls back to Twelve Data when configured, and writes `report/latest-monitor.json`.
 - Read-only position review flow:
+  - Codex app path: `python3 script/trading_copilot.py plugin-account-snapshot --date <DATE> ...`
   - `python3 script/trading_copilot.py account-snapshot --date <DATE>`
   - `python3 script/trading_copilot.py position-review --date <DATE> --append`
 - Knowledge update flow:

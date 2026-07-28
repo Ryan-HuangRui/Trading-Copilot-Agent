@@ -206,6 +206,18 @@ class FeishuSummaryTest(unittest.TestCase):
             self.assertIn("MU 使用 twelve_data fallback", markdown)
             self.assertIn("【运行校验】", markdown)
             self.assertIn("validation：通过", markdown)
+            rendered_lines = markdown.splitlines()
+            for heading in ("【数据质量】", "【运行校验】", "【交付审计】"):
+                heading_index = rendered_lines.index(heading)
+                section_lines = []
+                for line in rendered_lines[heading_index + 1 :]:
+                    if line.startswith("【"):
+                        break
+                    if line.strip():
+                        section_lines.append(line)
+                self.assertEqual(len(section_lines), 1)
+                self.assertTrue(section_lines[0].startswith("- "))
+            self.assertNotIn("【边界】", markdown)
             self.assertNotIn("【Workflow】", markdown)
             self.assertNotIn("【生成 artifacts】", markdown)
             self.assertNotIn("【Journal】", markdown)

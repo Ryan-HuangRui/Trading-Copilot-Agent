@@ -307,6 +307,9 @@ def position_review_record(
         "symbol": symbol,
         "market": position.get("market"),
         "quantity": position.get("quantity"),
+        "brokers": position.get("brokers")
+        or ([position.get("broker")] if position.get("broker") else None),
+        "cross_broker_overlap": bool(position.get("cross_broker_overlap")),
         "market_value": market_value,
         "last_price": last_price,
         "avg_cost": position.get("avg_cost"),
@@ -350,7 +353,10 @@ def build_markdown(date: str, records: list[dict[str, Any]], summary: dict[str, 
         f"- 持仓数：{len(records)}",
         f"- 需要人工复核：{len(review_required)}",
         f"- 今日计划信号数：{summary.get('planned_signals', 0)}",
+        f"- 券商覆盖：{', '.join(summary.get('brokers', [])) or '未知'}",
+        f"- 跨账户重复持仓：{', '.join(summary.get('cross_broker_overlaps', [])) or '无'}",
         f"- 现金比例：{cash_pct if cash_pct is not None else '未知'}%",
+        f"- 集中度币种不可比持仓数：{summary.get('concentration_currency_limited', 0)}",
         f"- 交易关联状态：{json.dumps(trade_link_state, ensure_ascii=False, sort_keys=True)}",
         "",
     ]
@@ -374,6 +380,8 @@ def build_markdown(date: str, records: list[dict[str, Any]], summary: dict[str, 
         lines.extend(
             [
                 f"### {record['symbol']}",
+                f"- 券商：{', '.join(record.get('brokers', [])) or '未知'}",
+                f"- 跨账户重复暴露：{'是' if record.get('cross_broker_overlap') else '否'}",
                 f"- 是否在今日计划：{'是' if record.get('in_today_signals') else '否'}",
                 f"- 风险状态：{record.get('risk_state')}",
                 f"- 持仓类型：{record.get('position_type', '未知')} / {record.get('review_mode', '未知')}",
@@ -417,6 +425,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     trades_by_symbol = journal_trades_by_symbol(repo_root, args.journal_dir, args.date)
     net_liquidation = to_float((account.get("account") or {}).get("net_liquidation"))
     cash = to_float((account.get("account") or {}).get("cash"))
+    account_currency = str((account.get("account") or {}).get("currency") or "").upper()
     cash_pct = round(cash / net_liquidation * 100, 3) if cash is not None and net_liquidation else None
     records = []
     for position in account.get("positions", []):
@@ -427,12 +436,18 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             continue
         trade = latest_trade(symbol, trades_by_symbol)
         enriched_position = enrich_position_with_price(position, snapshot_prices)
+        position_currency = str(position.get("currency") or "").upper()
+        comparable_net_liquidation = (
+            None
+            if account_currency and position_currency and account_currency != position_currency
+            else net_liquidation
+        )
         records.append(
             position_review_record(
                 date=args.date,
                 position=enriched_position,
                 signal=signals.get(symbol),
-                net_liquidation=net_liquidation,
+                net_liquidation=comparable_net_liquidation,
                 account_snapshot=account_path,
                 signals_file=signal_path,
                 config=config,
@@ -460,6 +475,37 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "planned_signals": len(signals),
         "empty_position_state": len(records) == 0,
         "cash_pct": cash_pct,
+        "account_currency": account_currency or None,
+        "concentration_currency_limited": sum(
+            1
+            for position in account.get("positions", [])
+            if isinstance(position, dict)
+            and account_currency
+            and position.get("currency")
+            and str(position.get("currency")).upper() != account_currency
+        ),
+        "brokers": sorted(
+            {
+                str(broker)
+                for position in account.get("positions", [])
+                if isinstance(position, dict)
+                for broker in (
+                    position.get("brokers")
+                    if isinstance(position.get("brokers"), list)
+                    else [position.get("broker")]
+                )
+                if broker
+            }
+        ),
+        "cross_broker_overlaps": sorted(
+            {
+                normalized_symbol(position.get("symbol"))
+                for position in account.get("positions", [])
+                if isinstance(position, dict)
+                and position.get("cross_broker_overlap")
+                and position.get("symbol")
+            }
+        ),
         "trade_link_state": {
             state: sum(1 for record in records if record.get("trade_link_state") == state)
             for state in sorted({str(record.get("trade_link_state")) for record in records if record.get("trade_link_state")})

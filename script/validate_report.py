@@ -252,6 +252,13 @@ def validate_report_text(
     if markdown_section(text, level=2, title=deep_research_title) is None:
         errors.append(f"{label}: missing ## {deep_research_title} section")
 
+    position_title = "持仓与组合风险" if session == "pre-market" else "持仓与组合风险复盘"
+    if markdown_section(text, level=2, title=position_title) is None:
+        errors.append(f"{label}: missing ## {position_title} section")
+
+    if session == "post-market" and markdown_section(text, level=2, title="当日交易复盘") is None:
+        errors.append(f"{label}: missing ## 当日交易复盘 section")
+
     if not is_brief and not has_trigger(text):
         errors.append(f"{label}: missing trigger condition wording")
     if not has_invalidation(text):

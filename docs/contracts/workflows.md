@@ -67,6 +67,15 @@ Agent report outputs:
 - `report/<PRE_MARKET_DATE>/pre-market.md`
 - `report/<PRE_MARKET_DATE>/pre-market-signals.json`
 
+Connected-app position input:
+
+- After the date is resolved, the Codex Skill reads IBKR and Longbridge positions
+  and account metrics through read-only app capabilities.
+- It persists structured payloads under ignored `runtime/account/<DATE>/`, runs
+  `plugin-account-snapshot`, and adds the normalized snapshot to report provenance.
+- If both apps are unavailable, report generation discloses the limitation and
+  delivery may fall back to the existing read-only Longbridge CLI snapshot.
+
 Skip behavior:
 
 - If `--skip-non-trading-day` is set and the report date is not a regular US trading day, return `status=skipped`.
@@ -110,6 +119,21 @@ Agent report output:
 
 - `report/<SNAPSHOT_DATE>/post-market.md`
 - `report/<SNAPSHOT_DATE>/post-market-signals.json`
+
+Connected-app position input follows the same read-only normalization contract as
+pre-market. The post-market report must connect each holding to daily behavior,
+plan/invalidation evidence, overlap, concentration, and next-session human-review
+scenarios without producing broker actions.
+
+Connected-app trade review:
+
+- Capture IBKR `TODAY` trades plus Longbridge today's executions and order context.
+- Normalize with `plugin-trade-snapshot`; use the exact-allowlisted Longbridge CLI
+  read fallback when the app lacks execution scope.
+- The agent writes `## 当日交易复盘`, linking executions to pre-market plans and
+  5m/15m evidence. Orders remain context only.
+- Partial broker coverage must be disclosed. Observed real-account fills are not
+  automatically projected into the formal journal.
 
 Skip behavior:
 
@@ -757,7 +781,8 @@ Required behavior:
 - For post-market summaries, include a `市场与行业` section before symbol-level analysis. Use `longbridge-market-context` as the primary source for major index/indicator moves and industry/sector ETF proxy strength. If Longbridge context is missing or failed, fall back to daily snapshot observation-pool breadth and clearly label it as watchlist/snapshot evidence rather than full-market coverage.
 - For post-market summaries, include a compact intraday-monitor recap when artifacts exist: focus symbols, final state distribution, and latest state summary. Do not include sent-notification counts or artifact paths.
 - For post-market summaries, include the same-day review conclusion when available: possible missed candidates, touch-fade/invalidated counts, not-triggered counts, and the conclusion.
-- Keep a small trailing workflow check with workflow/date, validation status, data-quality status, and optional watchlist-sync status.
+- Render `数据质量`, `运行校验`, and `交付审计` as one compact sentence each; do not add a standalone `边界` section.
+- Keep workflow/date, validation status, data-quality status, optional watchlist-sync status, and delivery evidence inside those compact trailing lines.
 - Keep the full detailed report in the Markdown report artifacts; Feishu content should stay analysis-first.
 - Do not present conditional plans as deterministic buy/sell instructions.
 

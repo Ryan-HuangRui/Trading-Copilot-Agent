@@ -32,6 +32,9 @@ class WorkflowSmokeTest(unittest.TestCase):
 - 已完成研究：无
 - 待处理升级：无
 - 边界：Vibe Swarm 仅为二级研究证据，不提升执行等级。
+## 持仓与组合风险
+- 数据覆盖：未取得插件持仓快照。
+- 边界：只读风险复核，不生成仓位调整指令。
 ## 执行清单（逐标的）
 ### MU
 - 参考 setup：breakout_pullback_continuation.md

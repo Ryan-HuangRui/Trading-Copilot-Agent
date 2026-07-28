@@ -518,6 +518,53 @@ class PositionReviewTest(unittest.TestCase):
         self.assertEqual(config["high_concentration_pct"], 25.0)
         self.assertFalse(config["require_trade_link"])
 
+    def test_position_review_does_not_mix_account_and_position_currencies(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            account_dir = root / "runtime" / "account" / "2026-05-27"
+            account_dir.mkdir(parents=True)
+            (account_dir / "account-snapshot.json").write_text(
+                json.dumps(
+                    {
+                        "account": {
+                            "net_liquidation": 100000,
+                            "cash": 10000,
+                            "currency": "HKD",
+                        },
+                        "positions": [
+                            {
+                                "symbol": "NVDA",
+                                "currency": "USD",
+                                "last_price": 200,
+                                "market_value": 20000,
+                                "brokers": ["ibkr", "longbridge"],
+                                "cross_broker_overlap": True,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            command = [
+                sys.executable,
+                str(ROOT / "script" / "position_review.py"),
+                "--repo-root",
+                str(root),
+                "--date",
+                "2026-05-27",
+            ]
+            proc = subprocess.run(command, check=False, text=True, capture_output=True)
+
+            self.assertEqual(proc.returncode, 0, msg=proc.stderr or proc.stdout)
+            review = json.loads(
+                (root / "report" / "2026-05-27" / "position-review.json").read_text(encoding="utf-8")
+            )
+            record = review["position_reviews"][0]
+            self.assertNotIn("concentration_pct", record)
+            self.assertEqual(record["brokers"], ["ibkr", "longbridge"])
+            self.assertTrue(record["cross_broker_overlap"])
+            self.assertEqual(review["summary"]["concentration_currency_limited"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()
