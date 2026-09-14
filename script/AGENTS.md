@@ -129,7 +129,7 @@
 - Post-market market/industry summary context should come from Longbridge read-only K-line data via `longbridge_market_context.py`; use sector/industry ETF proxies and disclose errors instead of inventing unavailable sector data.
 - If adding a script that fetches market data, reuse `build_market_data_client()` so Longbridge remains primary and Twelve Data remains fallback.
 - S&P 500 universe fetches may use standard-library HTTP, but per-symbol market-data screening must still use the shared market-data provider stack.
-- For scheduled report scripts, support `--skip-non-trading-day` and use the market date in `America/New_York`.
+- For scheduled trading report scripts, support `--skip-non-trading-day` and use the market date in `America/New_York`. Earnings research is a separate daily calendar workflow: use the Asia/Shanghai batch date, preserve actual financial periods and UTC/public cutoff, and do not skip all work on non-trading days. See `docs/contracts/earnings-research.md`.
 - Agent-facing wrapper responses should keep the shared fields `status`, `workflow`, `date`, `artifacts`, `skipped`, and `reason`.
 - Snapshot builders should continue after per-symbol fetch failures and record failures in `errors`; same-day cache fallback must be marked with `used_cache`.
 - Dynamic S&P 500 candidates should be written to `report/<DATE>/candidate-universe.json` and merged into the snapshot only for that date; do not mutate `config/watchlist.json` for dynamic candidates. The only scheduled mutation of `config/watchlist.json` should be the Longbridge source-group refresh fallback cache.

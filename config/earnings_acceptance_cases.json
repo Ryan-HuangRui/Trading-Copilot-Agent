@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "source_mode": "fixture",
+  "not_for_production": true,
+  "cases": [
+    {
+      "id": "organic-demand",
+      "scenario": "虚构公司甲的可比单季有机收入增长，订单转化改善，现金回款同步；两家不同客户披露相关支出上升。",
+      "evidence": [
+        {
+          "id": "f1",
+          "kind": "fact",
+          "statement": "经营改善来自有机业务，回款与订单兑现同向"
+        },
+        {
+          "id": "f2",
+          "kind": "fact",
+          "statement": "不同客户原始披露支持相同需求方向"
+        }
+      ],
+      "expected_constraints": [
+        "可形成支持经营改善的研究推断",
+        "不能据此给出股价或买卖结论",
+        "行业样本覆盖仍需单列",
+        "保留客户支出回落和订单取消等可观察反证条件"
+      ]
+    },
+    {
+      "id": "contradictory-growth",
+      "scenario": "虚构公司乙营收增长主要来自并购，经营现金流下滑，应收增长快于收入；管理层说需求旺盛，但主要客户削减预算。",
+      "evidence": [
+        {
+          "id": "f1",
+          "kind": "fact",
+          "statement": "增长主要来自并购"
+        },
+        {
+          "id": "f2",
+          "kind": "management_outlook",
+          "statement": "管理层称需求旺盛"
+        },
+        {
+          "id": "f3",
+          "kind": "fact",
+          "statement": "客户预算下降与回款走弱"
+        }
+      ],
+      "expected_constraints": [
+        "不能把并购增长认作行业有机扩张",
+        "保留需求叙事与客户证据的矛盾",
+        "综合判断必须处置重大反证",
+        "不能用多个Agent同意代替证据"
+      ]
+    },
+    {
+      "id": "ipo-insufficient",
+      "scenario": "虚构拟上市公司丙只有公开招股书摘要，没有可比历史季度或客户集中度数据，声称市场空间巨大。",
+      "evidence": [
+        {
+          "id": "f1",
+          "kind": "management_outlook",
+          "statement": "发行人声称市场空间巨大"
+        }
+      ],
+      "expected_constraints": [
+        "明确资料不足",
+        "不补造历史指标或CIK/ticker",
+        "TAM叙事不能作为已兑现需求事实",
+        "列出需补读正式招股书及风险章节"
+      ]
+    }
+  ]
+}

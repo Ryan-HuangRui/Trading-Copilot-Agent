@@ -37,6 +37,10 @@ Field meanings:
 - `skipped`: `true` only when the workflow intentionally did not run.
 - `reason`: skip or failure reason. Use `null` for a normal successful run.
 
+## Earnings research
+
+The independent earnings/IPO and industry research contract is defined in `docs/contracts/earnings-research.md`. Its daily batch date is Asia/Shanghai, financial periods and public-data cutoff are explicit, and price-action/trading-day gates do not apply to fundamentals-only research. P0 provides the contract; command implementation is tracked in the earnings workflow plan. Existing trading workflow behavior remains unchanged.
+
 ## pre-market-plan
 
 Purpose: prepare the context that a human-facing pre-market report agent will use.

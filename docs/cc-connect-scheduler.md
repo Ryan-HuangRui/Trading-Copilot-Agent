@@ -582,3 +582,9 @@ The full Markdown reports should remain in `report/<DATE>/` or `report/weekly/` 
 
 For Longbridge account setup, read-only CLI assumptions, and position review threshold config, see `docs/longbridge-account-setup.md`.
 For paper execution operation, scheduler switches, and rollout gates, see `docs/paper-execution-runbook.md`.
+
+## Independent earnings research (P0 contract; P3 deployment)
+
+Use `docs/contracts/earnings-research.md` and the earnings workflow plan. The planned NAS task runs once daily at 10:00 Asia/Shanghai, including weekends, through a separate earnings wrapper. Set `mute=true`; disable intermediate and final-result auto-forwarding. Role logs and normal skips stay local. Only the finalizer may explicitly call `cc-connect send` when its notification decision warrants it.
+
+Reuse this repository's verified `CC_CONNECT_PROJECT`, `CC_CONNECT_SESSION` and binary configuration. Do not rely on working directory alone to route messages, and do not use the Feishu CLI bot configured for another workspace. Store report versions and notification receipts independently of existing pre/post-market daily delivery keys. This section does not create or enable a production schedule.

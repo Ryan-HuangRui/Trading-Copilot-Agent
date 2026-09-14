@@ -55,6 +55,14 @@
   structure, invalidation, and risk conditions. Never issue deterministic position
   changes; losing positions default to `NO_ADD`.
 
+## Earnings research boundary
+
+- Earnings/IPO and industry-cycle research uses `.codex/skills/tca-earnings-research/SKILL.md` and `docs/contracts/earnings-research.md`, independently of price-action trade plans.
+- SEC/issuer disclosures are the financial source of record; this does not alter the Longbridge-first market-price policy.
+- Earnings research runs daily at 10:00 Asia/Shanghai, including weekends when work is pending; do not apply an exchange trading-day skip to this route.
+- Scheduled cc-connect execution is muted. Only the outer finalizer may send a warranted notification using the verified repository project/session; do not use another workspace's Feishu CLI.
+- Runtime outputs belong under ignored `raw_data/earnings/`, `runtime/earnings/`, and `report/earnings/`. Research cannot mutate broker state, trading watchlists, signal journals, or approved rules.
+
 ## Cross-component workflows
 - Daily snapshot flow:
   - `python3 script/prepare_market_snapshot.py --watchlist config/watchlist.json --skip-non-trading-day`

@@ -1,0 +1,4 @@
+interface:
+  display_name: "财报与行业景气研究"
+  short_description: "从财报和招股书提取经营证据，交叉验证行业变化并持续复核季度假设"
+  default_prompt: "使用 $tca-earnings-research 按指定资料截止时间研究公司财报或行业季度变化，保留原文证据与反证。"

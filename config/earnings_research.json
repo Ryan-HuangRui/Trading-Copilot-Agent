@@ -1,0 +1,132 @@
+{
+  "schema_version": 1,
+  "workflow": "earnings-research",
+  "deployment_stage": "P0_contract_only",
+  "paths": {
+    "universe": "config/earnings_universe.json",
+    "state": "runtime/earnings/state.sqlite",
+    "raw": "raw_data/earnings",
+    "reports": "report/earnings",
+    "runs": "runtime/earnings/runs",
+    "outbox": "runtime/earnings/outbox"
+  },
+  "schedule": {
+    "timezone": "Asia/Shanghai",
+    "daily_time": "10:00",
+    "days": "all",
+    "trading_day_skip": false,
+    "weekly_day": "sunday",
+    "cutoff_timezone": "UTC"
+  },
+  "seasons": [
+    {
+      "id": "winter",
+      "start": "01-10",
+      "strong_end": "03-15",
+      "tail_end": "03-31"
+    },
+    {
+      "id": "spring",
+      "start": "04-10",
+      "strong_end": "05-20",
+      "tail_end": "05-31"
+    },
+    {
+      "id": "summer",
+      "start": "07-10",
+      "strong_end": "08-20",
+      "tail_end": "08-31"
+    },
+    {
+      "id": "autumn",
+      "start": "10-10",
+      "strong_end": "11-20",
+      "tail_end": "11-30"
+    }
+  ],
+  "sources": {
+    "primary": [
+      "sec",
+      "issuer_ir"
+    ],
+    "sec": {
+      "user_agent_env": "TCA_SEC_USER_AGENT",
+      "max_requests_per_second": 2,
+      "timeout_seconds": 30,
+      "max_attempts": 3,
+      "overlap_days": 3,
+      "reconcile_every_days": 7
+    },
+    "live_requires_explicit_mode": true,
+    "fixture_fallback": false
+  },
+  "profiles": {
+    "daily": {
+      "model": "gpt-5.6-sol",
+      "reasoning_effort": "medium"
+    },
+    "review": {
+      "model": "gpt-5.6-sol",
+      "reasoning_effort": "high"
+    },
+    "quarterly": {
+      "model": "gpt-6-astra",
+      "reasoning_effort": "high"
+    },
+    "escalation": {
+      "model": "gpt-6-astra",
+      "reasoning_effort": "xhigh"
+    },
+    "extraction": {
+      "model": "gpt-5.6-terra",
+      "reasoning_effort": "medium",
+      "enabled": false
+    }
+  },
+  "budgets": {
+    "concurrency": 1,
+    "companies_per_batch": 5,
+    "daily_company_limit": 10,
+    "strong_season_company_limit": 20,
+    "daily_industry_limit": 5,
+    "quarterly_tasks_per_day": 1,
+    "review_tasks_per_day": 2,
+    "escalations_per_day": 1,
+    "task_timeout_seconds": 1800,
+    "max_task_attempts": 2,
+    "initialization_company_limit": 5,
+    "initialization_lookback_quarters": 8,
+    "usage_mode": "observe_auth_backend",
+    "max_tokens_per_day": null,
+    "currency_budget_per_day": null
+  },
+  "quarterly": {
+    "mature_coverage_ratio": 0.9,
+    "require_key_issuers": true,
+    "require_completed_company_research": true,
+    "require_critical_gap_review": true,
+    "deadline_partial_allowed": true,
+    "automatic_trigger_enabled": false
+  },
+  "delivery": {
+    "enabled": false,
+    "backend": "cc-connect",
+    "scheduler_mute": true,
+    "auto_forward_outputs": false,
+    "finalizer_only": true,
+    "send_on_material_change": true,
+    "project_env": "CC_CONNECT_PROJECT",
+    "session_env": "CC_CONNECT_SESSION",
+    "binary_env": "CC_CONNECT_BIN",
+    "require_explicit_destination": true,
+    "other_workspace_feishu_cli_allowed": false,
+    "attachments_enabled": false,
+    "max_normal_notifications_per_batch": 1
+  },
+  "safety": {
+    "research_only": true,
+    "broker_writes": false,
+    "watchlist_mutation": false,
+    "rule_promotion": false
+  }
+}

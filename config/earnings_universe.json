@@ -1,0 +1,215 @@
+{
+  "schema_version": 1,
+  "universe_id": "earnings-pilot-v1",
+  "created_at": "2026-09-14",
+  "scope": "research_observation_only",
+  "identity_policy": "resolve CIK and issuer from SEC before live use; no guessed identifiers",
+  "industry_mapping_status": "initial research cohorts, validate business segments from disclosures",
+  "industries": [
+    {
+      "industry_id": "semiconductors",
+      "label": "半导体",
+      "metric_template": "semiconductors",
+      "key_symbols": [
+        "NVDA",
+        "MU"
+      ],
+      "issuers": [
+        {
+          "symbol": "NVDA",
+          "issuer_id": null,
+          "identity_status": "pending_resolution"
+        },
+        {
+          "symbol": "AMD",
+          "issuer_id": null,
+          "identity_status": "pending_resolution"
+        },
+        {
+          "symbol": "MU",
+          "issuer_id": null,
+          "identity_status": "pending_resolution"
+        },
+        {
+          "symbol": "AVGO",
+          "issuer_id": null,
+          "identity_status": "pending_resolution"
+        },
+        {
+          "symbol": "AMAT",
+          "issuer_id": null,
+          "identity_status": "pending_resolution"
+        },
+        {
+          "symbol": "LRCX",
+          "issuer_id": null,
+          "identity_status": "pending_resolution"
+        }
+      ]
+    },
+    {
+      "industry_id": "cloud-software",
+      "label": "云与企业软件",
+      "metric_template": "cloud-software",
+      "key_symbols": [
+        "MSFT",
+        "AMZN"
+      ],
+      "issuers": [
+        {
+          "symbol": "MSFT",
+          "issuer_id": null,
+          "identity_status": "pending_resolution"
+        },
+        {
+          "symbol": "AMZN",
+          "issuer_id": null,
+          "identity_status": "pending_resolution"
+        },
+        {
+          "symbol": "GOOGL",
+          "issuer_id": null,
+          "identity_status": "pending_resolution"
+        },
+        {
+          "symbol": "ORCL",
+          "issuer_id": null,
+          "identity_status": "pending_resolution"
+        },
+        {
+          "symbol": "CRM",
+          "issuer_id": null,
+          "identity_status": "pending_resolution"
+        },
+        {
+          "symbol": "NOW",
+          "issuer_id": null,
+          "identity_status": "pending_resolution"
+        }
+      ]
+    },
+    {
+      "industry_id": "electrification-industrial",
+      "label": "电气化与工业设备",
+      "metric_template": "electrification-industrial",
+      "key_symbols": [
+        "ETN",
+        "GEV"
+      ],
+      "issuers": [
+        {
+          "symbol": "ETN",
+          "issuer_id": null,
+          "identity_status": "pending_resolution"
+        },
+        {
+          "symbol": "VRT",
+          "issuer_id": null,
+          "identity_status": "pending_resolution"
+        },
+        {
+          "symbol": "GEV",
+          "issuer_id": null,
+          "identity_status": "pending_resolution"
+        },
+        {
+          "symbol": "HUBB",
+          "issuer_id": null,
+          "identity_status": "pending_resolution"
+        },
+        {
+          "symbol": "EMR",
+          "issuer_id": null,
+          "identity_status": "pending_resolution"
+        },
+        {
+          "symbol": "ROK",
+          "issuer_id": null,
+          "identity_status": "pending_resolution"
+        }
+      ]
+    },
+    {
+      "industry_id": "managed-care",
+      "label": "医疗保险与服务",
+      "metric_template": "managed-care",
+      "key_symbols": [
+        "UNH",
+        "ELV"
+      ],
+      "issuers": [
+        {
+          "symbol": "UNH",
+          "issuer_id": null,
+          "identity_status": "pending_resolution"
+        },
+        {
+          "symbol": "ELV",
+          "issuer_id": null,
+          "identity_status": "pending_resolution"
+        },
+        {
+          "symbol": "CI",
+          "issuer_id": null,
+          "identity_status": "pending_resolution"
+        },
+        {
+          "symbol": "CVS",
+          "issuer_id": null,
+          "identity_status": "pending_resolution"
+        },
+        {
+          "symbol": "HUM",
+          "issuer_id": null,
+          "identity_status": "pending_resolution"
+        },
+        {
+          "symbol": "CNC",
+          "issuer_id": null,
+          "identity_status": "pending_resolution"
+        }
+      ]
+    },
+    {
+      "industry_id": "consumer-retail",
+      "label": "消费零售",
+      "metric_template": "consumer-retail",
+      "key_symbols": [
+        "WMT",
+        "COST"
+      ],
+      "issuers": [
+        {
+          "symbol": "WMT",
+          "issuer_id": null,
+          "identity_status": "pending_resolution"
+        },
+        {
+          "symbol": "COST",
+          "issuer_id": null,
+          "identity_status": "pending_resolution"
+        },
+        {
+          "symbol": "TGT",
+          "issuer_id": null,
+          "identity_status": "pending_resolution"
+        },
+        {
+          "symbol": "HD",
+          "issuer_id": null,
+          "identity_status": "pending_resolution"
+        },
+        {
+          "symbol": "LOW",
+          "issuer_id": null,
+          "identity_status": "pending_resolution"
+        },
+        {
+          "symbol": "TJX",
+          "issuer_id": null,
+          "identity_status": "pending_resolution"
+        }
+      ]
+    }
+  ]
+}

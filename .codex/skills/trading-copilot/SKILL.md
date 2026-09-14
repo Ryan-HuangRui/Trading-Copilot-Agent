@@ -12,6 +12,7 @@ Choose exactly one primary Skill whenever the request has a clear scope:
 - 盘前分析、盘前计划、`exec-brief.md` → `$tca-pre-market-analysis`
 - 盘后复盘、收盘总结、明日观察 → `$tca-post-market-review`
 - 单 ticker 当前价格行为、关键位、入场/加仓条件 → `$tca-price-action-analysis`
+- 财报、招股书、行业景气、季度行业比较 → `$tca-earnings-research`；独立基本面研究，不套用价格行为交易规则
 - Swarm 深度研究、正反论证、独立取证 → `$tca-swarm-research`
 - 盘中计划跟踪、事件日志、通知候选 → `$intraday-tracker`
 
