@@ -10,7 +10,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from earnings_common import (ROOT, atomic_write_json, canonical_json, confined_path, emit, envelope, ensure_inside, load_config,
+from earnings_common import (ROOT, atomic_write_json, canonical_json, confined_path, configuration_path, emit, envelope, ensure_inside, load_config,
                              parse_time, read_json, relative_to_root, resolve_path, sha256_bytes,
                              sha256_file, safe_segment, shanghai_date, stable_id, utc_now)
 from earnings_financials import derive_standalone_facts, extract_sec_company_facts
@@ -188,7 +188,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = build_parser().parse_args()
     root = Path(args.repo_root).resolve()
-    config_path = confined_path(root, args.config, "config")
+    config_path = configuration_path(root, args.config)
     config, config_hash = load_config(root, str(config_path))
     cutoff = parse_time(args.cutoff)
     if cutoff is None:

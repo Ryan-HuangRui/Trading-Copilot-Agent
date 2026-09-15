@@ -20,6 +20,26 @@ class EarningsWorkflowTests(unittest.TestCase):
             self.fail(proc.stderr or proc.stdout)
         return proc, json.loads(proc.stdout)
 
+    def test_config_override_rejects_other_directories_and_symlink_escape(self):
+        sys.path.insert(0, str(ROOT / "script"))
+        from earnings_common import load_config
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            runtime = root / "runtime/earnings"
+            runtime.mkdir(parents=True)
+            source = ROOT / "config/earnings_research.json"
+            allowed = runtime / "deployment.json"
+            shutil.copy(source, allowed)
+            self.assertEqual(load_config(root, str(allowed))[0]["schema_version"], 1)
+            outside = root / "unapproved.json"
+            shutil.copy(source, outside)
+            with self.assertRaisesRegex(ValueError, "outside allowed roots"):
+                load_config(root, str(outside))
+            link = runtime / "escape.json"
+            link.symlink_to(outside)
+            with self.assertRaisesRegex(ValueError, "outside allowed roots"):
+                load_config(root, str(link))
+
     def write_role_report(self, root, manifest_path, *, role, claim_id, disputed_claim_id=None, material_finding_id=None):
         manifest = json.loads(manifest_path.read_text())
         document = manifest["documents"][0]
@@ -57,13 +77,14 @@ class EarningsWorkflowTests(unittest.TestCase):
         report_path.parent.mkdir(parents=True, exist_ok=True); report_path.write_text(json.dumps(report))
         return report_path
 
-    def test_company_record_then_industry_dependency_and_isolated_paths(self):
+    def test_runtime_config_company_record_then_industry_dependency_and_isolated_paths(self):
         with TemporaryDirectory() as temp:
             root = Path(temp)
-            config = root / "config/earnings_research.json"; config.parent.mkdir(parents=True)
+            config = root / "runtime/earnings/deployment-config.json"; config.parent.mkdir(parents=True)
             shutil.copy(ROOT / "config/earnings_research.json", config)
             fixture = root / "tests/fixtures/earnings/sample_bundle.json"; fixture.parent.mkdir(parents=True)
             shutil.copy(ROOT / "tests/fixtures/earnings/sample_bundle.json", fixture)
+            (root / "config").mkdir()
             universe = root / "config/universe.json"
             universe.write_text(json.dumps({"schema_version": 1, "universe_id": "test",
                 "industries": [{"industry_id": "test-industry", "key_symbols": ["ACME"], "issuers": [{"symbol": "ACME"}]}]}))

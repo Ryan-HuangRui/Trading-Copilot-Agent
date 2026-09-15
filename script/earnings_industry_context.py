@@ -10,7 +10,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from earnings_common import (ROOT, atomic_write_json, canonical_json, confined_path, emit, envelope, ensure_inside, load_config, parse_time,
+from earnings_common import (ROOT, atomic_write_json, canonical_json, confined_path, configuration_path, emit, envelope, ensure_inside, load_config, parse_time,
                              read_json, relative_to_root, resolve_path, safe_segment, sha256_bytes, sha256_file, shanghai_date, stable_id, utc_now)
 from earnings_state import EarningsState
 
@@ -141,7 +141,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = build_parser().parse_args()
     root = Path(args.repo_root).resolve()
-    config_path = confined_path(root, args.config, "config")
+    config_path = configuration_path(root, args.config)
     config, config_hash = load_config(root, str(config_path))
     universe_path = confined_path(root, args.universe, "config")
     universe = read_json(universe_path)

@@ -109,8 +109,13 @@ def relative_to_root(root: Path, path: Path) -> str:
         return str(path.resolve())
 
 
+def configuration_path(root: Path, value: str | Path) -> Path:
+    """Allow tracked defaults and private deployment overrides inside this repo."""
+    return ensure_inside(resolve_path(root, value), [root / "config", root / "runtime/earnings"])
+
+
 def load_config(root: Path, config_path: str = "config/earnings_research.json") -> tuple[dict[str, Any], str]:
-    path = resolve_path(root, config_path)
+    path = configuration_path(root, config_path)
     data = read_json(path)
     if not isinstance(data, dict) or data.get("schema_version") != 1:
         raise ValueError(f"unsupported earnings config: {path}")
