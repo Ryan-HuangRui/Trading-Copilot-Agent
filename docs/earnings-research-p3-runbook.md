@@ -1,6 +1,6 @@
 # 财报研究 P3：NAS 日批次与静默交付
 
-P1/P2 与 P3 已本地集成并通过工程回归；真实数据、模型报告和 NAS 交付仍待验收。只有 P1/P2 review、真实采集与模型角色验收、master 推送和 NAS 部署核验全部通过后，才可记录为生产启用。本文不代表已创建定时任务。
+本手册描述已实现并通过工程回归的 P1/P2 与 P3 工作流。生产启用须同时具备 review、真实采集与模型角色验收、master 推送和 NAS 部署核验；将实际状态、cron 快照及发送回执记录在 NAS 的 `runtime/earnings/deployment-acceptance.json`，不以文档中的配置示例代替运行证据。
 
 ## 执行路径
 
@@ -19,7 +19,7 @@ P1/P2 与 P3 已本地集成并通过工程回归；真实数据、模型报告�
 - `runtime/earnings/operator.json`：`{"sec_user_agent": "TradingCopilot operator <真实联系邮箱>"}`。真实邮箱须由操作者提供，不使用示例地址请求 SEC。
 - `runtime/earnings/deployment.json`：schema_version=1、verified_repo（NAS 仓库绝对路径）、project、session、cc_connect_bin、codex_bin、verified_at、verified_from_cron_id、delivery_enabled、batch_timeout_seconds。
 
-部署时从本仓库既有 cc-connect 定时任务核验 project/session、wrapper 所指仓库，再保存该路由。不能把“当前目录”当成通知路由，不得使用其他工作区的飞书 CLI。`delivery_enabled` 初始为 false，发送验收后启用。
+部署时从本仓库既有 cc-connect 定时任务核验 project/session、wrapper 所指仓库，再保存该路由。不能把“当前目录”当成通知路由，不得使用其他工作区的飞书 CLI。`delivery_enabled` 初始为 false；真实研究验收通过后，先开启该开关完成一次明确标识的发送验收，再启用定时任务。
 
 ## 通知行为
 
