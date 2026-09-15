@@ -28,7 +28,7 @@ python3 script/trading_copilot.py earnings-lark-document --publication-manifest 
 
 ## 文档部署配置
 
-真实值只写忽略的 `runtime/earnings/deployment.json`：
+部署应使用已通过用户身份读取并核验的云空间根目录 token；不要使用未验证的位置别名。真实值只写忽略的 `runtime/earnings/deployment.json`：
 
 ```json
 {
@@ -38,7 +38,7 @@ python3 script/trading_copilot.py earnings-lark-document --publication-manifest 
     "profile": "explicit-user-profile",
     "user_route": "opaque-user-destination-id",
     "as": "user",
-    "parent_position": "my_space"
+    "parent_token": "verified-user-root-folder-token"
   }
 }
 ```
