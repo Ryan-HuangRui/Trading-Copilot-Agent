@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "source_mode": "fixture",
+  "issuers": [
+    {
+      "issuer_id": "fixture:acme",
+      "cik": null,
+      "symbol": "ACME",
+      "name": "ACME Test Corporation",
+      "identity_status": "fixture"
+    }
+  ],
+  "documents": [
+    {
+      "document_id": "fixture-acme-2026q2-10q",
+      "issuer_id": "fixture:acme",
+      "event_id": "event-acme-2026q2",
+      "event_kind": "earnings",
+      "form": "10-Q",
+      "source_type": "fixture_filing",
+      "source_url": "fixture://acme/2026q2/10-q",
+      "reporting_start": "2026-04-01",
+      "reporting_end": "2026-06-30",
+      "published_at": "2026-08-01",
+      "accepted_at": "2026-08-01T20:00:00Z",
+      "content": "ACME fixture only. Revenue was USD 120 million; backlog declined. This is not live evidence.",
+      "suffix": ".txt"
+    },
+    {
+      "document_id": "fixture-acme-2026q2-release",
+      "issuer_id": "fixture:acme",
+      "event_id": "event-acme-2026q2",
+      "event_kind": "earnings",
+      "form": "8-K exhibit",
+      "source_type": "fixture_earnings_release",
+      "source_url": "fixture://acme/2026q2/release",
+      "reporting_start": "2026-04-01",
+      "reporting_end": "2026-06-30",
+      "published_at": "2026-08-01",
+      "accepted_at": "2026-08-01T19:30:00Z",
+      "content": "ACME fixture release. Management expects demand uncertainty. This is not live evidence.",
+      "suffix": ".txt"
+    }
+  ]
+}

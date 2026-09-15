@@ -1,6 +1,6 @@
 # Earnings Research Contract — schema version 1
 
-P0 defines this contract and configuration. P1/P2 implement the commands below; P3 adds silent scheduled delivery. Command names here are not proof they are already executable. See `docs/earnings-research-workflow-plan.md` for accepted scope and milestones.
+P0 defines this contract and configuration. P1/P2 implement collection and manual role research; P3 implements silent daily orchestration and delivery with explicit NAS runtime activation. Automatic quarterly scheduling remains P4. See `docs/earnings-research-workflow-plan.md` for accepted scope and milestones.
 
 ## Boundary and status
 
@@ -16,7 +16,7 @@ Live SEC requests require `TCA_SEC_USER_AGENT` with real operator contact inform
 
 NAS secret overrides belong in environment or ignored runtime config, never tracked JSON. Configuration changes affect new tasks; running tasks retain the configuration hash used at creation.
 
-## Planned commands and ownership
+## Commands and ownership
 
 | Command | Phase | Result |
 |---|---|---|
@@ -38,11 +38,11 @@ Runtime paths: `raw_data/earnings/`, `runtime/earnings/`, `report/earnings/`. Us
 
 Identifiers: issuer_id (CIK when verified, stable local id before IPO resolution), document_id (accession/document identity when applicable), event_id (issuer and actual earnings period, or IPO event), task_id and run_id. Distinct documents for one earnings event remain separately versioned. Duplicate media coverage shares its underlying source event.
 
-Document record: schema_version, document_id, issuer_id, form/source_type, source_url, provider/backend, reporting_start/end (nullable for IPO), published_at, accepted_at (nullable), fetched_at, public_time_precision, original_path, content_sha256, version, supersedes, source_mode. Unknown public timestamps remain unknown; historical contexts must exclude or explicitly flag unprovable availability. Revisions never overwrite originals.
+Document record: schema_version, document_id, issuer_id, form/source_type, source_url, provider/backend, reporting_start/end (nullable for IPO), published_at, accepted_at (nullable), fetched_at, public_time_precision, original_path, content_sha256, version, supersedes, source_mode. Unknown public timestamps remain unknown; date-only timestamps on the cutoff date are also unprovable. Compact SEC acceptance timestamps use the documented America/New_York convention and are normalized to UTC. Historical contexts must exclude or explicitly flag unprovable availability. Revisions never overwrite originals. Filing document type is preferred for EX-99.1; filename heuristics support embedded `ex991` names only for text-like files and persist an explicit limitation. An 8-K/6-K filing date is not a fiscal quarter.
 
 Evidence record: schema_version, evidence_id, issuer_id, symbol (nullable), segment (nullable), industry_ids, document_id/version/hash, source locator, short quote, source URL, public timestamp, reporting_start/end, evidence_kind (fact/management_outlook/inference), summary, numeric_facts, limitations. Numeric facts contain metric, value (nullable), unit, currency (nullable), accounting_basis, duration/instant, period, derivation and source evidence ids. Percentages and monetary values must preserve scale.
 
-Financial normalization must handle cumulative vs standalone quarters, annual vs Q4, restatements, custom tags and segment dimensions. No unsupported subtraction across currencies/accounting scopes. Missing values are null. Loss-to-profit transitions are described without meaningless growth ratios. No consensus-surprise claim without pre-release consensus evidence.
+Financial normalization must handle cumulative vs standalone quarters, annual vs Q4, restatements, custom tags and segment dimensions. Derived differences retain both component accessions, tags, periods, values and units. SEC Company Facts is a current aggregate endpoint, not a point-in-time archive: filed-date filtering is a calculation aid, not proof that the aggregate payload was historically available. Historical factual claims still require contemporaneous original filing evidence. No unsupported subtraction across currencies/accounting scopes. Missing values are null. Loss-to-profit transitions are described without meaningless growth ratios. No consensus-surprise claim without pre-release consensus evidence.
 
 ## Role artifact contract
 
@@ -58,13 +58,27 @@ Challenge reports add findings: finding_id, disputed_claim_id (nullable for inde
 
 Input manifests specify assigned role, output paths, cutoff, source versions, previous artifacts, actual scope and model profile. Every referenced runtime path must resolve inside allowed input/output roots; prevent traversal and accidental writes to code/config/secrets. A role cannot mutate the frozen manifest.
 
+### Exact JSON field shapes
+
+Use these exact keys; descriptive names above are not aliases. Every report also copies `research_mode` from the manifest.
+
+- `provenance.input_document_hashes`: array of SHA-256 strings from all `documents` and `calculation_inputs`, not objects or `input_documents`.
+- `provenance.predecessor_report_hashes`: array of SHA-256 strings from `previous_artifacts`, including an empty array when none exist.
+- Each evidence uses `document_id`, `document_version`, and `document_hash` (the source's `content_sha256`), plus `public_timestamp` copied from `accepted_at` or `published_at`.
+- `numeric_facts[].period` is `{"kind":"duration","start":"YYYY-MM-DD","end":"YYYY-MM-DD"}` or `{"kind":"instant","start":null,"end":"YYYY-MM-DD"}`. Unknown dates are null, never prose. `duration` at the numeric-fact top level cannot replace `period.kind`.
+- `coverage` is `{"expected_issuers":1,"disclosed_issuers":1,"fetched_issuers":1,"researched_issuers":1,"key_missing_issuers":[]}` for a researched single issuer. For industry/synthesis copy `manifest.coverage_audit.counts` exactly, preserving additional frozen count fields. Do not nest another `counts` object.
+- `completeness` is `{"status":"partial","missing_inputs":["specific missing material"]}` when incomplete. This is separate from `thesis_state`.
+- Challenge findings use unique `finding_id`, `disputed_claim_id` (nullable), `evidence_ids` (array), `competing_explanation` (string), `materiality` (`high`/`medium`/`low`; `material` is an accepted alias for high), and `requested_check` (string). Synthesis copies every ID in `manifest.material_challenge_finding_ids` into `challenge_dispositions`, with a disposition, rationale and resolvable `supporting_evidence_ids`.
+
+`short_quote` must be a contiguous verbatim excerpt from the source or its HTML text after tag removal, entity decoding and whitespace folding. Paraphrases, inserted table labels and disconnected sentence concatenation fail validation. The original byte hash remains authoritative even when matching rendered HTML text. Cite table/section locators separately from the quote.
+
 Validator errors: missing identity/provenance, nonexistent or hash-mismatched input, citation/claim references not resolvable, impossible periods/units, known post-cutoff input, invalid counts/state, undeclared fixture evidence, broker command fields, or missing material challenge dispositions. Warnings: missing optional call transcript, incomplete peer coverage, unverified optional metadata. Validator success proves structural/evidence integrity, not economic correctness; manual sample review remains mandatory.
 
 ## Queue, idempotency and budget
 
-Task key = research mode + issuer/industry + periods + input hashes + method version. State = queued/running/completed/retryable_failed/terminal_failed. Lease owner/expiry, attempts, dependencies and output manifest are persisted. Only eligible expired leases can be reclaimed. Batch/run output directories are isolated; atomic completion records follow validated artifacts. Unchanged inputs do not automatically re-run models.
+Task key = research mode + issuer/industry + periods + input hashes + method version. State = queued/running/completed/retryable_failed/terminal_failed. Lease owner/expiry, attempts, dependencies and output manifest are persisted. Each attempt has an immutable input manifest and isolated output directory. Only eligible expired leases can be reclaimed; leases at the maximum attempt count become terminal. Registration rechecks the live lease, frozen input, dependency versions, superseding tasks and attempt manifest inside one transaction. Supersession uses a monotonic database task revision/row order, not wall-clock timestamp ordering. A legitimate current amendment may compare with its frozen prior artifact, but unrelated newer evidence still blocks publication. Identical completion is idempotent; conflicting completion is rejected. Unchanged inputs do not automatically re-run models.
 
-Advance a source watermark only after safely registering each discovered item or its explicit pending failure. Distinguish a successful empty result from unavailable source. Scan overlapping windows and periodically reconcile amendments/deletions; resume from watermarks after downtime. Budget-limited work remains queued, not dropped.
+Advance a source checkpoint only after safely registering every item in the bounded discovery window or its explicit pending failure. A fresh incremental issuer begins at cutoff minus configured overlap; subsequent runs begin at the successful checkpoint minus overlap. Reconciliation has its own persisted cadence, and downtime traverses only historical submission files whose declared date ranges overlap the missed window. Discovery and fetch are separate persistent states: bounded-fetch leftovers survive checkpoints and later runs. Distinguish a successful empty result from unavailable source, and resolve failures per recovered item rather than clearing an issuer scope. Budget-limited work remains queued, not dropped. Initialization loads historical indexes newest-first only until the configured actual period coverage is met or indexes are exhausted. Annual disclosures occupy at most the expected year-end slots; eight annual 20-F files are not eight quarters.
 
 Profiles: daily Sol medium, review Sol high, quarterly Astra high, escalation Astra xhigh. Initial extraction profile is disabled. Daily, quarterly, upgrades and initialization have separate allowances. One active research process initially. Model effort is not a hard token cap; only enforce observable configured limits and persist unavailable usage as null. Check unsupported profiles before executing; no silent model fallback. Reuse cache and completed artifacts before spending budget on repeated analysis.
 

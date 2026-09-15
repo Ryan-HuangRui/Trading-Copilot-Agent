@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "workflow": "earnings-research",
-  "deployment_stage": "P0_contract_only",
+  "deployment_stage": "P3_implemented_runtime_activation_required",
   "paths": {
     "universe": "config/earnings_universe.json",
     "state": "runtime/earnings/state.sqlite",

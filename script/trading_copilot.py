@@ -3839,11 +3839,144 @@ def run_sync_longbridge_watchlist(args: argparse.Namespace) -> None:
     emit(response)
 
 
+def run_earnings_passthrough(args: argparse.Namespace) -> None:
+    """Run an earnings component through the shared envelope."""
+    script_by_workflow = {
+        "earnings-daily": "script/earnings_daily.py",
+        "earnings-deliver": "script/earnings_delivery.py",
+        "earnings-collect": "script/earnings_collect.py",
+        "earnings-context": "script/earnings_context.py",
+        "earnings-status": "script/earnings_state.py",
+        "earnings-industry-context": "script/earnings_industry_context.py",
+        "earnings-record": "script/earnings_research_record.py",
+        "validate-earnings-research": "script/validate_earnings_research.py",
+    }
+    command = [script_by_workflow[args.workflow]]
+    option_names = {
+        "repo_root": "repo-root", "config": "config", "universe": "universe", "state": "state",
+        "mode": "mode", "collection_kind": "collection-kind", "input": "input", "ir_manifest": "ir-manifest", "cutoff": "cutoff",
+        "date": "date", "max_filings": "max-filings", "run_id": "run-id", "owner": "owner",
+        "limit": "limit", "lease_seconds": "lease-seconds", "industry": "industry", "role": "role",
+        "period_start": "period-start", "period_end": "period-end", "report": "report", "manifest": "manifest",
+        "critical_gap_status": "critical-gap-status",
+        "deployment": "deployment", "decision": "decision",
+    }
+    for name, option in option_names.items():
+        value = getattr(args, name, None)
+        if value is not None:
+            command.extend([f"--{option}", str(value)])
+    for flag in ("collect_only", "resume_only", "send", "execute"):
+        if getattr(args, flag, False):
+            command.append("--" + flag.replace("_", "-"))
+    for symbol in getattr(args, "symbol", []) or []:
+        command.extend(["--symbol", symbol])
+    for predecessor in getattr(args, "predecessor_report", []) or []:
+        command.extend(["--predecessor-report", predecessor])
+    proc = run_child(command)
+    stdout = parse_json_output(proc.stdout)
+    if proc.returncode != 0:
+        if stdout:
+            response = dict(stdout)
+            response["command"] = command
+            response["stdout"] = stdout
+            emit(response, 1)
+        emit(failed_response(args.workflow, command, proc), 1)
+    response = base_response(args.workflow, command, stdout)
+    if stdout:
+        response.update(stdout)
+        response["command"] = command
+        response["stdout"] = stdout
+    emit(response)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Unified Trading Copilot workflow wrapper for agent callers"
     )
     sub = parser.add_subparsers(dest="workflow", required=True)
+
+    earnings_daily = sub.add_parser("earnings-daily", help="Run one budgeted daily earnings batch; silent by default")
+    earnings_daily.add_argument("--repo-root", default=str(ROOT))
+    earnings_daily.add_argument("--config", default="config/earnings_research.json")
+    earnings_daily.add_argument("--deployment", default="runtime/earnings/deployment.json")
+    earnings_daily.add_argument("--collect-only", action="store_true")
+    earnings_daily.add_argument("--resume-only", action="store_true")
+    earnings_daily.add_argument("--send", action="store_true")
+    earnings_daily.set_defaults(func=run_earnings_passthrough)
+
+    earnings_deliver = sub.add_parser("earnings-deliver", help="Preview or send one frozen earnings notification")
+    earnings_deliver.add_argument("--repo-root", default=str(ROOT))
+    earnings_deliver.add_argument("--deployment", default="runtime/earnings/deployment.json")
+    earnings_deliver.add_argument("--decision", required=True)
+    earnings_deliver.add_argument("--execute", action="store_true")
+    earnings_deliver.set_defaults(func=run_earnings_passthrough)
+
+    earnings_collect = sub.add_parser("earnings-collect", help="Collect immutable SEC/issuer IR earnings originals")
+    earnings_collect.add_argument("--repo-root", default=str(ROOT))
+    earnings_collect.add_argument("--config", default="config/earnings_research.json")
+    earnings_collect.add_argument("--state", default="runtime/earnings/state.sqlite")
+    earnings_collect.add_argument("--mode", choices=["offline", "live"], required=True)
+    earnings_collect.add_argument("--collection-kind", choices=["incremental", "initialization"], default="incremental")
+    earnings_collect.add_argument("--input")
+    earnings_collect.add_argument("--ir-manifest")
+    earnings_collect.add_argument("--symbol", action="append", default=[])
+    earnings_collect.add_argument("--cutoff", required=True)
+    earnings_collect.add_argument("--date")
+    earnings_collect.add_argument("--max-filings", type=int)
+    earnings_collect.set_defaults(func=run_earnings_passthrough)
+
+    earnings_context = sub.add_parser("earnings-context", help="Claim changed company tasks and write role manifests")
+    earnings_context.add_argument("--repo-root", default=str(ROOT))
+    earnings_context.add_argument("--config", default="config/earnings_research.json")
+    earnings_context.add_argument("--universe", default="config/earnings_universe.json")
+    earnings_context.add_argument("--state", default="runtime/earnings/state.sqlite")
+    earnings_context.add_argument("--cutoff", required=True)
+    earnings_context.add_argument("--date")
+    earnings_context.add_argument("--run-id")
+    earnings_context.add_argument("--owner")
+    earnings_context.add_argument("--limit", type=int)
+    earnings_context.add_argument("--lease-seconds", type=int)
+    earnings_context.set_defaults(func=run_earnings_passthrough)
+
+    earnings_status = sub.add_parser("earnings-status", help="Read earnings source watermarks and queue status")
+    earnings_status.add_argument("--repo-root", default=str(ROOT))
+    earnings_status.add_argument("--state", default="runtime/earnings/state.sqlite")
+    earnings_status.add_argument("--date")
+    earnings_status.set_defaults(func=run_earnings_passthrough)
+
+    earnings_industry = sub.add_parser("earnings-industry-context", help="Build manual industry/challenge/synthesis role context")
+    earnings_industry.add_argument("--repo-root", default=str(ROOT))
+    earnings_industry.add_argument("--config", default="config/earnings_research.json")
+    earnings_industry.add_argument("--universe", default="config/earnings_universe.json")
+    earnings_industry.add_argument("--state", default="runtime/earnings/state.sqlite")
+    earnings_industry.add_argument("--industry", required=True)
+    earnings_industry.add_argument("--role", choices=["industry", "challenge", "synthesis"], required=True)
+    earnings_industry.add_argument("--mode", choices=["daily", "quarterly"], default="daily")
+    earnings_industry.add_argument("--period-start", required=True)
+    earnings_industry.add_argument("--period-end", required=True)
+    earnings_industry.add_argument("--cutoff", required=True)
+    earnings_industry.add_argument("--predecessor-report", action="append", default=[])
+    earnings_industry.add_argument("--critical-gap-status", choices=["resolved", "disclosed", "unresolved"], default="unresolved")
+    earnings_industry.add_argument("--run-id")
+    earnings_industry.add_argument("--owner")
+    earnings_industry.add_argument("--lease-seconds", type=int)
+    earnings_industry.add_argument("--date")
+    earnings_industry.set_defaults(func=run_earnings_passthrough)
+
+    earnings_record = sub.add_parser("earnings-record", help="Validate and atomically register a role artifact")
+    earnings_record.add_argument("--repo-root", default=str(ROOT))
+    earnings_record.add_argument("--state", default="runtime/earnings/state.sqlite")
+    earnings_record.add_argument("--report", required=True)
+    earnings_record.add_argument("--manifest", required=True)
+    earnings_record.add_argument("--date")
+    earnings_record.set_defaults(func=run_earnings_passthrough)
+
+    earnings_validate = sub.add_parser("validate-earnings-research", help="Validate earnings evidence and role contracts")
+    earnings_validate.add_argument("--repo-root", default=str(ROOT))
+    earnings_validate.add_argument("--report", required=True)
+    earnings_validate.add_argument("--manifest", required=True)
+    earnings_validate.add_argument("--date")
+    earnings_validate.set_defaults(func=run_earnings_passthrough)
 
     pre = sub.add_parser("pre-market-plan", help="Prepare pre-market context for agent reporting")
     pre.add_argument("--watchlist", default="config/watchlist.json")

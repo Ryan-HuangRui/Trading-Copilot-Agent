@@ -54,6 +54,12 @@
 - `feishu_summary.py`: concise Feishu-ready analysis summary built from validated sidecars and review artifacts.
 - `promote_lesson.py`: human-triggered promotion into `knowledge/evolution/validated_lessons.md`; never edits the canonical rulebook.
 - `workflow_smoke_test.py`: fixture-based workflow smoke test; must not fetch live market or account data.
+- `earnings_sources.py`, `earnings_collect.py`: explicit live SEC/issuer-IR or declared offline-fixture ingestion; immutable originals, identity resolution, cache/retry/rate-limit and event versioning.
+- `earnings_financials.py`: deterministic period/currency/accounting-safe normalization; never substitutes for semantic research.
+- `earnings_state.py`: SQLite research queue, task dependencies, independent source watermarks and recoverable leases.
+- `earnings_context.py`, `earnings_industry_context.py`: immutable company and manual industry/challenge/synthesis role inputs; they do not call an LLM.
+- `validate_earnings_research.py`, `earnings_research_record.py`: evidence/provenance/cutoff validation and atomic role completion registration.
+- `earnings_daily.py`, `earnings_role_runner.py`, `earnings_delivery.py`: bounded daily orchestration, independent read-only Codex roles and outer-only verified cc-connect delivery; runtime activation is explicit.
 - `report_delivery_guard.py`: idempotent delivery-state helper.
 - `trading_copilot.py`: unified agent-facing workflow wrapper that returns `status/date/artifacts/skipped/reason`.
 - `trading_day_guard.py` and `market_calendar.py`: simple US regular trading-day guard.
@@ -109,6 +115,12 @@
 - Run fixture workflow smoke test: `python3 script/workflow_smoke_test.py --date 2026-05-06 --week 2026-W19`.
 - Check trading day through wrapper: `python3 script/trading_copilot.py trading-day-check --date 2026-05-06`.
 - Check trading day: `python3 script/trading_day_guard.py`.
+- Collect live earnings originals: `python3 script/trading_copilot.py earnings-collect --mode live --symbol NVDA --cutoff 2026-09-14T02:00:00Z`.
+- Collect an explicit offline fixture: `python3 script/trading_copilot.py earnings-collect --mode offline --input tests/fixtures/earnings/sample_bundle.json --cutoff 2026-09-14T02:00:00Z`.
+- Build changed company role inputs: `python3 script/trading_copilot.py earnings-context --cutoff 2026-09-14T02:00:00Z --limit 1`.
+- Build a manual quarterly industry role input: `python3 script/trading_copilot.py earnings-industry-context --industry semiconductors --role industry --mode quarterly --period-start 2026-04-01 --period-end 2026-06-30 --cutoff 2026-09-14T02:00:00Z`.
+- Validate/register a role report: `python3 script/trading_copilot.py validate-earnings-research --report <REPORT_JSON> --manifest <MANIFEST>` then `python3 script/trading_copilot.py earnings-record --report <REPORT_JSON> --manifest <MANIFEST>`.
+- Inspect earnings queue/source state: `python3 script/trading_copilot.py earnings-status`.
 - Generate scripted report: `python3 script/pre_market_report.py --watchlist config/watchlist.json`.
 - Generate scripted report with guard: `python3 script/pre_market_report.py --watchlist config/watchlist.json --skip-non-trading-day`.
 - Monitor scan: `python3 script/monitor_scan.py --state config/monitor_state.json --interval 5min`.
