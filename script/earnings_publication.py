@@ -250,7 +250,8 @@ def _explicit_period(text: str, number_start: int, number_end: int) -> dict[str,
             if match.end() <= number_start:
                 bridge = text[match.end():number_start]
                 distance = number_start - match.end()
-                if distance > 56 or re.search(r"[。！？；;\n]", bridge) or financial.search(bridge):
+                if (distance > 56 or re.search(r"[。！？；;\n]", bridge) or financial.search(bridge)
+                        or re.search(r"(?:上[一个]?季[度]?末|上年同期|去年|年初|期初)", bridge)):
                     continue
             elif match.start() >= number_end:
                 bridge = text[number_end:match.start()]
@@ -332,7 +333,7 @@ def _sentence_at(text: str, start: int, end: int) -> str:
 
 def _explicitly_negates_certainty(sentence: str, risky: str) -> bool:
     term = re.escape(risky)
-    action = r"(?:判断|认定|声称|给出|提供|形成|得出|推出|证明|支持|写出)"
+    action = r"(?:判断|认定|声称|给出|提供|形成|得出|推出|证明|支持|写出|写成)"
     modal = rf"(?:不能|不可|不应|不宜|无法|无从)\s*(?:据此|因此|直接|基于此|据此直接|因此直接)?\s*{action}"
     direct = r"(?:不作|不予|不提供|不给出|不形成|不构成)"
     negative_action = rf"(?:{modal}|{direct})"

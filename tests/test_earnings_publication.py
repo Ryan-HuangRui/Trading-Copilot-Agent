@@ -13,7 +13,7 @@ from earnings_publication import (_facts, build_publication, claim_occurrence_in
                                   financial_fact_catalog, validate_reader_markdown)
 from earnings_period_review import resolve_report_period
 from earnings_lark import LarkDocumentPublisher, _readback_key, normalize_markdown_for_lark
-from earnings_publication_runner import prepare_input, prepare_repair_input, run_publication
+from earnings_publication_runner import prepare_input, prepare_repair_input, run_publication, recheck_publication
 
 
 SOURCE = {
@@ -194,6 +194,15 @@ class EarningsPublicationTests(unittest.TestCase):
         table = [row for row in claims if "line" in row["occurrence"]]
         self.assertEqual([row["period"] for row in table], [None, None, None])
 
+    def test_current_date_does_not_override_prior_period_qualifier(self):
+        body = "截至2026-07-26，承诺已由上一季末1190亿美元增至2790亿美元。"
+        claims = claim_occurrence_inventory(body)["claims"]
+        self.assertIsNone(claims[0]["period"])
+        self.assertIsNone(claims[1]["period"])
+        safe = markdown().replace("缺少公告前一致预期，因此不能判断超预期或低估。",
+            "所谓预期差仍是未知项，不能写成超预期、低估或市场尚未计价。")
+        self.assertEqual(validate_reader_markdown(safe, [SOURCE])["status"], "passed")
+
     def test_explicit_period_conflict_still_rejects_catalog_binding(self):
         report = json.loads(json.dumps(SOURCE))
         report["evidence"][0]["numeric_facts"].append({"metric": "comparison-only", "value": "999",
@@ -305,6 +314,8 @@ class EarningsPublicationTests(unittest.TestCase):
             with patch("earnings_publication_runner._codex", side_effect=fake_codex):
                 failed = run_publication(root, manifest, binary=str(binary), timeout=60)
                 self.assertEqual(failed["status"], "failed")
+                with self.assertRaisesRegex(ValueError, "independently passed"):
+                    recheck_publication(root, manifest)
                 original_draft = root / read_json(manifest)["permitted_outputs"]["draft"]
                 original_hash = sha256_file(original_draft)
                 legacy = read_json(manifest); legacy.pop("financial_fact_catalog")
@@ -330,6 +341,16 @@ class EarningsPublicationTests(unittest.TestCase):
             self.assertEqual(len(calls), 4)
             repair_result = run_publication(root, repair_manifest, binary=str(binary), timeout=60)
             self.assertEqual(repair_result, repaired); self.assertEqual(len(calls), 4)
+            with patch("earnings_publication_runner._codex", side_effect=AssertionError("must not call model")):
+                rechecked = recheck_publication(root, repair_manifest)
+                self.assertEqual(rechecked["status"], "success")
+                self.assertEqual(rechecked["audit"]["model_calls"], 0)
+                self.assertEqual(recheck_publication(root, repair_manifest), rechecked)
+                repaired_draft = root / read_json(repair_manifest)["permitted_outputs"]["draft"]
+                repaired_draft.write_text(repaired_draft.read_text() + "changed")
+                with self.assertRaisesRegex(ValueError, "writer draft changed"):
+                    recheck_publication(root, repair_manifest)
+
 
     def test_failed_model_call_is_recorded_once_and_never_automatically_retried(self):
         with TemporaryDirectory() as temp:

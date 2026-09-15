@@ -392,6 +392,59 @@ def run_publication(root: Path, manifest_path: Path, *, binary: str, timeout: in
     atomic_write_json(result_path, result); return result
 
 
+def recheck_publication(root: Path, manifest_path: Path) -> dict[str, Any]:
+    """Revalidate an unchanged, semantically accepted draft after a validator fix.
+
+    No model call, source mutation or semantic override is permitted. Previous
+    attempt records stay immutable; the validator code hashes identify this audit.
+    """
+    root = root.resolve()
+    path = ensure_inside(manifest_path.resolve(), [root / "runtime/earnings/publications/runs"])
+    manifest = read_json(path)
+    check = dict(manifest); digest = check.pop("input_manifest_hash", None)
+    if not digest or digest != sha256_bytes(canonical_json(check)):
+        raise ValueError("publication input manifest hash mismatch")
+    draft_path = ensure_inside(root / manifest["permitted_outputs"]["draft"], [path.parent])
+    semantic_path = ensure_inside(root / manifest["permitted_outputs"]["semantic_check"], [path.parent])
+    writer_stage = read_json(path.parent / "writer-stage.json")
+    checker_stage = read_json(path.parent / "checker-stage.json")
+    if sha256_file(draft_path) != writer_stage.get("draft_sha256"):
+        raise ValueError("completed writer draft changed")
+    if sha256_file(semantic_path) != checker_stage.get("semantic_sha256"):
+        raise ValueError("completed checker output changed")
+    semantic = read_json(semantic_path)
+    if semantic.get("status") != "passed" or semantic.get("errors"):
+        raise ValueError("recheck requires an independently passed semantic check")
+    sources = []
+    for row in manifest["sources"]:
+        source = ensure_inside(root / row["path"], [root / "report/earnings"])
+        if sha256_file(source) != row["sha256"]:
+            raise ValueError("frozen research report changed")
+        sources.append(source)
+    audit = {"input_manifest_sha256": sha256_file(path), "draft_sha256": sha256_file(draft_path),
+             "semantic_sha256": sha256_file(semantic_path), "model_calls": 0,
+             "validator_sha256": sha256_file(Path(__file__).with_name("earnings_publication.py")),
+             "runner_sha256": sha256_file(Path(__file__))}
+    audit_path = path.parent / ("recheck-" + sha256_bytes(canonical_json(audit))[:16] + ".json")
+    if audit_path.exists(): return read_json(audit_path)
+    body = draft_path.read_text(encoding="utf-8")
+    deterministic = validate_reader_markdown(body, [read_json(source) for source in sources],
+        publication_type=manifest["publication_type"], explicit_fact_bindings=semantic.get("fact_bindings"))
+    if (deterministic["status"] == "passed" and isinstance(semantic.get("fact_bindings"), list)
+            and len(semantic["fact_bindings"]) == len(deterministic["fact_mappings"])):
+        semantic = {**semantic, "checker_fact_bindings": semantic["fact_bindings"],
+                    "fact_bindings": deterministic["fact_mappings"]}
+    try:
+        result = build_publication(root, manifest["publication_type"], manifest["scope_id"], manifest["quarter_id"],
+            sources, body, semantic_checker=semantic, edition=manifest["edition"], title=manifest["title"],
+            input_manifest_hash=digest)
+    except ValueError as exc:
+        result = {"status": "failed", "reason": str(exc)}
+    result.update(audit=audit, checked_at=utc_now(), audit_path=str(audit_path.relative_to(root)))
+    atomic_write_json(audit_path, result)
+    return result
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", default=str(ROOT)); parser.add_argument("--config", default="config/earnings_research.json")
@@ -400,8 +453,15 @@ def main() -> None:
     parser.add_argument("--edition", choices=["full", "stage", "revision"], default="full"); parser.add_argument("--title")
     parser.add_argument("--codex-bin"); parser.add_argument("--execute", action="store_true"); parser.add_argument("--timeout", type=int, default=1800)
     parser.add_argument("--repair", help="path to one failed input-manifest.json; creates at most repair-attempt-1")
+    parser.add_argument("--recheck", help="unchanged input-manifest with passed semantic check; no model execution")
     args = parser.parse_args(); root = Path(args.repo_root).resolve()
     try:
+        if args.recheck:
+            if args.repair or args.execute:
+                raise ValueError("--recheck cannot be combined with --repair or --execute")
+            result = recheck_publication(root, root / args.recheck)
+            print(json.dumps({"workflow": "earnings-publication-runner", **result}, ensure_ascii=False))
+            raise SystemExit(result["status"] == "failed")
         if args.repair:
             manifest = prepare_repair_input(root, root / args.repair)
         else:
