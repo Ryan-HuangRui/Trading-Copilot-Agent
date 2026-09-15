@@ -1,11 +1,11 @@
 # 财报研究 P4：季度研究、读者报告与用户云文档
 
-P4 已实现但自动开关默认关闭。它复用每日 10:00 Asia/Shanghai 唯一入口，不新增高频任务。启用前必须在独立 NAS 状态目录完成真实公司、至少一个成熟行业和跨行业依赖门槛验收；fixture 只能证明离线工程行为。
+P4 已实现但自动开关默认关闭。它复用每日 10:00 Asia/Shanghai 唯一入口，不新增高频任务。启用前必须在独立 NAS 状态目录完成真实公司、至少一个行业研究链和跨行业依赖门槛验收；材料不足的行业保持阶段版，fixture 只能证明离线工程行为。
 
 ## 状态和预算
 
 - `runtime/earnings/state.sqlite` 增量增加 publication 索引和云交付状态；P3 表保持兼容。
-- `runtime/earnings/quarterly.sqlite` 冻结 industry-quarter 成员和方法，并逐 revision 保存统一 cutoff、阶段状态与历史；新验收公司输入只在前一 revision 完成后开启新 revision。
+- `runtime/earnings/quarterly.sqlite` 冻结 industry-quarter 成员和方法，并逐 revision 保存统一 cutoff、阶段状态与历史；新的已验收公司输入可触发修订，无需等待前一阶段版或跨行业报告完成。没有任何公司研究证据的行业只记录待补资料，不启动模型。
 - `runtime/earnings/daily.sqlite` 持久化 company、quarterly、writer、checker、cloud 的每日实际尝试次数；跨日重新获得额度，未完成任务保留。恢复队列先获得有界时间片，新研究和季度阶段也保留时间片。
 - `runtime/earnings/quarterly-scopes/<scope_id>/gap-reviews/<input_hash>/input.json` 是按 scope revision/cutoff/公司报告哈希生成的不可变审查输入；`gap-review-input.json` 只是当前指针。启用季度自动任务后，daily runner 使用 `review` profile、独立每日额度和有租约的 bounded attempt 自动审查，再调用 `record_gap_review` 验收。失败可跨日恢复，达到 `max_task_attempts` 后终止；证据不完整必须保持 unresolved。
 
@@ -45,7 +45,7 @@ python3 script/trading_copilot.py earnings-lark-document --publication-manifest 
 
 adapter 的参数形状按官方 lark-cli 文档：它把 cwd 固定到准备目录，Markdown 文件使用 `docs +create --doc-format markdown --content @./prepared.md`，回读使用 `docs +fetch --doc <id>`，整篇受控更新使用 `docs +update --doc <id> --command overwrite --content @./prepared.md`。运行时仍应以已安装 1.0.92 的 `--help` 为准：[lark-doc create](https://github.com/larksuite/cli/blob/main/skills/lark-doc/references/lark-doc-create.md)、[lark-doc skill](https://github.com/larksuite/cli/blob/main/skills/lark-doc/SKILL.md)。
 
-先保持跟踪配置 `delivery.lark_documents_enabled=false`。验证绝对二进制、profile、用户 docs/drive 授权及目标目录后再在部署副本开启。程序仅运行 docs create/update/fetch，使用 argv，不调用 shell，不登录、不授权、不回退 bot、不发送消息。
+先保持跟踪配置 `delivery.lark_documents_enabled=false`。验证绝对二进制、profile、用户 docs/drive 授权及目标目录后再在忽略的 `runtime/earnings/p4-config.json` 部署副本开启。唯一财报 cron 的 exec 在现有 wrapper 后追加 `--config runtime/earnings/p4-config.json`，保留时间、静默与项目/会话绑定。程序仅运行 docs create/update/fetch，使用 argv，不调用 shell，不登录、不授权、不回退 bot、不发送消息。
 
 创建超时或非确定结果进入 `unknown`，不得再次 create。人工从 CLI/云空间确认 document_id 后，用 `--reconcile-document-id <ID> --reconcile-url <URL> --execute` 只读回查。`auth_failed` 只在部署配置写入更晚的 `credentials_refreshed_at` 后重试。远端正文不同进入 conflict；不要覆盖用户编辑。先只开本地 publication、以后再开 cloud 时，`archived` job 会直接续传，不重跑 writer/checker。
 

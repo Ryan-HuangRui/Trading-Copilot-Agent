@@ -68,13 +68,26 @@ def markdown(value="100", include_risk=True, link="https://example.com/filing"):
 
 class EarningsPublicationTests(unittest.TestCase):
     def test_occurrence_inventory_uses_exact_raw_markdown_coordinates_with_commas(self):
-        body = "首项 1,000 百万美元；次项 2,000 百万美元。"
+        body = "收入962.21亿美元，同比增长106%；Revenue1,000USD million，回落-12.5%。\n| 指标 | 数值（亿美元） |\n|---|---:|\n| 本期 | 962.21 |\n| 上期 | 962.21 |"
         inventory = claim_occurrence_inventory(body)
         self.assertEqual(inventory["coordinate_contract"],
                          "python-string-codepoint-offsets-v1; tables use one-based line/column")
-        self.assertEqual([body[row["occurrence"]["start"]:row["occurrence"]["end"]]
-                          for row in inventory["claims"]], ["1,000 百万美元", "2,000 百万美元"])
-        self.assertEqual([row["value"] for row in inventory["claims"]], ["1000", "2000"])
+        prose = [row for row in inventory["claims"] if "start" in row["occurrence"]]
+        table = [row for row in inventory["claims"] if "line" in row["occurrence"]]
+        self.assertEqual([body[row["occurrence"]["start"]:row["occurrence"]["end"]] for row in prose],
+                         ["962.21亿美元", "106%", "1,000USD million", "-12.5%"])
+        self.assertEqual([row["value"] for row in prose], ["962.21", "106", "1000", "-12.5"])
+        self.assertEqual([(row["display"], row["occurrence"]) for row in table],
+                         [("962.21", {"line": 4, "column": 2}), ("962.21", {"line": 5, "column": 2})])
+
+    def test_market_certainty_uses_sentence_level_negation(self):
+        safe = markdown().replace("缺少公告前一致预期，因此不能判断超预期或低估。",
+            "本文因此不作财报惊喜、估值、目标价或确定性交易判断。")
+        self.assertEqual(validate_reader_markdown(safe, [SOURCE])["status"], "passed")
+        unsafe = markdown().replace("缺少公告前一致预期，因此不能判断超预期或低估。", "研究给出目标价并认为公司被低估。")
+        result = validate_reader_markdown(unsafe, [SOURCE])
+        self.assertEqual(result["status"], "failed")
+        self.assertTrue(any("unsupported market-expectation certainty" in row for row in result["errors"]))
 
     def test_reader_checker_blocks_number_period_counterevidence_and_link_drift(self):
         self.assertEqual(validate_reader_markdown(markdown(), [SOURCE])["status"], "passed")

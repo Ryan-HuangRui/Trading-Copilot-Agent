@@ -237,6 +237,10 @@ def run_quarterly_step(root: Path, config: dict, universe: dict, state: Earnings
         for scope in review["scopes"]:
             if time.monotonic() >= deadline:
                 break
+            if not scope["maturity"]["counts"]["researched_issuers"]:
+                outcomes.append({"status": "skipped", "scope_id": scope["scope_id"],
+                                 "reason": "waiting for accepted company evidence before quarterly model work"})
+                continue
             qledger.set_stage(scope["scope_id"], "coverage", "completed",
                               input_hash=hashlib.sha256(json.dumps(scope["maturity"], sort_keys=True).encode()).hexdigest())
             if scope["maturity"]["critical_gap_status"] == "unresolved":

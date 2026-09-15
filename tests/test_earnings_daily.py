@@ -17,6 +17,28 @@ from earnings_role_runner import run_role
 
 
 class EarningsDailyTests(unittest.TestCase):
+    def test_quarterly_empty_cohorts_do_not_consume_model_budget(self):
+        from earnings_daily import run_quarterly_step
+        import time
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); (root / 'config').mkdir()
+            config = json.loads((ROOT / 'config/earnings_research.json').read_text())
+            config['quarterly']['automatic_trigger_enabled'] = True
+            atomic_write_json(root / 'config/earnings_research.json', config)
+            universe = {'industries': [{'industry_id': 'empty', 'label': 'Empty',
+                'issuers': [{'symbol': 'MISSING'}], 'key_symbols': ['MISSING']}]}
+            atomic_write_json(root / 'config/earnings_universe.json', universe)
+            state = EarningsState(root / 'runtime/earnings/state.sqlite'); ledger = DailyLedger(root)
+            with patch('earnings_daily.run_gap_review') as gap, patch('earnings_daily.command') as command:
+                result = run_quarterly_step(root, config, universe, state, ledger, {'codex_bin': '/bin/false'},
+                    '2026-09-16', '2026-09-15T19:00:00Z', 'empty-cohort', root / 'runtime/earnings/logs',
+                    time.monotonic() + 5)
+            gap.assert_not_called(); command.assert_not_called()
+            self.assertIn('waiting for accepted company evidence', result[0]['reason'])
+            self.assertEqual(ledger.used('2026-09-16', 'review'), 0)
+            self.assertEqual(ledger.used('2026-09-16', 'quarterly'), 0)
+            state.close(); ledger.db.close()
+
     def test_gap_review_failure_recovers_next_day_then_stops_at_attempt_limit(self):
         import hashlib, time
         with TemporaryDirectory() as temp:

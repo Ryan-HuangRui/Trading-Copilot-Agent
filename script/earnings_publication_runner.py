@@ -37,7 +37,7 @@ def prepare_input(root: Path, *, publication_type: str, scope_id: str, quarter_i
     resolved_title = title or f"{scope_id} {quarter_id} 财报研究"
     basis = {"type": publication_type, "scope": scope_id, "quarter": quarter_id, "edition": edition,
              "title": resolved_title, "sources": [[r["report_id"], r["sha256"]] for r in sources],
-             "method": "reader-publication-v2", "configuration_hash": config_hash,
+             "method": "reader-publication-v3", "configuration_hash": config_hash,
              "writer_profile": config["profiles"]["daily"], "checker_profile": config["profiles"]["review"],
              "required_sections": list(REQUIRED_SECTIONS[publication_type])}
     publication_key = sha256_bytes(canonical_json(basis))
@@ -114,11 +114,18 @@ def run_publication(root: Path, manifest_path: Path, *, binary: str, timeout: in
         source = root / row["path"]
         if sha256_file(source) != row["sha256"]: raise ValueError("frozen research report changed")
         source_text.append(source.read_text(encoding="utf-8"))
-    writer_prompt = ("你是财报读者报告撰写者。只能使用下列已验收冻结研究，不得联网或新增事实。写自然、完整、简体中文报告，"
-        "不是拼接 JSON 字段。必须逐项覆盖 manifest.required_sections；保留数字、单位、实际经营期间、资料截止、来源链接、关键反证、"
-        "金额和百分比必须使用 validator 支持的明确单位（如 美元/百万美元/亿美元/%/bps）；表格纯数字列必须在表头写单位；"
-        "正文用‘经营期间 YYYY-MM-DD 至 YYYY-MM-DD’声明 duration，instant 数字附近用‘截至 YYYY-MM-DD’声明期间。"
-        "情景和下一验证点。缺少一致预期或价格时明确未知，不能写超预期、低估、目标价或买卖指令。只输出 Markdown。\n"
+    writer_prompt = ("你是面向普通读者的财报报告撰写者。只能使用下列已验收冻结研究，不得联网、新增事实、改变指标或强化因果。"
+        "目标正文约2500至4000个中文字符，语言自然紧凑，接近一篇成熟的公司财报解读，不是内部审计记录或 JSON 字段拼接。"
+        "必须覆盖 manifest.required_sections。开头只集中说明一次财年季度、实际经营期间和资料截止；之后仅在累计口径、时点口径或跨期比较"
+        "确有歧义时补充期间，不要逐段重复完整日期，也不要写‘冻结输入’‘研究季度映射’等内部流程词。"
+        "用一个表格汇总5至8个最关键且由结构化 numeric_facts 直接支持的数字；优先选收入、核心业务、利润率、经营利润、现金流、"
+        "应收/库存或关键承诺。表格纯数字列必须在表头写单位，正文金额和百分比使用 validator 支持的明确单位（如美元、百万美元、亿美元、%、bps）。"
+        "向普通读者解释术语，避免 bps 等专业缩写；优先直接展示已核验的百分比并用中文说明含义，不额外编写未绑定证据的数值换算示例。"
+        "经营期间用‘经营期间 YYYY-MM-DD 至 YYYY-MM-DD’声明 duration，时点数字附近用‘截至 YYYY-MM-DD’声明 instant；"
+        "但不要为了机器校验堆砌日期。若冻结研究没有已核验 numeric_facts，就省去次要精确数字并如实定性，绝不能为过 gate 编造数字。"
+        "清楚解释生意与产业链机会，并分别写独立验证、利润归属、持续性、最强反证、未知市场预期和下一步验证。"
+        "不得把未经充分核验的历史期事项写成同比因果；尤其不能声称上年同期Q2的H20计提造成低基数，除非冻结 numeric_facts 与原文定位"
+        "明确支持同一对比期间和该因果。缺少一致预期或价格时明确未知，不写超预期、低估、目标价或买卖指令。只输出 Markdown。\n"
         + json.dumps(manifest, ensure_ascii=False) + "\n冻结研究：\n" + "\n---\n".join(source_text))
     writer_stage = path.parent / "writer-stage.json"
     if writer_stage.exists():

@@ -64,7 +64,10 @@ def _claims(markdown: str) -> list[dict[str, Any]]:
     # for offsets, so thousands separators cannot shift later occurrences.
     clean = markdown
     number = r"[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?"
-    pattern = rf"(?<![\w.])({number})\s*(USD\s+(?:million|billion)|million\s+USD|billion\s+USD|百万美元|亿美元|百万元|亿元|美元|元|%|％|bps|个基点)"
+    # Python's Unicode \w treats a preceding Chinese character as a word character,
+    # which hid ordinary forms such as “收入962.21亿美元”. Only an immediately
+    # preceding ASCII digit/dot can make this the middle of another numeric token.
+    pattern = rf"(?<![0-9.])({number})\s*(USD\s+(?:million|billion)|million\s+USD|billion\s+USD|百万美元|亿美元|百万元|亿元|美元|元|%|％|bps|个基点)"
     rows = []
     global_period = None
     period_match = re.search(r"经营期间[^\n]*?(20\d{2}-\d{2}-\d{2})\s*(?:至|—|-)[^\n]*?(20\d{2}-\d{2}-\d{2})", clean)
@@ -106,6 +109,20 @@ def claim_occurrence_inventory(markdown: str) -> dict[str, Any]:
 
 def _markdown_urls(text: str) -> set[str]:
     return set(re.findall(r"\[[^\]]+\]\((https?://[^)]+)\)", text))
+
+
+def _sentence_at(text: str, start: int, end: int) -> str:
+    left = max(text.rfind(mark, 0, start) for mark in ("。", "！", "？", "\n")) + 1
+    stops = [index for mark in ("。", "！", "？", "\n") if (index := text.find(mark, end)) >= 0]
+    right = min(stops) + 1 if stops else len(text)
+    return text[left:right]
+
+
+def _explicitly_negates_certainty(sentence: str, risky: str) -> bool:
+    term = re.escape(risky)
+    before = rf"(?:不能判断|无法判断|无法形成|无从判断|不作|不提供|不给出|不形成|不构成)[^。！？\n]{{0,80}}{term}"
+    after = rf"{term}[^。！？\n]{{0,40}}(?:未知|不能判断|无法判断|不作判断|不提供|不形成|不构成)"
+    return bool(re.search(before, sentence) or re.search(after, sentence))
 
 
 def validate_reader_markdown(markdown: str, reports: list[dict[str, Any]], *, publication_type: str = "company",
@@ -197,8 +214,8 @@ def validate_reader_markdown(markdown: str, reports: list[dict[str, Any]], *, pu
     if missing_consensus:
         for risky in ("超市场预期", "超预期", "被低估", "目标价"):
             for match in re.finditer(risky, markdown):
-                context = markdown[max(0, match.start() - 18):match.end() + 18]
-                if not any(token in context for token in ("不能", "无法", "未知", "缺少", "不判断")):
+                sentence = _sentence_at(markdown, match.start(), match.end())
+                if not _explicitly_negates_certainty(sentence, risky):
                     errors.append(f"unsupported market-expectation certainty: {risky}")
     if publication_type in {"company", "industry"}:
         alternatives = [str(claim.get("alternative_explanation") or "") for report in reports for claim in report.get("claims", [])]
