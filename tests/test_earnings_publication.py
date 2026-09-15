@@ -68,6 +68,25 @@ def markdown(value="100", include_risk=True, link="https://example.com/filing"):
 
 
 class EarningsPublicationTests(unittest.TestCase):
+    def test_catalog_normalizes_scaled_units_only_with_explicit_currency(self):
+        report = json.loads(json.dumps(SOURCE)); report["evidence"][0]["numeric_facts"] = [
+            {"metric": "UsdScaled", "value": "12", "unit": "million", "currency": "USD",
+             "period": {"kind": "instant", "start": None, "end": "2026-06-30"}},
+            {"metric": "CnyScaled", "value": "3", "unit": "billion", "currency": "CNY",
+             "period": {"kind": "instant", "start": None, "end": "2026-06-30"}},
+            {"metric": "UnknownCurrency", "value": "7", "unit": "million", "currency": None,
+             "period": {"kind": "instant", "start": None, "end": "2026-06-30"}},
+        ]
+        facts = {row["metric"]: row for row in financial_fact_catalog([report])["facts"]}
+        self.assertEqual((facts["UsdScaled"]["source_unit"], facts["UsdScaled"]["unit"]),
+                         ("million", "USD million"))
+        self.assertIn({"value": "0.12", "unit": "亿美元"}, facts["UsdScaled"]["display_candidates"])
+        self.assertEqual((facts["CnyScaled"]["source_unit"], facts["CnyScaled"]["unit"]),
+                         ("billion", "CNY billion"))
+        self.assertIn({"value": "30", "unit": "亿元"}, facts["CnyScaled"]["display_candidates"])
+        self.assertEqual(facts["UnknownCurrency"]["unit"], "million")
+        self.assertEqual(facts["UnknownCurrency"]["display_candidates"], [])
+
     def test_financial_catalog_uses_stable_ids_and_only_legitimate_derivations(self):
         report = json.loads(json.dumps(SOURCE))
         report["evidence"][0]["numeric_facts"].extend([
@@ -162,6 +181,33 @@ class EarningsPublicationTests(unittest.TestCase):
         self.assertEqual([(row["display"], row["occurrence"]) for row in table],
                          [("962.21", {"line": 4, "column": 2}), ("962.21", {"line": 5, "column": 2})])
 
+    def test_period_inventory_uses_only_explicit_local_modifiers_across_mixed_rows(self):
+        body = """经营期间：2026-04-27 至 2026-07-26。\n收入962.21亿美元。\n截至2026-07-26，库存315.75亿美元；库存由截至2026-01-25的214.03亿美元增至截至2026-07-26的315.75亿美元，增长47.5%。\n| 指标 | 数值（亿美元） |\n|---|---:|\n| 上半年经营现金流 | 744.21 |\n| 应收账款 | 630.59 |\n| 期后承诺 | 1050 |"""
+        claims = claim_occurrence_inventory(body)["claims"]
+        prose = [row for row in claims if "start" in row["occurrence"]]
+        self.assertIsNone(next(row for row in prose if row["display"] == "962.21亿美元")["period"])
+        inventory_values = [row for row in prose if row["display"] in {"315.75亿美元", "214.03亿美元", "47.5%"}]
+        self.assertEqual([row["period"] for row in inventory_values], [
+            {"kind": "instant", "start": None, "end": "2026-07-26"},
+            {"kind": "instant", "start": None, "end": "2026-01-25"},
+            {"kind": "instant", "start": None, "end": "2026-07-26"}, None])
+        table = [row for row in claims if "line" in row["occurrence"]]
+        self.assertEqual([row["period"] for row in table], [None, None, None])
+
+    def test_explicit_period_conflict_still_rejects_catalog_binding(self):
+        report = json.loads(json.dumps(SOURCE))
+        report["evidence"][0]["numeric_facts"].append({"metric": "comparison-only", "value": "999",
+            "unit": "USD million", "period": {"kind": "duration", "start": "2025-04-01", "end": "2025-06-30"}})
+        body = markdown().replace("收入为 100 百万美元",
+            "经营期间 2025-04-01 至 2025-06-30，收入为 100 百万美元")
+        fact = next(row for row in financial_fact_catalog([report])["facts"] if row["metric"] == "revenue")
+        bindings = [{"display": row["display"], "occurrence": row["occurrence"], "fact_id": fact["fact_id"],
+                     "metric": fact["metric"], "period": fact["period"],
+                     "accounting_basis": fact["accounting_basis"]}
+                    for row in claim_occurrence_inventory(body)["claims"]]
+        result = validate_reader_markdown(body, [report], explicit_fact_bindings=bindings)
+        self.assertTrue(any("displayed period differs from catalog fact" in row for row in result["errors"]))
+
     def test_market_certainty_uses_sentence_level_negation(self):
         safe = markdown().replace("缺少公告前一致预期，因此不能判断超预期或低估。",
             "本文因此不作财报惊喜、估值、目标价或确定性交易判断。")
@@ -170,6 +216,27 @@ class EarningsPublicationTests(unittest.TestCase):
         result = validate_reader_markdown(unsafe, [SOURCE])
         self.assertEqual(result["status"], "failed")
         self.assertTrue(any("unsupported market-expectation certainty" in row for row in result["errors"]))
+        scoped = markdown().replace("缺少公告前一致预期，因此不能判断超预期或低估。",
+            "缺少一致预期，因此不能据此给出目标价或买卖判断。")
+        self.assertEqual(validate_reader_markdown(scoped, [SOURCE])["status"], "passed")
+        for assertion in ("公司可以据此给出目标价。", "不能排除公司随后给出目标价。",
+                          "一致预期未知，不能判断。公司仍给出目标价。", "并非不能给出目标价。"):
+            unsafe = markdown().replace("缺少公告前一致预期，因此不能判断超预期或低估。", assertion)
+            self.assertTrue(any("unsupported market-expectation certainty: 目标价" in row
+                                for row in validate_reader_markdown(unsafe, [SOURCE])["errors"]), assertion)
+
+    def test_real_v4_inventory_does_not_inherit_quarter_period(self):
+        path = Path("/Users/cenxiangxiang/hr/repo/Trading-Copilot-Agent/runtime/earnings/p4-v4-debug.json")
+        if not path.exists(): self.skipTest("real p4-v4 debug fixture unavailable")
+        payload = json.loads(path.read_text()); claims = claim_occurrence_inventory(payload["draft"])["claims"]
+        self.assertEqual(len(claims), 42)
+        self.assertEqual(sum(row["period"] is None for row in claims), 38)
+        self.assertIsNone(next(row["period"] for row in claims
+                               if row["display"] == "47.5%" and "start" in row["occurrence"]))
+        self.assertIsNone(next(row["period"] for row in claims
+                               if row["display"] == "1050亿美元"))
+        self.assertTrue(all(row["period"] is None for row in claims
+                            if row["display"] in {"744.21", "630.59", "2790"} and "line" in row["occurrence"]))
 
     def test_reader_checker_blocks_number_period_counterevidence_and_link_drift(self):
         self.assertEqual(validate_reader_markdown(markdown(), [SOURCE])["status"], "passed")

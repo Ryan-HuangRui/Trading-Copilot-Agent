@@ -38,8 +38,13 @@ _UNIT = {
     "USD billion": ("USD", Decimal("1000000000")), "billion USD": ("USD", Decimal("1000000000")),
     "亿美元": ("USD", Decimal("100000000")),
     "CNY": ("CNY", Decimal("1")), "元": ("CNY", Decimal("1")),
+    "CNY million": ("CNY", Decimal("1000000")), "CNY billion": ("CNY", Decimal("1000000000")),
     "百万元": ("CNY", Decimal("1000000")), "亿元": ("CNY", Decimal("100000000")),
 }
+
+_NUMBER_PATTERN = r"[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?"
+_FINANCIAL_UNIT_PATTERN = (r"USD\s+(?:million|billion)|CNY\s+(?:million|billion)|million\s+USD|billion\s+USD|"
+                           r"percentage\s+points|百万美元|亿美元|百万元|亿元|个百分点|个基点|美元|元|%|％|bps")
 
 
 def _unit(value: str) -> tuple[str, Decimal] | None:
@@ -54,7 +59,7 @@ def _decimal_text(value: Decimal) -> str:
 def _display_candidates(value: str, unit: str, *, rounded: bool = False) -> list[dict[str, str]]:
     source = _unit(unit)
     if not source:
-        return [{"value": value, "unit": unit}]
+        return [] if unit.strip().lower() in {"million", "billion"} else [{"value": value, "unit": unit}]
     targets = {"USD": ("USD", "USD million", "USD billion", "亿美元"),
                "CNY": ("CNY", "百万元", "亿元"),
                "ratio": (unit,)}[source[0]]
@@ -70,6 +75,14 @@ def _display_candidates(value: str, unit: str, *, rounded: bool = False) -> list
             if row not in rows:
                 rows.append(row)
     return rows
+
+
+def _normalized_financial_unit(unit: Any, currency: Any) -> str:
+    source_unit = str(unit or "").strip()
+    if source_unit.lower() not in {"million", "billion"}:
+        return source_unit
+    source_currency = str(currency or "").strip().upper()
+    return f"{source_currency} {source_unit.lower()}" if source_currency in {"USD", "CNY"} else source_unit
 
 
 def _period_key(period: Any) -> str:
@@ -119,7 +132,9 @@ def financial_fact_catalog(reports: list[dict[str, Any]]) -> dict[str, Any]:
                 if isinstance(value, bool) or value is None: continue
                 try: decimal_value = Decimal(str(value).replace(",", ""))
                 except InvalidOperation: continue
-                normalized = {**fact, "value": format(decimal_value, "f"),
+                source_unit = str(fact.get("unit") or "")
+                normalized = {**fact, "value": format(decimal_value, "f"), "source_unit": source_unit,
+                    "unit": _normalized_financial_unit(source_unit, fact.get("currency")),
                     "issuer_id": _issuer_id(report, evidence, report_index),
                     "evidence_id": evidence.get("evidence_id"), "source_url": evidence.get("source_url"),
                     "source_locator": fact.get("source_locator") or evidence.get("source_locator"),
@@ -217,29 +232,63 @@ def _facts(reports: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return financial_fact_catalog(reports)["facts"]
 
 
+def _explicit_period(text: str, number_start: int, number_end: int) -> dict[str, Any] | None:
+    """Return only a date expression that directly modifies this quantity.
+
+    General report/quarter dates are intentionally not inherited.  When prose does
+    not make the association local and unambiguous, the independent binding remains
+    authoritative and this parser returns unknown (None).
+    """
+    patterns = (
+        ("duration", re.compile(r"(20\d{2}-\d{2}-\d{2})\s*(?:至|—|–|-)\s*(20\d{2}-\d{2}-\d{2})")),
+        ("instant", re.compile(r"截至\s*(20\d{2}-\d{2}-\d{2})")),
+    )
+    financial = re.compile(rf"{_NUMBER_PATTERN}\s*(?:{_FINANCIAL_UNIT_PATTERN})", re.I)
+    candidates: list[tuple[int, dict[str, Any]]] = []
+    for kind, pattern in patterns:
+        for match in pattern.finditer(text):
+            if match.end() <= number_start:
+                bridge = text[match.end():number_start]
+                distance = number_start - match.end()
+                if distance > 56 or re.search(r"[。！？；;\n]", bridge) or financial.search(bridge):
+                    continue
+            elif match.start() >= number_end:
+                bridge = text[number_end:match.start()]
+                distance = match.start() - number_end
+                if (distance > 28 or re.search(r"[。！？；;\n]", bridge) or financial.search(bridge)
+                        or not re.fullmatch(r"[\s（(【\[]*", bridge)):
+                    continue
+            else:
+                continue
+            period = ({"kind": "instant", "start": None, "end": match.group(1)} if kind == "instant"
+                      else {"kind": "duration", "start": match.group(1), "end": match.group(2)})
+            candidates.append((distance, period))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda row: row[0])
+    if len(candidates) > 1 and candidates[0][0] == candidates[1][0] and candidates[0][1] != candidates[1][1]:
+        return None
+    return candidates[0][1]
+
+
 def _claims(markdown: str) -> list[dict[str, Any]]:
     # Coordinates always address the exact UTF-8-decoded Markdown string supplied to
     # the checker. Numeric normalization happens only in value, never in the text used
     # for offsets, so thousands separators cannot shift later occurrences.
     clean = markdown
-    number = r"[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?"
     # Python's Unicode \w treats a preceding Chinese character as a word character,
     # which hid ordinary forms such as “收入962.21亿美元”. Only an immediately
     # preceding ASCII digit/dot can make this the middle of another numeric token.
-    pattern = rf"(?<![0-9.])({number})\s*(USD\s+(?:million|billion)|million\s+USD|billion\s+USD|percentage\s+points|百万美元|亿美元|百万元|亿元|个百分点|个基点|美元|元|%|％|bps)"
+    pattern = rf"(?<![0-9.])({_NUMBER_PATTERN})\s*({_FINANCIAL_UNIT_PATTERN})"
     rows = []
-    global_period = None
-    period_match = re.search(r"经营期间[^\n]*?(20\d{2}-\d{2}-\d{2})\s*(?:至|—|-)[^\n]*?(20\d{2}-\d{2}-\d{2})", clean)
-    if period_match: global_period = {"kind": "duration", "start": period_match.group(1), "end": period_match.group(2)}
     for match in re.finditer(pattern, clean, re.I):
         context = clean[max(0, match.start() - 40):match.end() + 15]
         basis = "non-GAAP" if re.search(r"non[- ]?GAAP|非GAAP", context, re.I) else ("GAAP" if re.search(r"\bGAAP\b", context, re.I) else None)
-        local_end = re.search(r"截至\s*(20\d{2}-\d{2}-\d{2})", context)
-        period = {"kind": "instant", "start": None, "end": local_end.group(1)} if local_end else global_period
         value = match.group(1).replace(",", "")
         rows.append({"value": value, "unit": match.group(2), "display": match.group(0).strip(),
                      "decimals": len(value.split(".", 1)[1]) if "." in value else 0,
-                     "accounting_basis": basis, "period": period, "occurrence": {"start": match.start(), "end": match.end()}})
+                     "accounting_basis": basis, "period": _explicit_period(clean, match.start(), match.end()),
+                     "occurrence": {"start": match.start(), "end": match.end()}})
     lines = clean.splitlines()
     header: list[str] = []
     for index, line in enumerate(lines):
@@ -250,13 +299,17 @@ def _claims(markdown: str) -> list[dict[str, Any]]:
         if re.match(r"^\|(?:\s*:?-+:?\s*\|)+$", line): continue
         cells = [c.strip() for c in line.strip("|").split("|")]
         for column, cell in enumerate(cells):
-            if re.fullmatch(number, cell):
+            if re.fullmatch(_NUMBER_PATTERN, cell):
                 heading = header[column] if column < len(header) else ""
                 found = next((name for name in sorted(_UNIT, key=len, reverse=True) if name in heading), None)
                 value = cell.replace(",", "")
+                cell_start = line.find(cell)
+                period = _explicit_period(line, cell_start, cell_start + len(cell))
+                if period is None and heading:
+                    period = _explicit_period(heading, len(heading), len(heading))
                 rows.append({"value": value, "unit": found, "display": cell, "table": True,
                              "decimals": len(value.split(".", 1)[1]) if "." in value else 0,
-                             "period": global_period, "occurrence": {"line": index + 1, "column": column + 1}})
+                             "period": period, "occurrence": {"line": index + 1, "column": column + 1}})
     return rows
 
 
@@ -279,9 +332,17 @@ def _sentence_at(text: str, start: int, end: int) -> str:
 
 def _explicitly_negates_certainty(sentence: str, risky: str) -> bool:
     term = re.escape(risky)
-    before = rf"(?:不能判断|无法判断|无法形成|无从判断|不作|不提供|不给出|不形成|不构成)[^。！？\n]{{0,80}}{term}"
-    after = rf"{term}[^。！？\n]{{0,40}}(?:未知|不能判断|无法判断|不作判断|不提供|不形成|不构成)"
-    return bool(re.search(before, sentence) or re.search(after, sentence))
+    action = r"(?:判断|认定|声称|给出|提供|形成|得出|推出|证明|支持|写出)"
+    modal = rf"(?:不能|不可|不应|不宜|无法|无从)\s*(?:据此|因此|直接|基于此|据此直接|因此直接)?\s*{action}"
+    direct = r"(?:不作|不予|不提供|不给出|不形成|不构成)"
+    negative_action = rf"(?:{modal}|{direct})"
+    before = re.search(rf"{negative_action}[^。！？\n]{{0,36}}{term}", sentence)
+    after = re.search(rf"{term}[^。！？\n]{{0,36}}{negative_action}", sentence)
+    match = before or after
+    if not match:
+        return False
+    prefix = sentence[max(0, match.start() - 4):match.start()]
+    return not re.search(r"(?:并非|不是|未必)\s*$", prefix)
 
 
 def validate_reader_markdown(markdown: str, reports: list[dict[str, Any]], *, publication_type: str = "company",
@@ -395,9 +456,9 @@ def validate_reader_markdown(markdown: str, reports: list[dict[str, Any]], *, pu
                 "source_unit": derived.get("unit"), "source_evidence_ids": derived.get("source_evidence_ids", [])})
         else:
             fact = matches[0]; mappings.append({"display": claim["display"], "occurrence": claim.get("occurrence"),
-                "fact_id": fact["fact_id"], "evidence_id": fact.get("evidence_id"), "metric": fact.get("metric"),
+                "fact_id": fact["fact_id"], "input_fact_ids": [], "evidence_id": fact.get("evidence_id"), "metric": fact.get("metric"),
                 "period": fact.get("period"), "accounting_basis": fact.get("accounting_basis"),
-                "currency": fact.get("currency") or claim_unit[0], "source_unit": fact.get("unit"),
+                "currency": fact.get("currency") or claim_unit[0], "source_unit": fact.get("source_unit") or fact.get("unit"),
                 "source_locator": fact.get("source_locator"), "source_evidence_ids": fact.get("source_evidence_ids", [])})
     source_urls = {e.get("source_url") for report in reports for e in report.get("evidence", []) if e.get("source_url")}
     for url in _markdown_urls(markdown):
