@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import argparse
-from decimal import Decimal, InvalidOperation
+from datetime import date
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import hashlib
 import html
 import json
@@ -30,6 +31,7 @@ _UNIT = {
     "%": ("ratio", Decimal("0.01")), "％": ("ratio", Decimal("0.01")),
     "percent": ("ratio", Decimal("0.01")), "percent-upper-bound": ("ratio", Decimal("0.01")),
     "bps": ("ratio", Decimal("0.0001")), "个基点": ("ratio", Decimal("0.0001")),
+    "percentage points": ("ratio", Decimal("0.01")), "个百分点": ("ratio", Decimal("0.01")),
     "USD": ("USD", Decimal("1")), "美元": ("USD", Decimal("1")),
     "USD million": ("USD", Decimal("1000000")), "million USD": ("USD", Decimal("1000000")),
     "百万美元": ("USD", Decimal("1000000")),
@@ -44,18 +46,175 @@ def _unit(value: str) -> tuple[str, Decimal] | None:
     return _UNIT.get(re.sub(r"\s+", " ", (value or "").strip()))
 
 
-def _facts(reports: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    rows = []
-    for report in reports:
+def _decimal_text(value: Decimal) -> str:
+    text = format(value, "f")
+    return text.rstrip("0").rstrip(".") if "." in text else text
+
+
+def _display_candidates(value: str, unit: str, *, rounded: bool = False) -> list[dict[str, str]]:
+    source = _unit(unit)
+    if not source:
+        return [{"value": value, "unit": unit}]
+    targets = {"USD": ("USD", "USD million", "USD billion", "亿美元"),
+               "CNY": ("CNY", "百万元", "亿元"),
+               "ratio": (unit,)}[source[0]]
+    base = Decimal(value) * source[1]
+    rows: list[dict[str, str]] = []
+    for target in targets:
+        converted = base / _unit(target)[1]
+        values = [converted]
+        if rounded:
+            values.extend(converted.quantize(Decimal(step), rounding=ROUND_HALF_UP) for step in ("1", "0.1", "0.01"))
+        for candidate in values:
+            row = {"value": _decimal_text(candidate), "unit": target}
+            if row not in rows:
+                rows.append(row)
+    return rows
+
+
+def _period_key(period: Any) -> str:
+    return json.dumps(period or {}, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _basis(value: Any) -> str:
+    return str(value or "unspecified").strip().lower()
+
+
+def _duration_days(period: dict[str, Any]) -> int | None:
+    try:
+        return (date.fromisoformat(period["end"][:10]) - date.fromisoformat(period["start"][:10])).days
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _comparable_periods(newer: dict[str, Any], older: dict[str, Any]) -> bool:
+    if newer.get("kind") != older.get("kind") or not newer.get("end") or not older.get("end"):
+        return False
+    if str(newer["end"]) <= str(older["end"]):
+        return False
+    if newer.get("kind") == "instant":
+        return True
+    newer_days, older_days = _duration_days(newer), _duration_days(older)
+    return newer_days is not None and older_days is not None and abs(newer_days - older_days) <= 3
+
+
+def _issuer_id(report: dict[str, Any], evidence: dict[str, Any], report_index: int) -> str:
+    scope = report.get("scope") or {}
+    return str(evidence.get("issuer_id") or report.get("issuer_id") or scope.get("issuer_id")
+               or scope.get("cik") or scope.get("symbol") or report.get("report_id") or f"report-{report_index}")
+
+
+def financial_fact_catalog(reports: list[dict[str, Any]]) -> dict[str, Any]:
+    """Build the sole program-authorized catalog for displayed financial quantities.
+
+    Derived candidates are deliberately narrow: the program only compares the same
+    metric, basis, currency/unit family, and segment across comparable periods.  It
+    never searches arbitrary pairs merely because their arithmetic happens to fit.
+    """
+    facts: list[dict[str, Any]] = []
+    for report_index, report in enumerate(reports):
         for evidence in report.get("evidence", []):
-            for fact in evidence.get("numeric_facts", []):
+            for fact_index, fact in enumerate(evidence.get("numeric_facts", [])):
                 value = fact.get("value")
                 if isinstance(value, bool) or value is None: continue
                 try: decimal_value = Decimal(str(value).replace(",", ""))
                 except InvalidOperation: continue
-                rows.append({**fact, "value": format(decimal_value, "f"), "evidence_id": evidence.get("evidence_id"),
-                             "source_url": evidence.get("source_url")})
-    return rows
+                normalized = {**fact, "value": format(decimal_value, "f"),
+                    "issuer_id": _issuer_id(report, evidence, report_index),
+                    "evidence_id": evidence.get("evidence_id"), "source_url": evidence.get("source_url"),
+                    "source_locator": fact.get("source_locator") or evidence.get("source_locator"),
+                    "segment": fact.get("segment") or fact.get("dimensions") or evidence.get("segment")}
+                normalized["source_evidence_ids"] = list(dict.fromkeys(
+                    fact.get("source_evidence_ids") or [evidence.get("evidence_id")]))
+                normalized_unit = _unit(str(normalized.get("unit") or ""))
+                normalized["currency"] = normalized.get("currency") or (normalized_unit[0] if normalized_unit else None)
+                identity = [normalized["issuer_id"], report.get("report_id") or report_index,
+                    evidence.get("evidence_id"), fact_index,
+                    normalized.get("metric"), normalized["value"], normalized.get("unit"),
+                    normalized.get("currency"), _period_key(normalized.get("period")),
+                    _basis(normalized.get("accounting_basis")), normalized.get("segment"),
+                    normalized.get("source_locator")]
+                normalized["fact_id"] = stable_id("financial-fact", *identity)
+                normalized["accounting_basis"] = normalized.get("accounting_basis") or "unspecified"
+                normalized["display_candidates"] = _display_candidates(normalized["value"], str(normalized.get("unit") or ""))
+                facts.append(normalized)
+    derivations: list[dict[str, Any]] = []
+    for newer in facts:
+        newer_unit = _unit(str(newer.get("unit") or ""))
+        if not newer_unit:
+            continue
+        for older in facts:
+            older_unit = _unit(str(older.get("unit") or ""))
+            if (newer is older or not older_unit or newer.get("metric") != older.get("metric")
+                    or newer.get("issuer_id") != older.get("issuer_id")
+                    or newer.get("segment") != older.get("segment")
+                    or _basis(newer.get("accounting_basis")) != _basis(older.get("accounting_basis"))
+                    or newer.get("currency") != older.get("currency")
+                    or newer_unit[0] != older_unit[0]
+                    or not _comparable_periods(newer.get("period") or {}, older.get("period") or {})):
+                continue
+            current = Decimal(newer["value"]) * newer_unit[1]
+            prior = Decimal(older["value"]) * older_unit[1]
+            common = {"issuer_id": newer.get("issuer_id"), "metric": newer.get("metric"), "period": newer.get("period"),
+                "comparison_period": older.get("period"), "accounting_basis": newer.get("accounting_basis"),
+                "currency": newer.get("currency") or newer_unit[0],
+                "input_fact_ids": [newer["fact_id"], older["fact_id"]],
+                "source_evidence_ids": list(dict.fromkeys([newer.get("evidence_id"), older.get("evidence_id")])),
+                "source_locators": list(dict.fromkeys([newer.get("source_locator"), older.get("source_locator")])),
+                "segment": newer.get("segment")}
+            difference_unit = "percentage points" if newer_unit[0] == "ratio" else newer_unit[0]
+            difference_value = (current - prior) / (_unit(difference_unit) or ("", Decimal(1)))[1]
+            for operation, output_value, output_unit in (
+                    ("difference", difference_value, difference_unit),
+                    *(([("growth_rate", ((current / prior) - 1) * 100, "%")]) if prior != 0 else [])):
+                candidate = {**common, "operation": operation, "value": format(output_value, "f"), "unit": output_unit}
+                candidate["derivation_id"] = stable_id("financial-derivation", operation, *candidate["input_fact_ids"])
+                candidate["display_candidates"] = _display_candidates(candidate["value"], candidate["unit"], rounded=True)
+                derivations.append(candidate)
+    for numerator in facts:
+        relationship = numerator.get("share_relationship")
+        denominator_metric = relationship.get("denominator_metric") if isinstance(relationship, dict) else None
+        total_dimension = relationship.get("total_dimension") if isinstance(relationship, dict) else None
+        numerator_unit = _unit(str(numerator.get("unit") or ""))
+        if (not denominator_metric or not total_dimension or not numerator_unit
+                or numerator_unit[0] not in {"USD", "CNY"}):
+            continue
+        denominators = [row for row in facts if row.get("metric") == denominator_metric
+            and row.get("issuer_id") == numerator.get("issuer_id")
+            and row.get("period") == numerator.get("period")
+            and _basis(row.get("accounting_basis")) == _basis(numerator.get("accounting_basis"))
+            and row.get("currency") == numerator.get("currency")
+            and row.get("is_total") is True and row.get("total_dimension") == total_dimension
+            and (_unit(str(row.get("unit") or "")) or (None,))[0] == numerator_unit[0]]
+        if len(denominators) != 1:
+            continue
+        denominator = denominators[0]; denominator_unit = _unit(str(denominator.get("unit") or ""))
+        denominator_value = Decimal(denominator["value"]) * denominator_unit[1]
+        if denominator_value == 0:
+            continue
+        candidate = {"operation": "share", "issuer_id": numerator.get("issuer_id"),
+            "metric": numerator.get("metric"), "denominator_metric": denominator_metric,
+            "total_dimension": total_dimension, "period": numerator.get("period"),
+            "comparison_period": None, "accounting_basis": numerator.get("accounting_basis"),
+            "currency": "ratio", "input_fact_ids": [numerator["fact_id"], denominator["fact_id"]],
+            "source_evidence_ids": list(dict.fromkeys(numerator.get("source_evidence_ids", [])
+                                                      + denominator.get("source_evidence_ids", []))),
+            "source_locators": list(dict.fromkeys([numerator.get("source_locator"), denominator.get("source_locator")])),
+            "segment": numerator.get("segment"),
+            "value": format((Decimal(numerator["value"]) * numerator_unit[1] / denominator_value) * 100, "f"),
+            "unit": "%"}
+        candidate["derivation_id"] = stable_id("financial-derivation", "share", *candidate["input_fact_ids"])
+        candidate["display_candidates"] = _display_candidates(candidate["value"], candidate["unit"], rounded=True)
+        derivations.append(candidate)
+    return {"schema_version": 1, "facts": facts,
+            "derivations": sorted(derivations, key=lambda row: row["derivation_id"]),
+            "policy": {"operations": ["growth_rate", "difference", "share"],
+                       "same_issuer_required": True,
+                       "share_requires_source_declared_relationship_and_total_dimension": True}}
+
+
+def _facts(reports: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return financial_fact_catalog(reports)["facts"]
 
 
 def _claims(markdown: str) -> list[dict[str, Any]]:
@@ -67,7 +226,7 @@ def _claims(markdown: str) -> list[dict[str, Any]]:
     # Python's Unicode \w treats a preceding Chinese character as a word character,
     # which hid ordinary forms such as “收入962.21亿美元”. Only an immediately
     # preceding ASCII digit/dot can make this the middle of another numeric token.
-    pattern = rf"(?<![0-9.])({number})\s*(USD\s+(?:million|billion)|million\s+USD|billion\s+USD|百万美元|亿美元|百万元|亿元|美元|元|%|％|bps|个基点)"
+    pattern = rf"(?<![0-9.])({number})\s*(USD\s+(?:million|billion)|million\s+USD|billion\s+USD|percentage\s+points|百万美元|亿美元|百万元|亿元|个百分点|个基点|美元|元|%|％|bps)"
     rows = []
     global_period = None
     period_match = re.search(r"经营期间[^\n]*?(20\d{2}-\d{2}-\d{2})\s*(?:至|—|-)[^\n]*?(20\d{2}-\d{2}-\d{2})", clean)
@@ -145,7 +304,9 @@ def validate_reader_markdown(markdown: str, reports: list[dict[str, Any]], *, pu
             errors.append(f"unmapped period/date: {date_text}")
     # Reader prose may contain ordinal/count numbers, but every number carrying a financial unit must map to evidence.
     numeric_claims = _claims(markdown); mappings = []
-    facts = _facts(reports)
+    catalog = financial_fact_catalog(reports); facts = catalog["facts"]
+    facts_by_id = {row["fact_id"]: row for row in facts}
+    derivations_by_id = {row["derivation_id"]: row for row in catalog["derivations"]}
     for claim in numeric_claims:
         explicit = next((row for row in (explicit_fact_bindings or [])
                          if row.get("occurrence") == claim.get("occurrence") and row.get("display") == claim.get("display")), None)
@@ -153,56 +314,91 @@ def validate_reader_markdown(markdown: str, reports: list[dict[str, Any]], *, pu
         if claim_unit is None:
             errors.append(f"unmapped table quantity without unit: {claim['display']}")
             continue
-        matches = []
-        for fact in facts:
-            fact_unit = _unit(str(fact.get("unit") or ""))
-            if not fact_unit or fact_unit[0] != claim_unit[0]: continue
-            fact_basis = str(fact.get("accounting_basis") or "").lower()
-            claim_basis = str(claim.get("accounting_basis") or "").lower()
-            if claim_basis and not (claim_basis == fact_basis or (claim_basis == "gaap" and fact_basis == "us-gaap")): continue
-            bound_period = explicit.get("period") if explicit else claim.get("period")
-            if bound_period and fact.get("period") != bound_period: continue
-            expected = Decimal(str(fact["value"])) * fact_unit[1]
+        def quantity_matches(row: dict[str, Any]) -> bool:
+            row_unit = _unit(str(row.get("unit") or ""))
+            if not row_unit or row_unit[0] != claim_unit[0]:
+                return False
+            if explicit_fact_bindings is not None:
+                actual = Decimal(str(claim["value"])) * claim_unit[1]
+                return any(_unit(candidate["unit"])
+                    and Decimal(candidate["value"]) * _unit(candidate["unit"])[1] == actual
+                    for candidate in row.get("display_candidates", []))
+            expected = Decimal(str(row["value"])) * row_unit[1]
             actual = Decimal(str(claim["value"])) * claim_unit[1]
-            tolerance = max(abs(expected) * Decimal("0.0005"), claim_unit[1] * Decimal("0.5") * (Decimal(10) ** -claim.get("decimals", 0)))
-            if abs(expected - actual) <= tolerance: matches.append(fact)
+            tolerance = max(abs(expected) * Decimal("0.0005"),
+                claim_unit[1] * Decimal("0.5") * (Decimal(10) ** -claim.get("decimals", 0)))
+            return abs(expected - actual) <= tolerance
+
+        matches: list[dict[str, Any]] = []
         derived = None
-        if not matches and claim_unit[0] == "ratio":
-            candidates = []
-            for numerator in facts:
-                n_unit = _unit(str(numerator.get("unit") or ""))
-                if not n_unit or n_unit[0] not in {"USD", "CNY"}: continue
-                bound_period = explicit.get("period") if explicit else claim.get("period")
-                if bound_period and numerator.get("period") != bound_period: continue
-                for denominator in facts:
-                    d_unit = _unit(str(denominator.get("unit") or ""))
-                    if not d_unit or d_unit[0] != n_unit[0] or Decimal(str(denominator["value"])) == 0: continue
-                    if numerator is denominator: continue
-                    ratio = (Decimal(str(numerator["value"])) * n_unit[1] / (Decimal(str(denominator["value"])) * d_unit[1])) - 1
-                    tolerance = claim_unit[1] * Decimal("0.5") * (Decimal(10) ** -claim.get("decimals", 0))
-                    if abs(ratio - Decimal(str(claim["value"])) * claim_unit[1]) <= tolerance:
-                        candidates.append((numerator, denominator))
-            if len(candidates) == 1: derived = candidates[0]
-        if len(matches) > 1 and explicit:
-            selected = [fact for fact in matches if fact.get("evidence_id") == explicit.get("evidence_id")
-                        and fact.get("metric") == explicit.get("metric") and fact.get("period") == explicit.get("period")]
-            if len(selected) == 1: matches = selected
+        if explicit_fact_bindings is not None:
+            if explicit is None:
+                errors.append(f"missing explicit catalog binding: {claim['display']}")
+                continue
+            fact_id, derivation_id = explicit.get("fact_id"), explicit.get("derivation_id")
+            if bool(fact_id) == bool(derivation_id):
+                errors.append(f"binding must select exactly one catalog fact or derivation: {claim['display']}")
+                continue
+            if fact_id:
+                fact = facts_by_id.get(fact_id)
+                if fact is None:
+                    errors.append(f"binding references unknown fact_id: {claim['display']}")
+                    continue
+                if not quantity_matches(fact):
+                    errors.append(f"catalog fact does not match displayed quantity: {claim['display']}")
+                    continue
+                if claim.get("period") and claim.get("period") != fact.get("period"):
+                    errors.append(f"displayed period differs from catalog fact: {claim['display']}")
+                    continue
+                matches = [fact]
+            else:
+                candidate = derivations_by_id.get(derivation_id)
+                if candidate is None:
+                    errors.append(f"binding references unknown derivation_id: {claim['display']}")
+                    continue
+                if (explicit.get("operation") != candidate.get("operation")
+                        or explicit.get("input_fact_ids") != candidate.get("input_fact_ids")):
+                    errors.append(f"derivation binding changed operation or source facts: {claim['display']}")
+                    continue
+                if not quantity_matches(candidate):
+                    errors.append(f"catalog derivation does not match displayed quantity: {claim['display']}")
+                    continue
+                if claim.get("period") and claim.get("period") != candidate.get("period"):
+                    errors.append(f"displayed period differs from catalog derivation: {claim['display']}")
+                    continue
+                derived = candidate
+        else:
+            for fact in facts:
+                fact_unit = _unit(str(fact.get("unit") or ""))
+                if not fact_unit or fact_unit[0] != claim_unit[0]: continue
+                fact_basis = str(fact.get("accounting_basis") or "").lower()
+                claim_basis = str(claim.get("accounting_basis") or "").lower()
+                if claim_basis and not (claim_basis == fact_basis or (claim_basis == "gaap" and fact_basis == "us-gaap")): continue
+                if claim.get("period") and fact.get("period") != claim.get("period"): continue
+                if quantity_matches(fact): matches.append(fact)
+        if explicit and matches:
+            fact = matches[0]
+            if (explicit.get("metric") != fact.get("metric") or explicit.get("period") != fact.get("period")
+                    or _basis(explicit.get("accounting_basis")) != _basis(fact.get("accounting_basis"))):
+                errors.append(f"fact binding metadata differs from catalog: {claim['display']}")
+                continue
         if not matches and derived is None:
             errors.append(f"unmapped numeric claim (value/unit/currency): {claim['display']}")
         elif len(matches) > 1:
             errors.append(f"ambiguous numeric claim requires explicit evidence binding: {claim['display']}")
         elif derived is not None:
-            numerator, denominator = derived
             mappings.append({"display": claim["display"], "occurrence": claim.get("occurrence"),
-                "evidence_id": numerator.get("evidence_id"), "metric": numerator.get("metric"),
-                "period": numerator.get("period"), "accounting_basis": numerator.get("accounting_basis"),
-                "currency": "ratio", "source_unit": "%", "derivation": "growth-rate",
-                "source_evidence_ids": [numerator.get("evidence_id"), denominator.get("evidence_id")]})
+                "derivation_id": derived["derivation_id"], "operation": derived["operation"],
+                "input_fact_ids": derived["input_fact_ids"], "metric": derived.get("metric"),
+                "period": derived.get("period"), "comparison_period": derived.get("comparison_period"),
+                "accounting_basis": derived.get("accounting_basis"), "currency": derived.get("currency"),
+                "source_unit": derived.get("unit"), "source_evidence_ids": derived.get("source_evidence_ids", [])})
         else:
-            fact = matches[0]; mappings.append({"display": claim["display"], "occurrence": claim.get("occurrence"), "evidence_id": fact.get("evidence_id"),
-                "metric": fact.get("metric"), "period": fact.get("period"), "accounting_basis": fact.get("accounting_basis"),
+            fact = matches[0]; mappings.append({"display": claim["display"], "occurrence": claim.get("occurrence"),
+                "fact_id": fact["fact_id"], "evidence_id": fact.get("evidence_id"), "metric": fact.get("metric"),
+                "period": fact.get("period"), "accounting_basis": fact.get("accounting_basis"),
                 "currency": fact.get("currency") or claim_unit[0], "source_unit": fact.get("unit"),
-                "derivation": fact.get("derivation"), "source_evidence_ids": fact.get("source_evidence_ids", [])})
+                "source_locator": fact.get("source_locator"), "source_evidence_ids": fact.get("source_evidence_ids", [])})
     source_urls = {e.get("source_url") for report in reports for e in report.get("evidence", []) if e.get("source_url")}
     for url in _markdown_urls(markdown):
         if url not in source_urls:
@@ -306,13 +502,16 @@ def build_publication(root: Path, publication_type: str, scope_id: str, quarter_
                     checker["errors"].append("semantic checker source mapping references unknown evidence")
                     break
             mapped_evidence = {evidence_id for mapping in semantic_checker["source_mapping"] for evidence_id in mapping.get("evidence_ids", [])}
-            required_evidence = {row.get("evidence_id") for row in checker.get("fact_mappings", []) if row.get("evidence_id")}
+            required_evidence = {evidence_id for row in checker.get("fact_mappings", [])
+                                 for evidence_id in ([row.get("evidence_id")] + row.get("source_evidence_ids", []))
+                                 if evidence_id}
             if not required_evidence <= mapped_evidence:
                 checker["errors"].append("semantic checker source mapping omits numeric evidence")
         expected_bindings = checker.get("fact_mappings", [])
         supplied_bindings = semantic_checker.get("fact_bindings")
-        keys = ("display", "occurrence", "evidence_id", "metric", "period", "accounting_basis", "currency",
-                "source_unit", "derivation", "source_evidence_ids")
+        keys = ("display", "occurrence", "fact_id", "derivation_id", "operation", "input_fact_ids",
+                "evidence_id", "metric", "period", "comparison_period", "accounting_basis", "currency",
+                "source_unit", "source_locator", "source_evidence_ids")
         if not isinstance(supplied_bindings, list) or len(supplied_bindings) != len(expected_bindings):
             checker["errors"].append("semantic checker does not bind every displayed financial quantity")
         elif [{key: row.get(key) for key in keys} for row in supplied_bindings] != [{key: row.get(key) for key in keys} for row in expected_bindings]:

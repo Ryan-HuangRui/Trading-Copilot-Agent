@@ -8,11 +8,12 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "script"))
 
-from earnings_common import atomic_write_json, sha256_file
-from earnings_publication import _facts, build_publication, claim_occurrence_inventory, validate_reader_markdown
+from earnings_common import atomic_write_json, canonical_json, read_json, sha256_bytes, sha256_file
+from earnings_publication import (_facts, build_publication, claim_occurrence_inventory,
+                                  financial_fact_catalog, validate_reader_markdown)
 from earnings_period_review import resolve_report_period
 from earnings_lark import LarkDocumentPublisher, _readback_key, normalize_markdown_for_lark
-from earnings_publication_runner import prepare_input
+from earnings_publication_runner import prepare_input, prepare_repair_input, run_publication
 
 
 SOURCE = {
@@ -67,6 +68,87 @@ def markdown(value="100", include_risk=True, link="https://example.com/filing"):
 
 
 class EarningsPublicationTests(unittest.TestCase):
+    def test_financial_catalog_uses_stable_ids_and_only_legitimate_derivations(self):
+        report = json.loads(json.dumps(SOURCE))
+        report["evidence"][0]["numeric_facts"].extend([
+            {"metric": "us-gaap:Revenues", "is_total": True, "total_dimension": "consolidated-revenue",
+             "value": "96221000000", "unit": "USD",
+             "currency": "USD", "accounting_basis": "us-gaap",
+             "period": {"kind": "duration", "start": "2026-04-27", "end": "2026-07-26"}},
+            {"metric": "us-gaap:Revenues", "value": "46743000000", "unit": "USD",
+             "currency": "USD", "accounting_basis": "us-gaap",
+             "period": {"kind": "duration", "start": "2025-04-28", "end": "2025-07-27"}},
+            {"metric": "us-gaap:OperatingIncomeLoss", "value": "63734000000", "unit": "USD",
+             "currency": "USD", "accounting_basis": "us-gaap",
+             "period": {"kind": "duration", "start": "2026-04-27", "end": "2026-07-26"}},
+            {"metric": "AccountsReceivableNetCurrent", "value": "63059000000", "unit": "USD",
+             "currency": "USD", "accounting_basis": "us-gaap",
+             "period": {"kind": "instant", "start": None, "end": "2026-07-26"}},
+            {"metric": "DataCenterRevenue",
+             "share_relationship": {"denominator_metric": "us-gaap:Revenues", "total_dimension": "consolidated-revenue"},
+             "value": "89023000000", "unit": "USD", "currency": "USD", "accounting_basis": "us-gaap",
+             "period": {"kind": "duration", "start": "2026-04-27", "end": "2026-07-26"}},
+        ])
+        first = financial_fact_catalog([report]); second = financial_fact_catalog([report])
+        self.assertEqual(first, second)
+        self.assertTrue(all(row["fact_id"].startswith("financial-fact-") for row in first["facts"]))
+        growth = [row for row in first["derivations"]
+                  if row["operation"] == "growth_rate" and row["metric"] == "us-gaap:Revenues"]
+        self.assertEqual(len(growth), 1); self.assertEqual(growth[0]["input_fact_ids"], [
+            next(row["fact_id"] for row in first["facts"] if row["metric"] == "us-gaap:Revenues" and row["value"] == "96221000000"),
+            next(row["fact_id"] for row in first["facts"] if row["metric"] == "us-gaap:Revenues" and row["value"] == "46743000000")])
+        revenue = next(row for row in first["facts"] if row["metric"] == "us-gaap:Revenues" and row["value"] == "96221000000")
+        self.assertIn({"value": "962.21", "unit": "亿美元"}, revenue["display_candidates"])
+        self.assertIn({"value": "106", "unit": "%"}, growth[0]["display_candidates"])
+        self.assertFalse(any(row["metric"] in {"us-gaap:OperatingIncomeLoss", "AccountsReceivableNetCurrent"}
+                             and row["operation"] == "growth_rate" for row in first["derivations"]))
+        shares = [row for row in first["derivations"] if row["operation"] == "share"]
+        self.assertEqual([(row["metric"], row["denominator_metric"]) for row in shares],
+                         [("DataCenterRevenue", "us-gaap:Revenues")])
+
+        other = json.loads(json.dumps(SOURCE)); other["report_id"] = "report-other"
+        other["scope"]["symbol"] = "OTHER"; other["evidence"][0]["issuer_id"] = "issuer-other"
+        other["evidence"][0]["numeric_facts"] = [{"metric": "CrossIssuerRevenue", "value": "50", "unit": "USD million",
+            "currency": "USD", "accounting_basis": "us-gaap",
+            "period": {"kind": "duration", "start": "2025-04-01", "end": "2025-06-30"}}]
+        report["evidence"][0]["numeric_facts"].append({"metric": "CrossIssuerRevenue", "value": "100", "unit": "USD million",
+            "currency": "USD", "accounting_basis": "us-gaap",
+            "period": {"kind": "duration", "start": "2026-04-01", "end": "2026-06-30"}})
+        combined = financial_fact_catalog([report, other])
+        self.assertFalse(any(row["metric"] == "CrossIssuerRevenue" for row in combined["derivations"]))
+        self.assertEqual({row["issuer_id"] for row in combined["facts"] if row["metric"] == "CrossIssuerRevenue"},
+                         {"TEST", "issuer-other"})
+
+    def test_derived_claim_requires_catalog_id_operation_and_exact_source_fact_ids(self):
+        report = json.loads(json.dumps(SOURCE)); facts = report["evidence"][0]["numeric_facts"]
+        facts.extend([
+            {"metric": "revenue", "value": "205.85", "unit": "USD million",
+             "period": {"kind": "duration", "start": "2026-04-01", "end": "2026-06-30"}},
+            {"metric": "revenue", "value": "100", "unit": "USD million",
+             "period": {"kind": "duration", "start": "2025-04-01", "end": "2025-06-30"}},
+        ])
+        body = markdown().replace("收入为 100 百万美元，但", "收入同比增长 106%，本期收入为 205.85 百万美元，但")
+        catalog = financial_fact_catalog([report]); inventory = claim_occurrence_inventory(body)["claims"]
+        current = next(row for row in catalog["facts"] if row["metric"] == "revenue" and row["value"] == "205.85")
+        growth = next(row for row in catalog["derivations"] if row["operation"] == "growth_rate"
+                      and row["input_fact_ids"][0] == current["fact_id"])
+        bindings = []
+        for claim in inventory:
+            if claim["display"] == "106%":
+                bindings.append({"display": claim["display"], "occurrence": claim["occurrence"],
+                    "derivation_id": growth["derivation_id"], "operation": growth["operation"],
+                    "input_fact_ids": growth["input_fact_ids"]})
+            else:
+                candidates = [row for row in catalog["facts"] if row["value"] == claim["value"]]
+                fact = current if claim["display"].startswith("205.85") else candidates[0]
+                bindings.append({"display": claim["display"], "occurrence": claim["occurrence"],
+                    "fact_id": fact["fact_id"], "metric": fact["metric"], "period": fact["period"],
+                    "accounting_basis": fact["accounting_basis"]})
+        self.assertEqual(validate_reader_markdown(body, [report], explicit_fact_bindings=bindings)["status"], "passed")
+        forged = json.loads(json.dumps(bindings)); forged[0]["input_fact_ids"].reverse()
+        failed = validate_reader_markdown(body, [report], explicit_fact_bindings=forged)
+        self.assertTrue(any("changed operation or source facts" in row for row in failed["errors"]))
+
     def test_occurrence_inventory_uses_exact_raw_markdown_coordinates_with_commas(self):
         body = "收入962.21亿美元，同比增长106%；Revenue1,000USD million，回落-12.5%。\n| 指标 | 数值（亿美元） |\n|---|---:|\n| 本期 | 962.21 |\n| 上期 | 962.21 |"
         inventory = claim_occurrence_inventory(body)
@@ -121,6 +203,86 @@ class EarningsPublicationTests(unittest.TestCase):
             self.assertEqual(first, second); self.assertEqual(first.read_bytes(), first_bytes)
             changed = prepare_input(root, publication_type="company", scope_id="TEST", quarter_id="2026-Q2", source_paths=[source], title="新标题")
             self.assertNotEqual(changed, first)
+
+    def test_explicit_repair_is_single_immutable_resumable_attempt_with_usage_ledger(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); (root / "config").mkdir()
+            config_source = Path(__file__).resolve().parents[1] / "config/earnings_research.json"
+            (root / "config/earnings_research.json").write_bytes(config_source.read_bytes())
+            live = {**SOURCE, "source_mode": "live"}
+            source = root / "report/earnings/source.json"; atomic_write_json(source, live)
+            binary = root / "fake-codex"; binary.write_text("fake"); binary.chmod(0o700)
+            manifest = prepare_input(root, publication_type="company", scope_id="TEST", quarter_id="2026-Q2",
+                                     source_paths=[source])
+            good = markdown(); bad = good.replace("公司向客户销售产品。", "毛利率改善证明公司定价权稳固。")
+            calls = []
+
+            def fake_codex(_root, _binary, _profile, prompt, output, _events, _stderr, _timeout):
+                calls.append(output)
+                if output.name == "reader-draft.md":
+                    output.write_text(good if "唯一一次修复尝试" in prompt else bad)
+                elif output.parent.name == "repair-attempt-1":
+                    mappings = validate_reader_markdown(good, [live])["fact_mappings"]
+                    for binding in mappings:
+                        binding["input_fact_ids"] = []  # optional unused JSON field from real checker schema
+                    atomic_write_json(output, {"status": "passed", "errors": [], "warnings": [],
+                        "source_mapping": [{"section": "全文", "claim_ids": ["c1"], "evidence_ids": ["e1"]}],
+                        "fact_bindings": mappings})
+                else:
+                    atomic_write_json(output, {"status": "failed",
+                        "errors": ["毛利率改善不能推出定价权"], "warnings": [],
+                        "source_mapping": [{"section": "全文", "claim_ids": ["c1"], "evidence_ids": ["e1"]}],
+                        "fact_bindings": []})
+                return {"input_tokens": 10, "output_tokens": 5}
+
+            with patch("earnings_publication_runner._codex", side_effect=fake_codex):
+                failed = run_publication(root, manifest, binary=str(binary), timeout=60)
+                self.assertEqual(failed["status"], "failed")
+                original_draft = root / read_json(manifest)["permitted_outputs"]["draft"]
+                original_hash = sha256_file(original_draft)
+                legacy = read_json(manifest); legacy.pop("financial_fact_catalog")
+                legacy["semantic_input"].pop("financial_fact_catalog_sha256")
+                legacy["semantic_input"]["method"] = "reader-publication-v3"
+                legacy.pop("input_manifest_hash")
+                legacy["input_manifest_hash"] = sha256_bytes(canonical_json(legacy))
+                atomic_write_json(manifest, legacy)
+                repair_manifest = prepare_repair_input(root, manifest)
+                self.assertEqual(prepare_repair_input(root, manifest), repair_manifest)
+                repaired_input = read_json(repair_manifest)
+                self.assertTrue(repaired_input["financial_fact_catalog"]["facts"])
+                self.assertEqual(repaired_input["semantic_input"]["method"], "reader-publication-v4-repair-1")
+                with self.assertRaisesRegex(ValueError, "cannot create another repair"):
+                    prepare_repair_input(root, repair_manifest)
+                repaired = run_publication(root, repair_manifest, binary=str(binary), timeout=60)
+            self.assertEqual(repaired["status"], "success", repaired)
+            self.assertEqual(sha256_file(original_draft), original_hash)
+            self.assertEqual(repaired["attempt"]["repair_attempt"], 1)
+            self.assertEqual(repaired["attempt"]["model_calls_completed"], 2)
+            self.assertEqual([row["usage"] for row in repaired["attempt"]["calls"]],
+                             [{"input_tokens": 10, "output_tokens": 5}] * 2)
+            self.assertEqual(len(calls), 4)
+            repair_result = run_publication(root, repair_manifest, binary=str(binary), timeout=60)
+            self.assertEqual(repair_result, repaired); self.assertEqual(len(calls), 4)
+
+    def test_failed_model_call_is_recorded_once_and_never_automatically_retried(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); (root / "config").mkdir()
+            config_source = Path(__file__).resolve().parents[1] / "config/earnings_research.json"
+            (root / "config/earnings_research.json").write_bytes(config_source.read_bytes())
+            source = root / "report/earnings/source.json"; atomic_write_json(source, {**SOURCE, "source_mode": "live"})
+            binary = root / "fake-codex"; binary.write_text("fake"); binary.chmod(0o700)
+            manifest = prepare_input(root, publication_type="company", scope_id="TEST", quarter_id="2026-Q2",
+                                     source_paths=[source])
+            with patch("earnings_publication_runner._codex", side_effect=subprocess.TimeoutExpired("codex", 2)) as codex:
+                with self.assertRaises(subprocess.TimeoutExpired):
+                    run_publication(root, manifest, binary=str(binary), timeout=60)
+                state = read_json(manifest.parent / "attempt-state.json")
+                self.assertEqual((state["model_calls_started"], state["model_calls_completed"], state["model_calls_failed"]),
+                                 (1, 0, 1))
+                self.assertIsNone(state["calls"][0]["usage"])
+                with self.assertRaisesRegex(ValueError, "already attempted"):
+                    run_publication(root, manifest, binary=str(binary), timeout=60)
+                self.assertEqual(codex.call_count, 1)
 
     def test_accepted_nvda_contract_uses_decimal_strings_and_evidence_period_enrichment(self):
         path = Path("/Users/cenxiangxiang/hr/repo/Trading-Copilot-Agent/report/earnings/deployment-acceptance/2026-09-15/company_report.json")

@@ -57,4 +57,10 @@ adapter 的参数形状按官方 lark-cli 文档：它把 cwd 固定到准备目
 4. 只有五个冻结行业均为 full/revision 且核对通过，才允许正式“美股重点行业季度研究”。
 5. 开启 tracked/runtime 的季度和文档开关后，仍只保留现有 10:00 muted cron。检查 daily-result、quarterly.sqlite、publication manifest、cloud state 和 outbox decision。
 
-回滚只需关闭三个 activation flags；不删除 SQLite、不可变报告或远端文档。需要重新处理时修正缺口/身份后触发新输入或显式 reconcile，禁止删除状态后盲目重建。
+回滚只需关闭四个 activation flags；不删除 SQLite、不可变报告或远端文档。需要重新处理时修正缺口/身份后触发新输入或显式 reconcile，禁止删除状态后盲目重建。
+
+## 发布核对失败后的有限修复
+
+数字目录由程序从已验收证据生成，保留发行人、指标、币种、口径、期间和来源定位。writer 只使用目录中的展示值；派生量仅允许同发行人且口径兼容的指定操作。checker 独立选择事实/派生 ID 并核对语义，程序补全已验证的来源元数据，原始 checker 输出保留用于审计。
+
+已完成但未通过核对的稿件，可显式执行一次 `earnings-publication-runner --repair <failed-input-manifest.json> --execute --codex-bin <absolute-path>`。它复用冻结研究，将错误反馈给新 writer，再独立核对；每次修复至多两个模型调用，不重复研究，不覆盖父稿，不能嵌套修复。此入口不由日任务自动调用，应单独计入人工验收预算。失败或结果不明的模型调用不会自动重复；保留状态等待审查。修复也未通过时仍禁止发布。
