@@ -40,25 +40,35 @@ def _registered_report(state: EarningsState, root: Path, path_text: str) -> tupl
 
 
 def _company_inputs(state: EarningsState, root: Path, issuer_ids: list[str], period_start: str, period_end: str,
-                    cutoff: str) -> tuple[list[dict[str, Any]], list[str]]:
+                    cutoff: str, research_quarter: str | None = None) -> tuple[list[dict[str, Any]], list[str]]:
     artifacts: list[dict[str, Any]] = []
     researched: list[str] = []
     for issuer_id in issuer_ids:
-        rows = state.db.execute(
-            """SELECT a.* FROM report_artifacts a WHERE a.report_type='company' AND a.subject_id IN
-            (SELECT event_id FROM earnings_events WHERE issuer_id=?) AND (a.period_end IS NULL OR a.period_end BETWEEN ? AND ?)
-            ORDER BY a.created_at DESC""", (issuer_id, period_start, period_end),
-        ).fetchall()
+        if research_quarter:
+            rows = state.db.execute("""SELECT a.* FROM report_artifacts a WHERE a.report_type='company' AND a.subject_id IN
+                (SELECT event_id FROM earnings_events WHERE issuer_id=?) ORDER BY a.created_at DESC""", (issuer_id,)).fetchall()
+        else:
+            rows = state.db.execute("""SELECT a.* FROM report_artifacts a WHERE a.report_type='company' AND a.subject_id IN
+                (SELECT event_id FROM earnings_events WHERE issuer_id=?) AND (a.period_end IS NULL OR a.period_end BETWEEN ? AND ?)
+                ORDER BY a.created_at DESC""", (issuer_id, period_start, period_end)).fetchall()
         if rows:
-            row = dict(rows[0])
-            path = ensure_inside(resolve_path(root, row["path"]), [root / "report" / "earnings"])
+            eligible = []
+            for candidate in rows:
+                candidate_path = ensure_inside(resolve_path(root, candidate["path"]), [root / "report" / "earnings"])
+                candidate_report = read_json(candidate_path)
+                if parse_time(candidate_report.get("cutoff")) > parse_time(cutoff): continue
+                if research_quarter:
+                    from earnings_period_review import resolve_report_period
+                    try: mapped = resolve_report_period(candidate_report)
+                    except ValueError: continue
+                    if mapped["research_quarter"] != research_quarter: continue
+                eligible.append((candidate, candidate_path, candidate_report))
+            if not eligible: continue
+            row, path, report = eligible[0]; row = dict(row)
             if not path.exists() or sha256_file(path) != row["sha256"]:
                 raise ValueError(f"company artifact missing or hash mismatch: {row['path']}")
-            report = read_json(path)
-            if parse_time(report.get("cutoff")) > parse_time(cutoff):
-                continue
             scope = report.get("scope") or {}
-            if scope.get("issuer_id") != issuer_id or scope.get("reporting_end") != row["period_end"]:
+            if scope.get("issuer_id") != issuer_id:
                 raise ValueError(f"company artifact scope mismatch: {row['path']}")
             artifacts.append({"report_id": row["report_id"], "task_id": row["task_id"], "path": row["path"], "sha256": row["sha256"],
                               "completeness": row["completeness"], "thesis_state": report.get("thesis_state"),
@@ -68,17 +78,26 @@ def _company_inputs(state: EarningsState, root: Path, issuer_ids: list[str], per
 
 
 def _source_documents(state: EarningsState, root: Path, issuer_ids: list[str], cutoff: str,
-                      period_start: str, period_end: str) -> list[dict[str, Any]]:
+                      period_start: str, period_end: str, research_quarter: str | None = None,
+                      bound_document_keys: set[tuple[str, int, str]] | None = None) -> list[dict[str, Any]]:
     cutoff_dt = parse_time(cutoff)
     documents: list[dict[str, Any]] = []
     for issuer_id in issuer_ids:
-        rows = state.db.execute(
-            """SELECT d.* FROM documents d LEFT JOIN earnings_events e ON e.event_id=d.event_id
-            WHERE d.issuer_id=? AND (e.reporting_end BETWEEN ? AND ? OR e.reporting_end IS NULL)
-            ORDER BY d.document_id,d.version""", (issuer_id, period_start, period_end)).fetchall()
+        rows = state.db.execute("""SELECT d.* FROM documents d LEFT JOIN earnings_events e ON e.event_id=d.event_id
+            WHERE d.issuer_id=? AND (? OR e.reporting_end BETWEEN ? AND ? OR e.reporting_end IS NULL)
+            ORDER BY d.document_id,d.version""", (issuer_id, int(bool(research_quarter)), period_start, period_end)).fetchall()
         latest: dict[str, dict[str, Any]] = {}
         for raw in rows:
             row = dict(raw)
+            if research_quarter:
+                from earnings_period_review import map_fiscal_period
+                mapped_quarter = None
+                if row.get("reporting_start") and row.get("reporting_end"):
+                    try: mapped_quarter = map_fiscal_period(row["reporting_start"], row["reporting_end"], form=row.get("form"))["research_quarter"]
+                    except ValueError: pass
+                binding = (str(row["document_id"]), int(row["version"]), str(row["content_sha256"]))
+                if mapped_quarter is None and binding in (bound_document_keys or set()): mapped_quarter = research_quarter
+                if mapped_quarter != research_quarter: continue
             public = row.get("accepted_at") or row.get("published_at")
             if not public or parse_time(public) > cutoff_dt:
                 continue
@@ -111,6 +130,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cutoff", required=True)
     parser.add_argument("--predecessor-report", action="append", default=[])
     parser.add_argument("--critical-gap-status", choices=["resolved", "disclosed", "unresolved"], default="unresolved")
+    parser.add_argument("--frozen-scope")
     parser.add_argument("--run-id")
     parser.add_argument("--owner")
     parser.add_argument("--lease-seconds", type=int)
@@ -125,7 +145,17 @@ def main() -> None:
     config, config_hash = load_config(root, str(config_path))
     universe_path = confined_path(root, args.universe, "config")
     universe = read_json(universe_path)
-    industry = _industry(universe, args.industry)
+    frozen_scope = None
+    if args.frozen_scope:
+        frozen_path = ensure_inside(resolve_path(root, args.frozen_scope), [root / "runtime" / "earnings" / "quarterly-scopes"])
+        frozen_scope = read_json(frozen_path)
+        industry = frozen_scope["industry"]
+        if industry.get("industry_id") != args.industry:
+            raise ValueError("frozen quarterly scope industry mismatch")
+        if sha256_bytes(canonical_json(industry)) != frozen_scope.get("frozen_universe_hash"):
+            raise ValueError("frozen quarterly scope hash mismatch")
+    else:
+        industry = _industry(universe, args.industry)
     cutoff = parse_time(args.cutoff)
     if cutoff is None:
         raise ValueError("cutoff required")
@@ -137,7 +167,8 @@ def main() -> None:
         issuer_by_symbol = {row["symbol"]: row["issuer_id"] for row in state.db.execute("SELECT symbol,issuer_id FROM issuers")}
         issuer_ids = [issuer_by_symbol[symbol] for symbol in expected_symbols if symbol in issuer_by_symbol]
         unresolved_symbols = [symbol for symbol in expected_symbols if symbol not in issuer_by_symbol]
-        company_artifacts, researched_ids = _company_inputs(state, root, issuer_ids, args.period_start, args.period_end, cutoff.isoformat())
+        end = date.fromisoformat(args.period_end); research_quarter = f"{end.year}-Q{(end.month - 1)//3 + 1}" if args.mode == "quarterly" else None
+        company_artifacts, researched_ids = _company_inputs(state, root, issuer_ids, args.period_start, args.period_end, cutoff.isoformat(), research_quarter)
         predecessor_reports: list[dict[str, Any]] = []
         predecessor_rows: list[dict[str, Any]] = []
         for path in args.predecessor_report:
@@ -152,7 +183,16 @@ def main() -> None:
             raise ValueError("challenge role requires a registered industry predecessor report")
         if args.role == "synthesis" and not {"industry", "challenge"}.issubset({r.get("report_type") for r in predecessor_reports}):
             raise ValueError("synthesis role requires registered industry and challenge reports")
-        sources = _source_documents(state, root, issuer_ids, cutoff.isoformat(), args.period_start, args.period_end)
+        bound_document_keys: set[tuple[str, int, str]] = set()
+        if research_quarter:
+            for artifact in company_artifacts:
+                report = read_json(root / artifact["path"])
+                for evidence in report.get("evidence", []):
+                    if evidence.get("document_id") and evidence.get("document_version") is not None and evidence.get("document_hash"):
+                        bound_document_keys.add((str(evidence["document_id"]), int(evidence["document_version"]),
+                                                 str(evidence["document_hash"])))
+        sources = _source_documents(state, root, issuer_ids, cutoff.isoformat(), args.period_start, args.period_end,
+                                    research_quarter, bound_document_keys)
         modes = {row.get("source_mode") for row in company_artifacts + predecessor_rows + sources if row.get("source_mode")}
         if len(modes) > 1:
             raise ValueError(f"mixed source modes are forbidden: {sorted(modes)}")
@@ -162,11 +202,26 @@ def main() -> None:
             emit(payload)
         source_mode = next(iter(modes), "fixture")
         expected_ids = [issuer_by_symbol.get(symbol, f"unresolved:{symbol}") for symbol in expected_symbols]
-        disclosed_ids = {row["issuer_id"] for row in state.db.execute(
-            "SELECT DISTINCT issuer_id FROM earnings_events WHERE reporting_end BETWEEN ? AND ? AND event_kind='earnings'",
-            (args.period_start, args.period_end)) if row["issuer_id"] in issuer_ids}
-        fetched_ids = {row["issuer_id"] for row in sources if row.get("reporting_end") and args.period_start <= row["reporting_end"] <= args.period_end}
-        researched_set = set(researched_ids)
+        if research_quarter and source_mode == "live":
+            from earnings_period_review import _period_member_audit
+            disclosed_ids, fetched_ids, researched_ids_audit, _ = _period_member_audit(
+                state, issuer_ids, research_quarter, cutoff=cutoff.isoformat())
+        else:
+            if research_quarter:
+                from earnings_period_review import map_fiscal_period
+                disclosed_ids = set()
+                for row in state.db.execute("SELECT issuer_id,reporting_start,reporting_end FROM earnings_events WHERE event_kind='earnings'"):
+                    if row["issuer_id"] not in issuer_ids: continue
+                    try: mapped = map_fiscal_period(row["reporting_start"], row["reporting_end"])
+                    except ValueError: continue
+                    if mapped["research_quarter"] == research_quarter: disclosed_ids.add(row["issuer_id"])
+            else:
+                disclosed_ids = {row["issuer_id"] for row in state.db.execute(
+                    "SELECT DISTINCT issuer_id FROM earnings_events WHERE reporting_end BETWEEN ? AND ? AND event_kind='earnings'",
+                    (args.period_start, args.period_end)) if row["issuer_id"] in issuer_ids}
+            fetched_ids = {row["issuer_id"] for row in sources}
+            researched_ids_audit = set(researched_ids)
+        researched_set = set(researched_ids_audit)
         key_tokens = [issuer_by_symbol.get(symbol, f"unresolved:{symbol}") for symbol in industry.get("key_symbols", [])]
         key_missing = [issuer_id for issuer_id in key_tokens if issuer_id not in researched_set]
         expected_count = len(expected_ids)
@@ -187,7 +242,8 @@ def main() -> None:
         dependency_ids = sorted({row["task_id"] for row in predecessor_rows} | {row["task_id"] for row in company_artifacts})
         input_basis = {
             "role": args.role, "mode": args.mode, "industry_id": args.industry, "period_start": args.period_start,
-            "period_end": args.period_end, "cutoff": cutoff.isoformat(), "universe_hash": sha256_file(universe_path),
+            "period_end": args.period_end, "cutoff": cutoff.isoformat(),
+            "universe_hash": frozen_scope["frozen_universe_hash"] if frozen_scope else sha256_file(universe_path),
             "company_artifacts": [(row["report_id"], row["sha256"]) for row in company_artifacts],
             "predecessors": [(row["report_id"], row["sha256"]) for row in predecessor_rows],
             "documents": [(row["document_id"], row["version"], row["content_sha256"]) for row in sources],
@@ -232,7 +288,7 @@ def main() -> None:
             "created_at": utc_now(), "method_version": task["method_version"], "configuration_hash": config_hash,
             "input_hash": input_hash, "profile": {"name": profile_name, "model": model, "effort": effort, "usage": None},
             "scope": {"industry_id": args.industry, "reporting_start": args.period_start, "reporting_end": args.period_end,
-                      "universe_version": sha256_file(universe_path), "expected_issuer_ids": expected_ids},
+                      "universe_version": frozen_scope["frozen_universe_hash"] if frozen_scope else sha256_file(universe_path), "expected_issuer_ids": expected_ids},
             "coverage_audit": {"expected_symbols": expected_symbols, "resolved_issuer_ids": issuer_ids, "researched_issuer_ids": researched_ids,
                                "missing_issuer_ids": missing_ids, "unresolved_symbols": unresolved_symbols,
                                "counts": coverage, "key_issuer_ids": key_tokens, "maturity": maturity,

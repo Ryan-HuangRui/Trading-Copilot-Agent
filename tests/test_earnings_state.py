@@ -23,6 +23,12 @@ class EarningsStateTests(unittest.TestCase):
             input_hash=f"hash-{subject}", method_version="v1", source_mode="fixture", profile="daily",
             model="gpt-5.6-sol", effort="medium", dependencies=dependencies)[0]
 
+    def test_p4_tables_are_added_without_replacing_p3_state(self):
+        tables = {row[0] for row in self.state.db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        self.assertIn("research_tasks", tables)
+        self.assertIn("publication_artifacts", tables)
+        self.assertIn("publication_delivery", tables)
+
     def test_task_key_deduplicates_unchanged_input(self):
         first, created = self.state.enqueue_task(task_type="company", subject_id="event-a", period_start=None, period_end="2026-03-31",
             input_hash="same", method_version="v1", source_mode="fixture", profile="daily", model="gpt-5.6-sol", effort="medium")

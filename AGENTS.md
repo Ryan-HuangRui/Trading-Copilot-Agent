@@ -60,7 +60,7 @@
 - Earnings/IPO and industry-cycle research uses `.codex/skills/tca-earnings-research/SKILL.md` and `docs/contracts/earnings-research.md`, independently of price-action trade plans.
 - SEC/issuer disclosures are the financial source of record; this does not alter the Longbridge-first market-price policy.
 - Earnings research runs daily at 10:00 Asia/Shanghai, including weekends when work is pending; do not apply an exchange trading-day skip to this route.
-- Scheduled cc-connect execution is muted. Only the outer finalizer may send a warranted notification using the verified repository project/session; do not use another workspace's Feishu CLI.
+- Scheduled cc-connect execution is muted. Only the outer finalizer may send a warranted notification using the verified repository project/session. The separately configured lark-cli may create/update/read report documents only with an explicit user profile and `--as user`; it must never send notifications or reuse another identity.
 - Runtime outputs belong under ignored `raw_data/earnings/`, `runtime/earnings/`, and `report/earnings/`. Research cannot mutate broker state, trading watchlists, signal journals, or approved rules.
 
 ## Cross-component workflows

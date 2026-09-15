@@ -55,6 +55,9 @@
 - `promote_lesson.py`: human-triggered promotion into `knowledge/evolution/validated_lessons.md`; never edits the canonical rulebook.
 - `workflow_smoke_test.py`: fixture-based workflow smoke test; must not fetch live market or account data.
 - `earnings_sources.py`, `earnings_collect.py`: explicit live SEC/issuer-IR or declared offline-fixture ingestion; immutable originals, identity resolution, cache/retry/rate-limit and event versioning.
+- `earnings_period_review.py`, `earnings_gap_review_runner.py`, `earnings_market_context.py`: evidence-bound fiscal-period mapping, frozen quarterly maturity/DAG state, bounded independent gap-review execution, and all-industry-gated cross-industry synthesis contexts.
+- `earnings_publication.py`, `earnings_publication_runner.py`: immutable reader Markdown/HTML publications with independent writer/checker roles and deterministic drift gates.
+- `earnings_lark.py`: document-only lark-cli adapter using an absolute binary, explicit profile and `--as user`; it must not send messages or change authentication/permissions.
 - `earnings_financials.py`: deterministic period/currency/accounting-safe normalization; never substitutes for semantic research.
 - `earnings_state.py`: SQLite research queue, task dependencies, independent source watermarks and recoverable leases.
 - `earnings_context.py`, `earnings_industry_context.py`: immutable company and manual industry/challenge/synthesis role inputs; they do not call an LLM.

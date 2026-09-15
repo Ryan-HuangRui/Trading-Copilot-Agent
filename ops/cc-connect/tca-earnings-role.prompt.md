@@ -23,4 +23,4 @@ Execution:
 10. Run `python3 script/trading_copilot.py validate-earnings-research --report <JSON> --manifest <MANIFEST>`. Fix structural/evidence errors without weakening substantive caveats.
 11. Run `python3 script/trading_copilot.py earnings-record --report <JSON> --manifest <MANIFEST>` only after validation succeeds.
 
-The role must not call a broker, mutate a watchlist, emit a trade signal, invoke Vibe Swarm implicitly, deploy NAS jobs, call `cc-connect send`, use another workspace's Feishu CLI, or send progress/final output externally. Its only completion signal is the persisted report and completion manifest.
+The role must not call a broker, mutate a watchlist, emit a trade signal, invoke Vibe Swarm implicitly, deploy NAS jobs, call `cc-connect send` or lark-cli, or send progress/final output externally. Document synchronization is owned only by the trusted outer adapter after publication checking. Its only completion signal is the persisted report and completion manifest.

@@ -11,10 +11,12 @@ Read `docs/contracts/earnings-research.md` for the authoritative artifact and wo
 
 - Company earnings or IPO: use `references/methodology.md` and the applicable section of `references/industry-metrics.md`.
 - Industry daily update: update only affected theses from new evidence and prior artifacts.
-- Industry quarterly review: audit coverage, reread decisive original passages and omitted/negative samples, then perform industry analysis, independent challenge and synthesis. Do not merely summarize daily reports.
+- Industry quarterly review: the default-off daily runner freezes a coverage/gap input, spends a bounded `review`-profile attempt to reread decisive accepted reports and omitted/negative samples, and validates the result before industry analysis, independent challenge and synthesis. Evidence gaps remain unresolved; do not merely summarize daily reports.
 - Cross-industry review: compare validated industry reports, retain metric and coverage differences.
 
 Read `references/roles.md` when acting as a named role or orchestrating several roles. Role separation is task/context separation; use persisted artifacts and bounded independent Codex runs. Concurrency and model selection belong to the runner, not automatic subagent spawning from this Skill.
+
+Read `references/reader-publications.md` for company/IPO, industry-quarter and cross-industry reader reports. A publication writer uses accepted frozen research; an independent checker must pass before local archive or cloud synchronization. Writing must not substitute for missing research.
 
 ## Evidence and judgment
 
@@ -30,4 +32,4 @@ Use `references/output-contract.md` to select the output. Validate numeric/citat
 
 Scheduled roles write only assigned run artifacts and a structured completion manifest. Preserve actual provider, model, effort, input hashes and limitations; unavailable usage is null, not zero. Models/efforts come from the explicitly selected runner profile.
 
-Never call `cc-connect send` or the separately configured Feishu CLI from a role. The daily NAS wrapper is silent (`mute=true`); only its final delivery step may send through this repository's verified cc-connect project/session when `should_send=true`. Ordinary progress, successful commands, skipped runs and role final replies stay local.
+Never call `cc-connect send` or lark-cli from a research/writer/checker role. The trusted outer publication adapter may use configured lark-cli only for document create/update/fetch with an explicit profile and `--as user`; it never sends messages or changes authentication/permissions. The daily NAS wrapper is silent (`mute=true`); only its final delivery step may send through this repository's verified cc-connect project/session when `should_send=true`. Ordinary progress, successful commands, skipped runs and role final replies stay local.

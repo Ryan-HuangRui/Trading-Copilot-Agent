@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "workflow": "earnings-research",
-  "deployment_stage": "P3_implemented_runtime_activation_required",
+  "deployment_stage": "P4_implemented_runtime_activation_required",
   "paths": {
     "universe": "config/earnings_universe.json",
     "state": "runtime/earnings/state.sqlite",
@@ -91,9 +91,13 @@
     "daily_industry_limit": 5,
     "quarterly_tasks_per_day": 1,
     "review_tasks_per_day": 2,
+    "publication_writers_per_day": 3,
+    "publication_checkers_per_day": 3,
+    "publication_cloud_operations_per_day": 2,
     "escalations_per_day": 1,
     "task_timeout_seconds": 1800,
     "max_task_attempts": 2,
+    "phase_reserve_seconds": 300,
     "initialization_company_limit": 5,
     "initialization_lookback_quarters": 8,
     "usage_mode": "observe_auth_backend",
@@ -106,7 +110,13 @@
     "require_completed_company_research": true,
     "require_critical_gap_review": true,
     "deadline_partial_allowed": true,
-    "automatic_trigger_enabled": false
+    "automatic_trigger_enabled": false,
+    "initial_backfill_quarters": 1,
+    "weekly_review_enabled": false,
+    "stage_market_overview_enabled": false
+  },
+  "publication": {
+    "enabled": false
   },
   "delivery": {
     "enabled": false,
@@ -119,7 +129,8 @@
     "session_env": "CC_CONNECT_SESSION",
     "binary_env": "CC_CONNECT_BIN",
     "require_explicit_destination": true,
-    "other_workspace_feishu_cli_allowed": false,
+    "notification_via_lark_cli_allowed": false,
+    "lark_documents_enabled": false,
     "attachments_enabled": false,
     "max_normal_notifications_per_batch": 1
   },

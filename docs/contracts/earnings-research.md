@@ -1,6 +1,6 @@
-# Earnings Research Contract — schema version 1
+# Earnings Research Contract — schema version 1 (P4 additive artifacts)
 
-P0 defines this contract and configuration. P1/P2 implement collection and manual role research; P3 implements silent daily orchestration and delivery with explicit NAS runtime activation. Automatic quarterly scheduling remains P4. See `docs/earnings-research-workflow-plan.md` for accepted scope and milestones.
+P0 defines the core schema. P1/P2 implement collection and role research; P3 implements silent daily orchestration; P4 adds reader publications, user-cloud document delivery and automatic quarterly/cross-industry review behind default-off activation flags. Existing role reports remain schema-compatible.
 
 ## Boundary and status
 
@@ -29,6 +29,10 @@ NAS secret overrides belong in environment or ignored runtime config, never trac
 | earnings-daily | P3 | Daily orchestration, role runner, bounded retries, due review checks, final notification decision |
 | earnings-deliver | P3 | Repository-bound cc-connect notification, deduplication, receipts, no model calls |
 | earnings-review-context | P4 | Automatic quarterly/weekly due checks and frozen review scopes; P2 supports manual quarterly contexts |
+| earnings-market-context | P4 | Require every frozen industry acceptance before formal cross-industry synthesis |
+| earnings-publication-runner | P4 | Run the daily-profile writer and independent review-profile checker from frozen accepted research |
+| earnings-publication | P4 | Validate and archive immutable reader Markdown/HTML plus source mapping and version chain |
+| earnings-lark-document | P4 | Preview or perform explicit-user document create/update/fetch/readback; never send messages |
 
 Implement argument parsing and workflow integration consistently with existing scripts. Common inputs: repo root, config, universe, report date, cutoff, bounded symbols/industry, run/task id and explicit input/output files as applicable. Offline test input and live mode must be distinguishable in provenance. Missing live inputs cannot silently fall back to fixtures.
 
@@ -57,6 +61,28 @@ Company/industry/synthesis add thesis_state (emerging/strengthening/validating/w
 Challenge reports add findings: finding_id, disputed_claim_id (nullable for independent discoveries), evidence_ids, competing_explanation, materiality, requested_check. Quarterly synthesis requires challenge_dispositions for every material finding: accepted/rejected/unresolved, rationale and supporting evidence ids. Rejected findings require evidence, not voting among agents.
 
 Input manifests specify assigned role, output paths, cutoff, source versions, previous artifacts, actual scope and model profile. Every referenced runtime path must resolve inside allowed input/output roots; prevent traversal and accidental writes to code/config/secrets. A role cannot mutate the frozen manifest.
+
+## Reader publication contract (P4)
+
+A publication series key is report type + stable subject + research quarter. Every accepted revision has a new immutable publication_id and version, retains the prior manifest hash, and records source report paths/hashes, content hash, source claim/evidence mapping, checker result and Markdown/HTML artifact hashes. Markdown is authoritative; HTML is derived. Internal model, usage, task hashes and raw JSON are not reader正文.
+
+The writer uses the `daily` profile and only accepted frozen research. The checker uses the `review` profile and independently checks numbers, units, actual fiscal period, cutoff, source URLs/locators, counterevidence, inference strength, unknown consensus/valuation and readability. Decimal string values and signs remain exact. Every prose occurrence and table cell carries an explicit evidence/metric/currency/unit/period/accounting-basis/derivation binding; the runner injects the draft/input/source hashes programmatically. Deterministic checking is an additional gate. Missing or ambiguous bindings, required sections, financial numbers/dates/links, counterevidence or unsupported certainty block archive and cloud sync. A passing schema alone is not a passing publication.
+
+Company/IPO publications are archived for every researched company-quarter. Industry and market publications distinguish `stage`, `full` and `revision`. Same-event release and later 10-Q update one versioned series; a changed source hash creates a bounded revision rather than overwriting history. The runner supplies the checker a deterministic occurrence inventory: prose spans use Python codepoint offsets into exact unmodified Markdown and table cells use one-based line/column coordinates. Writer prompts require supported explicit units, unit-bearing table headers and explicit duration/instant period wording. Models do not count offsets or calculate hashes. Formal quarterly completion is deliverable even if thesis_state is unchanged.
+
+## Fiscal-quarter and cross-industry contract (P4)
+
+The cohort mapping policy is `maximum-calendar-quarter-overlap-v1`: only an actual 70–110 day standalone operating period is mapped to the natural quarter with greatest day overlap. The original start/end, overlap and cross-period difference remain visible. Missing boundaries, cumulative half-year/nine-month periods and annual reports cannot masquerade as a standalone quarter.
+
+Each industry-quarter freezes its expected and key issuer lists before maturity evaluation. Disclosed, fetched and researched counts remain separate and require cutoff-valid live provenance, valid source/report files and completed accepted tasks. Full maturity requires the configured disclosed threshold, every key issuer, research for disclosed members and a separately recorded, input-hash-bound critical-gap result. Coverage cannot manufacture resolved status. Tail deadline may create a clearly labeled stage report only at/after its configured date; it does not satisfy a formal dependency. Initial automatic backfill is bounded to the configured most recent ended quarter. Sunday review is a due check for gaps/backlog/assumptions and remains silent when its fingerprint is unchanged or non-actionable.
+
+Quarterly DAG state is durable across days and revisions: deterministic coverage → a bounded independent `review`-profile gap audit → industry deep research → independent challenge → synthesis → writer → checker → optional cloud document → market. Gap attempts have immutable manifests, leases, daily review budgets, cross-day retry and a terminal attempt cap. Only `record_gap_review` may accept their hash-bound outputs; incomplete evidence remains unresolved and Python never promotes coverage to resolved. One immutable revision cutoff is shared by the industry stages. Later accepted company inputs preserve prior stage history and may supersede an incomplete stage edition without waiting for the cross-industry market stage; frozen membership does not change. Actual fiscal periods may be resolved from accepted report evidence/fact periods bound to an exact document id/version/hash when event or document starts are null, without mutating source records; disclosed, fetched and researched remain separate states. Formal “美股重点行业季度研究” reads the full authoritative quarter registry, including already-finished scopes, and requires all frozen industries to have current accepted full/revision publications. It freezes every industry's own cutoff and uses the latest legal input cutoff as its overall cutoff. Cross-industry work independently examines breadth, profit transmission, shared-customer double counting, negative evidence and metric comparability rather than concatenating industry summaries.
+
+## User-cloud document contract (P4)
+
+Runtime deployment configuration supplies an absolute lark-cli path, explicit profile, `as=user`, target folder token and activation switch. These values and all user/document/folder identities remain ignored runtime data. The adapter allowlists document create/update/fetch only, passes argv without a shell, never changes login, permissions or default identity, never falls back to bot, and never sends a message.
+
+Only a checked publication may sync. Create/update, readback and cc-connect notification have independent state. A create timeout/non-definitive result is `unknown` and cannot be retried until an operator supplies a document identity for read-only reconciliation. Update first fetches the verified baseline; a changed remote body is `conflict` and is never overwritten. Full success requires readback-equivalent Markdown and an accessible URL. Notification remains solely the verified repository cc-connect route and includes every same-day report entry or a complete accessible directory link.
 
 ### Exact JSON field shapes
 

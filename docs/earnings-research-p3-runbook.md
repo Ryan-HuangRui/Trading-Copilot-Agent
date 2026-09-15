@@ -8,7 +8,7 @@
 
 日批次固定为 Asia/Shanghai 10:00，一天一次。当前真实时刻作为 UTC 资料截止；报告中的财务期间单独保留。初始化每天最多处理 5 家，采集限额与公司模型调用限额分开；普通日最多 10 次公司角色，强财报季 20 次，行业最多 5 次。实际调用前预留预算，进程失败和同日重启均不会重置预算。配置中的 token/currency 硬预算暂不支持：如非 null，runner 显式拒绝运行，不能声称订阅登录提供硬金额限额。
 
-初始并发为 1。整个日批次默认最多 7200 秒，单角色最多 1800 秒；未完成工作保留在状态库，后续日批次继续。P3 的日行业比较按实际期间结束日分组到自然季度窗口，保留每家公司的原始财务期间，不假设各公司财年相同。自动季度成熟度触发仍属 P4，当前不自动启动季度流程。
+初始并发为 1。整个日批次默认最多 7200 秒，单角色最多 1800 秒；未完成工作保留在状态库，后续日批次继续。P3 的日行业比较保留兼容；P4 已实现财政期间重叠映射与自动季度 DAG，但配置开关默认关闭，启用和恢复见 `docs/earnings-research-p4-runbook.md`。
 
 `script/earnings_role_runner.py` 以显式 model/effort 启动独立 `codex exec`，使用 `--ignore-user-config --ephemeral --sandbox read-only`。模型返回 JSON，外层写报告、校验并登记；模型不负责写 state 或发送消息。CLI 事件中可用 usage 原样保存，缺失为 null。需要 NAS CLI 支持这些参数，不能悄悄降级模型或绕过沙箱。
 
@@ -19,7 +19,7 @@
 - `runtime/earnings/operator.json`：`{"sec_user_agent": "TradingCopilot operator <真实联系邮箱>"}`。真实邮箱须由操作者提供，不使用示例地址请求 SEC。
 - `runtime/earnings/deployment.json`：schema_version=1、verified_repo（NAS 仓库绝对路径）、project、session、cc_connect_bin、codex_bin、verified_at、verified_from_cron_id、delivery_enabled、batch_timeout_seconds。
 
-部署时从本仓库既有 cc-connect 定时任务核验 project/session、wrapper 所指仓库，再保存该路由。不能把“当前目录”当成通知路由，不得使用其他工作区的飞书 CLI。`delivery_enabled` 初始为 false；真实研究验收通过后，先开启该开关完成一次明确标识的发送验收，再启用定时任务。
+部署时从本仓库既有 cc-connect 定时任务核验 project/session、wrapper 所指仓库，再保存该路由。不能把“当前目录”当成通知路由，lark-cli 不能发送消息。P4 允许同一 runtime deployment 中显式配置用户身份 lark-cli，仅用于文档 create/update/fetch。`delivery_enabled` 初始为 false；真实研究验收通过后，先开启该开关完成一次明确标识的发送验收，再启用定时任务。
 
 ## 通知行为
 

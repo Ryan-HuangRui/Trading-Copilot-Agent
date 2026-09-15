@@ -3848,6 +3848,11 @@ def run_earnings_passthrough(args: argparse.Namespace) -> None:
         "earnings-context": "script/earnings_context.py",
         "earnings-status": "script/earnings_state.py",
         "earnings-industry-context": "script/earnings_industry_context.py",
+        "earnings-review-context": "script/earnings_period_review.py",
+        "earnings-market-context": "script/earnings_market_context.py",
+        "earnings-publication": "script/earnings_publication.py",
+        "earnings-publication-runner": "script/earnings_publication_runner.py",
+        "earnings-lark-document": "script/earnings_lark.py",
         "earnings-record": "script/earnings_research_record.py",
         "validate-earnings-research": "script/validate_earnings_research.py",
     }
@@ -3860,11 +3865,20 @@ def run_earnings_passthrough(args: argparse.Namespace) -> None:
         "period_start": "period-start", "period_end": "period-end", "report": "report", "manifest": "manifest",
         "critical_gap_status": "critical-gap-status",
         "deployment": "deployment", "decision": "decision",
+        "manual_quarter": "manual-quarter", "type": "type", "scope": "scope", "quarter": "quarter",
+        "markdown": "markdown", "semantic_check": "semantic-check", "edition": "edition", "title": "title",
+        "codex_bin": "codex-bin", "timeout": "timeout", "publication_manifest": "publication-manifest",
+        "reconcile_document_id": "reconcile-document-id", "reconcile_url": "reconcile-url",
+        "frozen_scope": "frozen-scope", "record_gap_review": "record-gap-review", "scope_id": "scope-id",
+        "input_manifest_hash": "input-manifest-hash",
     }
     for name, option in option_names.items():
         value = getattr(args, name, None)
         if value is not None:
-            command.extend([f"--{option}", str(value)])
+            if isinstance(value, list):
+                for item in value: command.extend([f"--{option}", str(item)])
+            else:
+                command.extend([f"--{option}", str(value)])
     for flag in ("collect_only", "resume_only", "send", "execute"):
         if getattr(args, flag, False):
             command.append("--" + flag.replace("_", "-"))
@@ -3872,6 +3886,10 @@ def run_earnings_passthrough(args: argparse.Namespace) -> None:
         command.extend(["--symbol", symbol])
     for predecessor in getattr(args, "predecessor_report", []) or []:
         command.extend(["--predecessor-report", predecessor])
+    for source_report in getattr(args, "source_report", []) or []:
+        command.extend(["--source-report", source_report])
+    for industry_report in getattr(args, "industry_report", []) or []:
+        command.extend(["--industry-report", industry_report])
     proc = run_child(command)
     stdout = parse_json_output(proc.stdout)
     if proc.returncode != 0:
@@ -3902,6 +3920,7 @@ def build_parser() -> argparse.ArgumentParser:
     earnings_daily.add_argument("--collect-only", action="store_true")
     earnings_daily.add_argument("--resume-only", action="store_true")
     earnings_daily.add_argument("--send", action="store_true")
+    earnings_daily.add_argument("--manual-quarter")
     earnings_daily.set_defaults(func=run_earnings_passthrough)
 
     earnings_deliver = sub.add_parser("earnings-deliver", help="Preview or send one frozen earnings notification")
@@ -3957,11 +3976,50 @@ def build_parser() -> argparse.ArgumentParser:
     earnings_industry.add_argument("--cutoff", required=True)
     earnings_industry.add_argument("--predecessor-report", action="append", default=[])
     earnings_industry.add_argument("--critical-gap-status", choices=["resolved", "disclosed", "unresolved"], default="unresolved")
+    earnings_industry.add_argument("--frozen-scope")
     earnings_industry.add_argument("--run-id")
     earnings_industry.add_argument("--owner")
     earnings_industry.add_argument("--lease-seconds", type=int)
     earnings_industry.add_argument("--date")
     earnings_industry.set_defaults(func=run_earnings_passthrough)
+
+    earnings_review = sub.add_parser("earnings-review-context", help="Inspect frozen fiscal-quarter maturity and due reviews")
+    earnings_review.add_argument("--repo-root", default=str(ROOT)); earnings_review.add_argument("--config", default="config/earnings_research.json")
+    earnings_review.add_argument("--universe", default="config/earnings_universe.json"); earnings_review.add_argument("--date")
+    earnings_review.add_argument("--cutoff", required=True); earnings_review.add_argument("--manual-quarter")
+    earnings_review.add_argument("--record-gap-review"); earnings_review.add_argument("--scope-id")
+    earnings_review.set_defaults(func=run_earnings_passthrough)
+
+    earnings_market = sub.add_parser("earnings-market-context", help="Build a gated cross-industry quarterly synthesis context")
+    earnings_market.add_argument("--repo-root", default=str(ROOT)); earnings_market.add_argument("--config", default="config/earnings_research.json")
+    earnings_market.add_argument("--universe", default="config/earnings_universe.json"); earnings_market.add_argument("--industry-report", action="append", required=True)
+    earnings_market.add_argument("--period-start", required=True); earnings_market.add_argument("--period-end", required=True)
+    earnings_market.add_argument("--cutoff", required=True); earnings_market.add_argument("--edition", choices=["full", "stage"], default="full")
+    earnings_market.add_argument("--frozen-scope", action="append", required=True)
+    earnings_market.add_argument("--run-id"); earnings_market.add_argument("--owner"); earnings_market.add_argument("--lease-seconds", type=int)
+    earnings_market.add_argument("--date"); earnings_market.set_defaults(func=run_earnings_passthrough)
+
+    earnings_publication = sub.add_parser("earnings-publication", help="Validate and archive one immutable reader publication")
+    earnings_publication.add_argument("--repo-root", default=str(ROOT)); earnings_publication.add_argument("--type", choices=["company", "ipo", "industry", "market"], required=True)
+    earnings_publication.add_argument("--scope", required=True); earnings_publication.add_argument("--quarter", required=True)
+    earnings_publication.add_argument("--source-report", action="append", required=True); earnings_publication.add_argument("--markdown", required=True)
+    earnings_publication.add_argument("--semantic-check"); earnings_publication.add_argument("--edition", choices=["full", "stage", "revision"], default="full")
+    earnings_publication.add_argument("--title"); earnings_publication.set_defaults(func=run_earnings_passthrough)
+    earnings_publication.add_argument("--input-manifest-hash")
+
+    publication_runner = sub.add_parser("earnings-publication-runner", help="Run reader writer and independent checker roles")
+    publication_runner.add_argument("--repo-root", default=str(ROOT)); publication_runner.add_argument("--config", default="config/earnings_research.json")
+    publication_runner.add_argument("--type", choices=["company", "ipo", "industry", "market"], required=True)
+    publication_runner.add_argument("--scope", required=True); publication_runner.add_argument("--quarter", required=True)
+    publication_runner.add_argument("--source-report", action="append", required=True); publication_runner.add_argument("--edition", choices=["full", "stage", "revision"], default="full")
+    publication_runner.add_argument("--title"); publication_runner.add_argument("--codex-bin"); publication_runner.add_argument("--timeout", type=int, default=1800)
+    publication_runner.add_argument("--execute", action="store_true"); publication_runner.set_defaults(func=run_earnings_passthrough)
+
+    lark_document = sub.add_parser("earnings-lark-document", help="Preview or sync a checked publication to explicit user cloud space")
+    lark_document.add_argument("--repo-root", default=str(ROOT)); lark_document.add_argument("--deployment", default="runtime/earnings/deployment.json")
+    lark_document.add_argument("--publication-manifest", required=True); lark_document.add_argument("--execute", action="store_true")
+    lark_document.add_argument("--reconcile-document-id"); lark_document.add_argument("--reconcile-url")
+    lark_document.set_defaults(func=run_earnings_passthrough)
 
     earnings_record = sub.add_parser("earnings-record", help="Validate and atomically register a role artifact")
     earnings_record.add_argument("--repo-root", default=str(ROOT))

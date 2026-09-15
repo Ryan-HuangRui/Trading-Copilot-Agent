@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 import hashlib
 import json
 from pathlib import Path
@@ -15,8 +15,12 @@ import time
 import uuid
 from zoneinfo import ZoneInfo
 
-from earnings_common import ROOT, atomic_write_json, load_config, read_json, sha256_file, utc_now
+from earnings_common import ROOT, atomic_write_json, load_config, parse_time, read_json, sha256_file, utc_now
 from earnings_delivery import destination, deliver, exclusive_lock, prepare_notification, runtime_path
+from earnings_gap_review_runner import run_gap_review
+from earnings_lark import LarkDocumentPublisher
+from earnings_period_review import QuarterlyReviewLedger, inspect_due, map_fiscal_period, resolve_report_period
+from earnings_publication_runner import prepare_input as prepare_publication_input, run_publication
 from earnings_role_runner import run_role
 from earnings_state import EarningsState
 
@@ -33,6 +37,9 @@ class DailyLedger:
         CREATE TABLE IF NOT EXISTS industry_inputs(scope TEXT PRIMARY KEY, fingerprint TEXT);
         CREATE TABLE IF NOT EXISTS health(day TEXT PRIMARY KEY, failed INTEGER);
         CREATE TABLE IF NOT EXISTS industry_requests(scope TEXT PRIMARY KEY, fingerprint TEXT, cutoff TEXT);
+        CREATE TABLE IF NOT EXISTS publication_inputs(fingerprint TEXT PRIMARY KEY, manifest_path TEXT, completed_at TEXT);
+        CREATE TABLE IF NOT EXISTS quarterly_requests(scope TEXT, stage TEXT, input_signature TEXT, cutoff TEXT,
+          PRIMARY KEY(scope,stage));
         """)
         self.db.commit()
 
@@ -121,8 +128,393 @@ def unresolved_terminal_count(state: EarningsState) -> int:
     return state.db.execute("""SELECT COUNT(*) FROM research_tasks t
       WHERE t.state='terminal_failed' AND t.source_mode='live' AND NOT EXISTS (
         SELECT 1 FROM research_tasks n WHERE n.rowid>t.rowid AND n.source_mode=t.source_mode
-        AND n.task_type=t.task_type AND n.subject_id=t.subject_id
+      AND n.task_type=t.task_type AND n.subject_id=t.subject_id
         AND n.period_start IS t.period_start AND n.period_end IS t.period_end)""").fetchone()[0]
+
+
+def _latest_role_artifact(root: Path, state: EarningsState, subject: str, report_type: str,
+                          period_start: str, period_end: str) -> dict | None:
+    rows = state.db.execute("""SELECT * FROM report_artifacts WHERE subject_id=? AND report_type=?
+      AND period_start=? AND period_end=? ORDER BY rowid DESC""", (subject, report_type, period_start, period_end)).fetchall()
+    for row in rows:
+        report = read_json(root / row["path"])
+        if report.get("research_mode") == "quarterly":
+            return {**dict(row), "report": report}
+    return None
+
+
+def _quarterly_company_signature(root: Path, state: EarningsState, industry: dict, quarter_id: str) -> str:
+    issuer_ids = {row["issuer_id"] for row in state.db.execute("SELECT issuer_id,symbol FROM issuers")
+                  if row["symbol"] in {item["symbol"] for item in industry["issuers"]}}
+    versions = []
+    for issuer_id in issuer_ids:
+        rows = state.db.execute("""SELECT a.path,a.sha256 FROM report_artifacts a JOIN earnings_events e ON e.event_id=a.subject_id
+          WHERE a.report_type='company' AND e.issuer_id=? ORDER BY a.rowid""", (issuer_id,)).fetchall()
+        for row in rows:
+            report = read_json(root / row["path"]); scope = report.get("scope") or {}
+            try: mapped = map_fiscal_period(scope.get("reporting_start"), scope.get("reporting_end"))
+            except ValueError: continue
+            if mapped["research_quarter"] == quarter_id: versions.append((row["path"], row["sha256"]))
+    return hashlib.sha256(json.dumps(sorted(versions)).encode()).hexdigest()
+
+
+def run_gap_review_step(root: Path, config: dict, ledger: DailyLedger, qledger: QuarterlyReviewLedger,
+                        deployed: dict, day: str, scope: dict, deadline: float) -> dict:
+    """Claim and execute one durable review-profile gap audit for an immutable input."""
+    input_path = root / scope.get("gap_review_immutable_input_path", scope["gap_review_input_path"])
+    gap_input = read_json(input_path)
+    input_hash = gap_input["input_hash"]
+    row = qledger.db.execute("SELECT * FROM quarterly_gap_attempts WHERE scope_id=? AND input_hash=?",
+                             (scope["scope_id"], input_hash)).fetchone()
+    if row and row["state"] in {"completed", "terminal_failed"}:
+        return {"status": row["state"], "scope_id": scope["scope_id"], "stage": "gap_review",
+                "attempts": row["attempts"], "reason": row["error"]}
+    now = datetime.now(timezone.utc)
+    if row and row["state"] == "running" and row["lease_expires_at"]:
+        lease = datetime.fromisoformat(row["lease_expires_at"].replace("Z", "+00:00"))
+        if lease > now:
+            return {"status": "running", "scope_id": scope["scope_id"], "stage": "gap_review",
+                    "attempts": row["attempts"]}
+    cap = int(config["budgets"].get("review_tasks_per_day", 0))
+    max_attempts = int(config["budgets"].get("max_task_attempts", 2))
+    attempts = int(row["attempts"]) if row else 0
+    if attempts >= max_attempts:
+        qledger.db.execute("UPDATE quarterly_gap_attempts SET state='terminal_failed',error=COALESCE(error,?),updated_at=? WHERE scope_id=? AND input_hash=?",
+                           ("maximum gap-review attempts exhausted", utc_now(), scope["scope_id"], input_hash))
+        qledger.db.commit(); qledger.set_stage(scope["scope_id"], "gap_review", "blocked", input_hash=input_hash,
+                                               error="maximum gap-review attempts exhausted")
+        return {"status": "terminal_failed", "scope_id": scope["scope_id"], "stage": "gap_review",
+                "attempts": attempts, "reason": "maximum gap-review attempts exhausted"}
+    task_key = f"{scope['scope_id']}:gap-review:{input_hash}:attempt-{attempts + 1}"
+    if time.monotonic() >= deadline or not ledger.reserve(day, task_key, "review", cap):
+        return {"status": "queued", "scope_id": scope["scope_id"], "stage": "gap_review",
+                "attempts": attempts, "reason": "review budget or batch deadline exhausted"}
+    attempt = attempts + 1
+    attempt_dir = root / "runtime/earnings/quarterly-scopes" / scope["scope_id"] / "gap-reviews" / input_hash / "attempts" / f"attempt-{attempt}"
+    timeout = min(int(config["budgets"]["task_timeout_seconds"]), max(1, int(deadline - time.monotonic())))
+    lease = (now + timedelta(seconds=timeout + 60)).isoformat()
+    qledger.db.execute("""INSERT INTO quarterly_gap_attempts(scope_id,input_hash,state,attempts,lease_expires_at,
+      manifest_path,result_path,error,updated_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(scope_id,input_hash) DO UPDATE SET
+      state='running',attempts=excluded.attempts,lease_expires_at=excluded.lease_expires_at,manifest_path=NULL,
+      result_path=NULL,error=NULL,updated_at=excluded.updated_at""",
+      (scope["scope_id"], input_hash, "running", attempt, lease, None, None, None, utc_now()))
+    qledger.db.commit(); qledger.set_stage(scope["scope_id"], "gap_review", "running", input_hash=input_hash)
+    try:
+        result = run_gap_review(root, input_path, binary=deployed["codex_bin"], profile=config["profiles"]["review"],
+                                timeout=timeout, attempt_dir=attempt_dir)
+        qledger.db.execute("""UPDATE quarterly_gap_attempts SET state='completed',lease_expires_at=NULL,
+          manifest_path=?,result_path=?,error=NULL,updated_at=? WHERE scope_id=? AND input_hash=?""",
+          (result["attempt_manifest"], result["artifact"], utc_now(), scope["scope_id"], input_hash))
+        qledger.db.commit(); qledger.set_stage(scope["scope_id"], "gap_review", "completed", input_hash=input_hash,
+            artifact_path=result["artifact"], artifact_sha256=sha256_file(root / result["artifact"]))
+        return {**result, "stage": "gap_review", "attempts": attempt}
+    except Exception as exc:
+        terminal = attempt >= max_attempts
+        failure_state = "terminal_failed" if terminal else "retryable_failed"
+        manifest_path = attempt_dir / "input-manifest.json"
+        qledger.db.execute("""UPDATE quarterly_gap_attempts SET state=?,lease_expires_at=NULL,error=?,updated_at=?
+          ,manifest_path=COALESCE(?,manifest_path) WHERE scope_id=? AND input_hash=?""",
+          (failure_state, str(exc), utc_now(), str(manifest_path.relative_to(root)) if manifest_path.exists() else None,
+           scope["scope_id"], input_hash))
+        qledger.db.commit(); qledger.set_stage(scope["scope_id"], "gap_review", "blocked" if terminal else "failed",
+                                               input_hash=input_hash, error=str(exc))
+        return {"status": failure_state, "scope_id": scope["scope_id"], "stage": "gap_review",
+                "attempts": attempt, "reason": str(exc)}
+
+
+def run_quarterly_step(root: Path, config: dict, universe: dict, state: EarningsState, ledger: DailyLedger,
+                       deployed: dict, day: str, cutoff: str, run_id: str, logs: Path, deadline: float,
+                       config_path: str = "config/earnings_research.json", manual_quarter: str | None = None) -> list[dict]:
+    """Advance at most the configured number of durable quarterly model stages."""
+    if config["quarterly"].get("automatic_trigger_enabled") is not True and not manual_quarter:
+        return [{"status": "disabled", "reason": "quarterly.automatic_trigger_enabled is false"}]
+    review = inspect_due(root, day=day, cutoff=cutoff, config_path=config_path,
+                         universe_path=config["paths"]["universe"], manual_quarter=manual_quarter)
+    qledger = QuarterlyReviewLedger(root / "runtime/earnings/quarterly.sqlite")
+    outcomes = []
+    cap = int(config["budgets"]["quarterly_tasks_per_day"])
+    try:
+        for scope in review["scopes"]:
+            if time.monotonic() >= deadline:
+                break
+            qledger.set_stage(scope["scope_id"], "coverage", "completed",
+                              input_hash=hashlib.sha256(json.dumps(scope["maturity"], sort_keys=True).encode()).hexdigest())
+            if scope["maturity"]["critical_gap_status"] == "unresolved":
+                gap = run_gap_review_step(root, config, ledger, qledger, deployed, day, scope, deadline)
+                outcomes.append(gap)
+                if gap["status"] == "success":
+                    refreshed = inspect_due(root, day=day, cutoff=cutoff, config_path=config_path,
+                                            universe_path=config["paths"]["universe"], manual_quarter=manual_quarter)
+                    scope = next(row for row in refreshed["scopes"] if row["scope_id"] == scope["scope_id"])
+                elif gap["status"] not in {"completed"}:
+                    continue
+            if ledger.used(day, "quarterly") >= cap:
+                continue
+            if not (scope["eligible_stage"] or scope["deadline_stage_allowed"]):
+                continue
+            role = None; predecessors = []
+            industry_config = scope["frozen_industry"]
+            company_signature = scope["input_fingerprint"]
+            stage_row = qledger.db.execute("SELECT state,input_hash FROM quarterly_stages WHERE scope_id=? AND stage='industry'",
+                                           (scope["scope_id"],)).fetchone()
+            industry = _latest_role_artifact(root, state, scope["industry_id"], "industry", scope["period_start"], scope["period_end"])
+            challenge = _latest_role_artifact(root, state, scope["industry_id"], "challenge", scope["period_start"], scope["period_end"])
+            synthesis = _latest_role_artifact(root, state, scope["industry_id"], "synthesis", scope["period_start"], scope["period_end"])
+            challenge_predecessors = set((challenge or {}).get("report", {}).get("provenance", {}).get("predecessor_report_hashes", []))
+            synthesis_predecessors = set((synthesis or {}).get("report", {}).get("provenance", {}).get("predecessor_report_hashes", []))
+            if not industry or stage_row["state"] != "completed" or stage_row["input_hash"] != company_signature: role = "industry"
+            elif not challenge or industry["sha256"] not in challenge_predecessors: role = "challenge"; predecessors = [industry["path"]]
+            elif not synthesis or not {industry["sha256"], challenge["sha256"]}.issubset(synthesis_predecessors):
+                role = "synthesis"; predecessors = [industry["path"], challenge["path"]]
+            if role is None:
+                for stage, artifact in (("industry", industry), ("challenge", challenge), ("synthesis", synthesis)):
+                    qledger.set_stage(scope["scope_id"], stage, "completed", artifact_path=artifact["path"], artifact_sha256=artifact["sha256"])
+                continue
+            role_signature = company_signature if role == "industry" else hashlib.sha256(json.dumps(sorted(predecessors)).encode()).hexdigest()
+            request_cutoff = scope["cutoff"]
+            ledger.db.execute("INSERT OR REPLACE INTO quarterly_requests VALUES(?,?,?,?)",
+                              (scope["scope_id"], role, role_signature, request_cutoff)); ledger.db.commit()
+            args = ["--config", config_path, "--universe", config["paths"]["universe"], "--date", day,
+                    "--cutoff", request_cutoff, "--industry", scope["industry_id"], "--role", role, "--mode", "quarterly",
+                    "--period-start", scope["period_start"], "--period-end", scope["period_end"],
+                    "--critical-gap-status", scope["maturity"]["critical_gap_status"],
+                    "--frozen-scope", scope["frozen_scope_path"],
+                    "--run-id", f"{run_id}-quarterly-{uuid.uuid4().hex[:8]}",
+                    "--lease-seconds", str(int(config["budgets"]["task_timeout_seconds"]) + 180)]
+            for path in predecessors: args.extend(["--predecessor-report", path])
+            try:
+                context = command(root, "earnings_industry_context.py", args, logs, 120)
+                if context.get("model_execution_required"):
+                    if not ledger.reserve(day, f"{scope['scope_id']}:{role}", "quarterly", cap):
+                        outcomes.append({"status": "queued", "scope_id": scope["scope_id"], "stage": role,
+                                         "reason": "quarterly model budget exhausted"})
+                        continue
+                    qledger.set_stage(scope["scope_id"], role, "running", input_hash=role_signature)
+                    manifest = read_json(root / context["artifacts"][0])
+                    result = run_role(root, root / context["artifacts"][0], binary=deployed["codex_bin"],
+                        timeout=min(int(config["budgets"]["task_timeout_seconds"]), max(1, int(deadline-time.monotonic()))))
+                    qledger.set_stage(scope["scope_id"], role, "completed", input_hash=company_signature if role == "industry" else None,
+                                      artifact_path=result["report_path"],
+                                      artifact_sha256=result["report_sha256"]); outcomes.append(result)
+                else:
+                    outcomes.append(context)
+            except Exception as exc:
+                qledger.set_stage(scope["scope_id"], role, "failed", error=str(exc))
+                outcomes.append({"status": "failed", "scope_id": scope["scope_id"], "stage": role, "reason": str(exc)})
+                continue
+        # Formal market synthesis waits for every frozen industry synthesis in the same quarter.
+        if ledger.used(day, "quarterly") < cap and review["scopes"]:
+            first = review["scopes"][0]; reports = []
+            quarter_scopes = [{"scope_id": row["scope_id"], "industry_id": row["industry_id"],
+                "quarter_id": row["quarter_id"], "revision": row["revision"],
+                "cutoff": row["cutoff"],
+                "frozen_scope_path": str((root / "runtime/earnings/quarterly-scopes" /
+                row["scope_id"] / "revisions" / f"v{row['revision']}" / "frozen-scope.json").relative_to(root))}
+                for row in qledger.db.execute("SELECT * FROM quarterly_scopes WHERE quarter_id=? ORDER BY industry_id",
+                                              (first["quarter_id"],)).fetchall()]
+            for frozen_scope in quarter_scopes:
+                artifact = _latest_role_artifact(root, state, frozen_scope["industry_id"], "synthesis", first["period_start"], first["period_end"])
+                stage = qledger.db.execute("SELECT state,artifact_path,artifact_sha256 FROM quarterly_stages WHERE scope_id=? AND stage='synthesis'",
+                                           (frozen_scope["scope_id"],)).fetchone()
+                if (artifact and stage and stage["state"] == "completed" and stage["artifact_path"] == artifact["path"]
+                        and stage["artifact_sha256"] == artifact["sha256"]):
+                    reports.append(artifact["path"])
+            if len(reports) == len(quarter_scopes):
+                market_key = f"market:{first['quarter_id']}"
+                # Formality is decided by authoritative accepted publication gates in market_context,
+                # never by an LLM-authored completeness string.
+                market_edition = "full"
+                if ledger.reserve(day, market_key, "quarterly", cap):
+                    market_signature = hashlib.sha256(json.dumps(sorted(reports)).encode()).hexdigest()
+                    request = ledger.db.execute("SELECT input_signature,cutoff FROM quarterly_requests WHERE scope=? AND stage='market'",
+                                                (market_key,)).fetchone()
+                    # Freeze the market batch at the latest legal per-industry cutoff;
+                    # each input remains bound to its own frozen scope cutoff.
+                    market_cutoff = max(parse_time(row["cutoff"]) for row in quarter_scopes).isoformat()
+                    ledger.db.execute("INSERT OR REPLACE INTO quarterly_requests VALUES(?,?,?,?)",
+                                      (market_key, "market", market_signature, market_cutoff)); ledger.db.commit()
+                    args = ["--config", config_path, "--universe", config["paths"]["universe"],
+                            "--date", day, "--cutoff", market_cutoff, "--period-start", first["period_start"],
+                            "--period-end", first["period_end"], "--edition", market_edition,
+                            "--run-id", f"{run_id}-market-{uuid.uuid4().hex[:8]}"]
+                    for report in reports: args.extend(["--industry-report", report])
+                    for frozen_scope in quarter_scopes: args.extend(["--frozen-scope", frozen_scope["frozen_scope_path"]])
+                    context = command(root, "earnings_market_context.py", args, logs, 120)
+                    if context.get("model_execution_required"):
+                        market_result = run_role(root, root / context["artifacts"][0], binary=deployed["codex_bin"],
+                            timeout=min(int(config["budgets"]["task_timeout_seconds"]), max(1, int(deadline-time.monotonic()))))
+                        outcomes.append(market_result)
+                        for frozen_scope in quarter_scopes: qledger.set_stage(frozen_scope["scope_id"], "market", "completed")
+                    else: outcomes.append(context)
+        return outcomes or [{"status": "idle", "quarter": review["quarter"]}]
+    finally:
+        qledger.close()
+
+
+def run_publication_work(root: Path, config: dict, state: EarningsState, ledger: DailyLedger, deployed: dict,
+                         day: str, deadline: float, *, discover: bool = True,
+                         config_path: str = "config/earnings_research.json") -> list[dict]:
+    """Persist and drain publication work; cloud recovery is independent of discovery/writer budgets."""
+    outcomes: list[dict] = []
+    writer_cap = int(config["budgets"].get("publication_writers_per_day", 0))
+    checker_cap = int(config["budgets"].get("publication_checkers_per_day", 0))
+    cloud_cap = int(config["budgets"].get("publication_cloud_operations_per_day", 0))
+    rows = state.db.execute("SELECT * FROM report_artifacts WHERE source_mode='live' ORDER BY rowid DESC").fetchall() if discover else []
+    seen_series: set[str] = set()
+    seen_subjects: set[tuple[str, str, str]] = set()
+    for row in rows:
+        try:
+            report = read_json(root / row["path"]); scope = report.get("scope") or {}
+        except Exception as exc:
+            outcomes.append({"status": "failed", "source_path": row["path"], "reason": str(exc)})
+            continue
+        publication_type = None; scope_id = None
+        if report["report_type"] == "company":
+            event = state.db.execute("SELECT event_kind FROM earnings_events WHERE event_id=?", (row["subject_id"],)).fetchone()
+            publication_type = "ipo" if scope.get("event_kind") == "ipo" or (event and event[0] == "ipo") else "company"
+            scope_id = scope.get("symbol") or scope.get("issuer_id")
+        elif report["report_type"] == "synthesis" and report.get("research_mode") == "quarterly":
+            publication_type = "market" if scope.get("industry_id") == "cross-industry" else "industry"
+            scope_id = scope.get("market_label") or scope.get("industry_id")
+        if not publication_type or not scope_id: continue
+        subject_key = (publication_type, str(scope_id), str(row["subject_id"]))
+        if subject_key in seen_subjects: continue
+        seen_subjects.add(subject_key)
+        if publication_type == "ipo" and (not scope.get("reporting_start") or not scope.get("reporting_end")):
+            cutoff_day = date.fromisoformat(str(report["cutoff"])[:10]); quarter = f"IPO-{cutoff_day.year}-Q{(cutoff_day.month - 1)//3 + 1}"
+        elif scope.get("reporting_end"):
+            try: quarter = resolve_report_period(report, form=scope.get("form"))["research_quarter"]
+            except ValueError as exc:
+                if report["report_type"] == "company":
+                    state.db.execute("""INSERT OR REPLACE INTO publication_gaps
+                        VALUES(?,?,?,?,?,'actionable',?)""", (row["path"], row["sha256"], publication_type,
+                        str(scope_id), str(exc), utc_now()))
+                    # Annual/cumulative/undetermined company research is never relabeled as one quarter.
+                    continue
+                # Quarterly cohort reports already use exact natural-quarter boundaries.
+                end = date.fromisoformat(scope["reporting_end"]); quarter = f"{end.year}-Q{(end.month - 1)//3 + 1}"
+        else:
+            state.db.execute("""INSERT OR REPLACE INTO publication_gaps VALUES(?,?,?,?,?,'actionable',?)""",
+                (row["path"], row["sha256"], publication_type, str(scope_id),
+                 "reporting period end is undetermined", utc_now()))
+            continue
+        edition = "full" if report.get("completeness", {}).get("status") == "full" else "stage"
+        state.db.execute("UPDATE publication_gaps SET state='resolved',updated_at=? WHERE publication_type=? AND scope_id=?",
+                         (utc_now(), publication_type, str(scope_id)))
+        series_key = hashlib.sha256(f"{publication_type}:{scope_id}:{quarter}".encode()).hexdigest()
+        if series_key in seen_series: continue
+        seen_series.add(series_key)
+        existing = state.db.execute("SELECT COALESCE(MAX(revision),0) FROM publication_jobs WHERE series_key=?", (series_key,)).fetchone()[0]
+        if state.db.execute("SELECT 1 FROM publication_jobs WHERE source_sha256=? AND publication_type=? AND quarter_id=?",
+                            (row["sha256"], publication_type, quarter)).fetchone():
+            continue
+        revision = int(existing) + 1; job_id = hashlib.sha256(f"{series_key}:{revision}".encode()).hexdigest()
+        now = utc_now()
+        with state.immediate() as db:
+            db.execute("UPDATE publication_jobs SET state='superseded',updated_at=? WHERE series_key=? AND state IN ('local_pending','checker_pending','cloud_pending','retryable_failed')",
+                       (now, series_key))
+            db.execute("""INSERT INTO publication_jobs(job_id,series_key,source_path,source_sha256,publication_type,
+                scope_id,quarter_id,edition,revision,state,input_manifest_path,publication_manifest_path,error,
+                attempts,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (job_id, series_key, row["path"], row["sha256"], publication_type, str(scope_id), quarter, edition,
+                 revision, "local_pending", None, None, None, 0, now, now))
+
+    jobs = state.db.execute("SELECT * FROM publication_jobs WHERE state IN ('checker_pending','local_pending') OR (state='retryable_failed' AND publication_manifest_path IS NULL) ORDER BY CASE state WHEN 'checker_pending' THEN 0 ELSE 1 END,updated_at").fetchall()
+    for raw in jobs:
+        if time.monotonic() >= deadline: break
+        job = dict(raw); has_writer = False
+        try:
+            if job.get("input_manifest_path"):
+                manifest_path = root / job["input_manifest_path"]
+                has_writer = (manifest_path.parent / "writer-stage.json").exists()
+            else:
+                manifest_path = prepare_publication_input(root, publication_type=job["publication_type"], scope_id=job["scope_id"],
+                    quarter_id=job["quarter_id"], source_paths=[root / job["source_path"]], edition=job["edition"],
+                    config_path=config_path)
+                state.db.execute("UPDATE publication_jobs SET input_manifest_path=?,updated_at=? WHERE job_id=?",
+                                 (str(manifest_path.relative_to(root)), utc_now(), job["job_id"]))
+        except Exception as exc:
+            exhausted = int(job.get("attempts", 0)) + 1 >= int(config["budgets"].get("max_task_attempts", 2))
+            state.db.execute("UPDATE publication_jobs SET state=?,error=?,attempts=attempts+1,updated_at=? WHERE job_id=?",
+                             ("terminal_failed" if exhausted else "retryable_failed", str(exc), utc_now(), job["job_id"]))
+            outcomes.append({"status": "failed", "job_id": job["job_id"], "reason": str(exc)})
+            continue
+        if has_writer:
+            if not ledger.reserve(day, job["job_id"] + ":checker", "publication_checker", checker_cap): continue
+        else:
+            if ledger.used(day, "publication_writer") >= writer_cap or ledger.used(day, "publication_checker") >= checker_cap:
+                continue
+            if not ledger.reserve(day, job["job_id"] + ":writer", "publication_writer", writer_cap): continue
+            if not ledger.reserve(day, job["job_id"] + ":checker", "publication_checker", checker_cap):
+                continue
+        try:
+            result = run_publication(root, manifest_path, binary=deployed["codex_bin"],
+                timeout=min(int(config["budgets"]["task_timeout_seconds"]), max(1, int(deadline-time.monotonic()))))
+            state.db.execute("UPDATE publication_jobs SET state='cloud_pending',publication_manifest_path=?,error=NULL,attempts=attempts+1,updated_at=? WHERE job_id=?",
+                             (result["manifest_path"], utc_now(), job["job_id"])); outcomes.append(result)
+            if job["publication_type"] == "industry":
+                qledger = QuarterlyReviewLedger(root / "runtime/earnings/quarterly.sqlite")
+                try:
+                    qscope = qledger.db.execute("SELECT scope_id FROM quarterly_scopes WHERE industry_id=? AND quarter_id=?",
+                                                (job["scope_id"], job["quarter_id"])).fetchone()
+                    if qscope:
+                        qledger.set_stage(qscope[0], "publication", "completed", artifact_path=result["manifest_path"])
+                        qledger.set_stage(qscope[0], "checker", "completed", artifact_path=result["manifest_path"])
+                finally: qledger.close()
+        except Exception as exc:
+            exhausted = int(job.get("attempts", 0)) + 1 >= int(config["budgets"].get("max_task_attempts", 2))
+            next_state = "terminal_failed" if exhausted else ("checker_pending" if (manifest_path.parent / "writer-stage.json").exists() else "retryable_failed")
+            state.db.execute("UPDATE publication_jobs SET state=?,error=?,attempts=attempts+1,updated_at=? WHERE job_id=?",
+                             (next_state, str(exc), utc_now(), job["job_id"])); outcomes.append({"status": "failed", "job_id": job["job_id"], "reason": str(exc)})
+
+    cloud_states = "'cloud_pending','auth_failed','readback_failed'" + (",'archived'" if config["delivery"].get("lark_documents_enabled") is True else "")
+    cloud_jobs = state.db.execute(f"SELECT * FROM publication_jobs WHERE state IN ({cloud_states}) OR (state='retryable_failed' AND publication_manifest_path IS NOT NULL) ORDER BY revision DESC,updated_at").fetchall()
+    for raw in cloud_jobs:
+        if time.monotonic() >= deadline: break
+        job = dict(raw)
+        newer = state.db.execute("SELECT 1 FROM publication_jobs WHERE series_key=? AND revision>? AND state!='superseded'",
+                                 (job["series_key"], job["revision"])).fetchone()
+        if newer:
+            state.db.execute("UPDATE publication_jobs SET state='superseded',updated_at=? WHERE job_id=?", (utc_now(), job["job_id"])); continue
+        if config["delivery"].get("lark_documents_enabled") is not True:
+            state.db.execute("UPDATE publication_jobs SET state='archived',updated_at=? WHERE job_id=?", (utc_now(), job["job_id"]))
+            if job["publication_type"] == "industry":
+                qledger = QuarterlyReviewLedger(root / "runtime/earnings/quarterly.sqlite")
+                try:
+                    qscope = qledger.db.execute("SELECT scope_id FROM quarterly_scopes WHERE industry_id=? AND quarter_id=?",
+                                                (job["scope_id"], job["quarter_id"])).fetchone()
+                    if qscope: qledger.set_stage(qscope[0], "cloud", "completed")
+                finally: qledger.close()
+            continue
+        if not ledger.reserve(day, job["job_id"] + ":cloud", "publication_cloud", cloud_cap): break
+        try:
+            pub = read_json(root / job["publication_manifest_path"]); artifact = pub["artifacts"]["markdown"]
+            cloud_timeout = max(1, min(120, int(deadline - time.monotonic())))
+            cloud = LarkDocumentPublisher(root, deployed["lark_documents"], timeout=cloud_timeout).publish(pub["publication_id"], pub["title"],
+                root / artifact["path"], expected_sha256=artifact["sha256"], series_id=pub.get("series_id"),
+                publication_manifest=root / job["publication_manifest_path"])
+            final_state = "complete" if cloud["state"] == "verified" else cloud["state"]
+            state.db.execute("UPDATE publication_jobs SET state=?,error=?,updated_at=? WHERE job_id=?",
+                             (final_state, cloud.get("reason"), utc_now(), job["job_id"]))
+            if final_state == "complete" and job["publication_type"] == "industry":
+                qledger = QuarterlyReviewLedger(root / "runtime/earnings/quarterly.sqlite")
+                try:
+                    qscope = qledger.db.execute("SELECT scope_id FROM quarterly_scopes WHERE industry_id=? AND quarter_id=?",
+                                                (job["scope_id"], job["quarter_id"])).fetchone()
+                    if qscope: qledger.set_stage(qscope[0], "cloud", "completed")
+                finally: qledger.close()
+            outcomes.append({"status": "success" if final_state == "complete" else "failed", "job_id": job["job_id"], "cloud": cloud})
+        except Exception as exc:
+            state.db.execute("UPDATE publication_jobs SET state='retryable_failed',error=?,updated_at=? WHERE job_id=?", (str(exc), utc_now(), job["job_id"]))
+            outcomes.append({"status": "failed", "job_id": job["job_id"], "reason": str(exc)})
+    state.db.commit()
+    return outcomes
+
+
+def render_publication_entries(rows: list[tuple[dict, dict, dict]]) -> list[str]:
+    """Never truncate checked cloud report entries; notification size is gated later as a whole."""
+    return [f"- {publication['title']}（{publication['edition']} v{publication['version']}）：{cloud['url']}"
+            for publication, cloud, _version in rows]
 
 
 def finalize(root: Path, deployed: dict, deployed_path: Path, day: str, reports: list[dict], errors: list[str],
@@ -155,6 +547,21 @@ def finalize(root: Path, deployed: dict, deployed_path: Path, day: str, reports:
         prior = read_json(root / previous[0]) if previous else None
         if notification_material(report, prior):
             material.append((report, result))
+    # A checked formal quarterly publication is independently deliverable even when thesis_state is unchanged.
+    publication_material = []
+    key_symbols = {symbol for industry in read_json(root / "config/earnings_universe.json")["industries"]
+                   for symbol in industry.get("key_symbols", [])}
+    cloud_by_id = {}
+    for cloud_path in runtime_path(root, "runtime/earnings/publications/cloud").glob("*/state.json"):
+        cloud = read_json(cloud_path); cloud_by_id[cloud.get("publication_id")] = cloud
+    for manifest_path in sorted((root / "report/earnings/publications").glob("*/*/*/v*/publication-manifest.json")):
+        digest = sha256_file(manifest_path)
+        if digest in handled: continue
+        publication = read_json(manifest_path); cloud = cloud_by_id.get(publication["publication_id"], {})
+        formal = publication["publication_type"] in {"industry", "market"} and publication["edition"] in {"full", "revision"}
+        priority_company = publication["publication_type"] in {"company", "ipo"} and publication["scope_id"] in key_symbols
+        if publication.get("checker", {}).get("status") == "passed" and cloud.get("state") == "verified" and (formal or priority_company):
+            publication_material.append((publication, cloud, {"path": str(manifest_path.relative_to(root)), "sha256": digest}))
     lines = [f"财报研究 · {day}", ""]
     versions = [{"path": r["report_path"], "sha256": r["report_sha256"]} for r in candidates]
     for report, result in material[:5]:
@@ -169,14 +576,19 @@ def finalize(root: Path, deployed: dict, deployed_path: Path, day: str, reports:
 
     if len(material) > 5:
         lines.append(f"另有 {len(material)-5} 份状态变化报告已归档，本条合并通知。")
+    if publication_material:
+        lines.extend(["", "本批次已核对全文："])
+        lines.extend(render_publication_entries(publication_material))
+        for publication, cloud, version in publication_material:
+            versions.append(version)
     if errors:
         lines.append("本批次存在未完成步骤，已保留本地失败记录和待处理任务。")
     lines.extend(["", "数据质量：仅采用已归档的 SEC/发行人披露，覆盖缺口随报告保留。",
                   f"运行校验：本批次完成 {len(reports)} 个角色，失败步骤 {len(errors)} 个。",
-                  "交付审计：完整报告存于 NAS 本地，仅本条摘要通过仓库绑定的 cc-connect 发送。"])
+                  "交付审计：核对通过的全文由显式用户身份写入并回读；消息仅由仓库绑定的 cc-connect 发送。"])
     decision = prepare_notification(root, deployed, day=day, body="\n".join(lines), report_versions=versions,
-        kind="daily", rationale="evidenced thesis-state change" if material else "no material thesis-state change",
-        should_send=bool(material))
+        kind="daily", rationale="evidenced thesis-state change or checked formal publication" if material or publication_material else "no material thesis-state change or deliverable publication",
+        should_send=bool(material or publication_material))
     outcome = deliver(root, decision, deployed_path, execute=send)
     return {"decision": str(decision.relative_to(root)), "delivery": outcome}
 
@@ -188,9 +600,9 @@ def run(args: argparse.Namespace) -> dict:
     deployed_path = runtime_path(root, args.deployment)
     deployed = destination(root, deployed_path)
     if config["paths"]["state"] != "runtime/earnings/state.sqlite":
-        raise ValueError("P3 runner requires canonical earnings state path")
+        raise ValueError("earnings daily runner requires canonical earnings state path")
     if config["budgets"].get("concurrency") != 1:
-        raise ValueError("P3 initial runner requires concurrency=1")
+        raise ValueError("earnings daily runner requires concurrency=1")
     if config["budgets"].get("max_tokens_per_day") is not None or config["budgets"].get("currency_budget_per_day") is not None:
         raise ValueError("hard token/currency budget unavailable for auth backend; configure observable task limits")
     batch_seconds = int(deployed.get("batch_timeout_seconds", 7200))
@@ -209,6 +621,8 @@ def run(args: argparse.Namespace) -> dict:
         state = EarningsState(root / "runtime/earnings/state.sqlite")
         reports, errors = [], []
         deadline = time.monotonic() + batch_seconds
+        phase_reserve = min(int(config["budgets"].get("phase_reserve_seconds", 300)), max(0, batch_seconds // 4))
+        early_deadline = deadline - phase_reserve
         limit = season_limit(config, day)
         config_args = ["--config", args.config]
         common = [*config_args, "--date", day, "--cutoff", cutoff]
@@ -221,7 +635,7 @@ def run(args: argparse.Namespace) -> dict:
                 already = ledger.used(day, "initialization")
                 pending = [s for s in symbols if s not in initialized][:max(0, int(config["budgets"]["initialization_company_limit"]) - already)]
                 for symbol in symbols:
-                    if time.monotonic() >= deadline:
+                    if time.monotonic() >= early_deadline:
                         errors.append("collection budget deadline reached; remaining issuers deferred")
                         break
                     initialization = symbol in pending
@@ -229,7 +643,7 @@ def run(args: argparse.Namespace) -> dict:
                         ledger.reserve(day, symbol, "initialization", int(config["budgets"]["initialization_company_limit"]))
                     try:
                         collected = command(root, "earnings_collect.py", [*common, "--mode", "live", "--symbol", symbol,
-                            "--collection-kind", "initialization" if initialization else "incremental"], logs, min(600, max(1, int(deadline-time.monotonic()))))
+                            "--collection-kind", "initialization" if initialization else "incremental"], logs, min(600, max(1, int(early_deadline-time.monotonic()))))
                         failures = collected.get("summary", {}).get("failures", [])
                         if failures:
                             errors.append(f"source:{symbol}:incomplete")
@@ -240,8 +654,21 @@ def run(args: argparse.Namespace) -> dict:
                         if "TCA_SEC_USER_AGENT" in str(exc):
                             break
             if not args.collect_only:
+                publications = []
+                if config.get("publication", {}).get("enabled") is True:
+                    try:
+                        # Drain recoverable checker/cloud work before new research can consume the batch clock.
+                        recovery_deadline = min(deadline, time.monotonic() + max(1, phase_reserve))
+                        resumed_publications = run_publication_work(root, config, state, ledger, deployed, day, recovery_deadline,
+                                                                   discover=False, config_path=args.config)
+                        publications.extend(resumed_publications)
+                        errors.extend(f"publication-resume:{row.get('job_id', 'unknown')}:{row.get('reason', 'failed')}"
+                                      for row in resumed_publications if row.get("status") == "failed")
+                    except Exception as exc:
+                        publications.append({"status": "failed", "reason": str(exc)})
+                        errors.append(f"publication-resume:{exc}")
                 context_attempts = 0
-                while ledger.used(day, "company") < limit and time.monotonic() < deadline and context_attempts < limit * 2:
+                while ledger.used(day, "company") < limit and time.monotonic() < early_deadline and context_attempts < limit * 2:
                     context_attempts += 1
                     try:
                         context = command(root, "earnings_context.py", [*context_common, "--limit", "1", "--run-id", f"{run_id}-{uuid.uuid4().hex[:8]}",
@@ -258,13 +685,13 @@ def run(args: argparse.Namespace) -> dict:
                             break
                         try:
                             reports.append(run_role(root, root / path, binary=deployed["codex_bin"],
-                                timeout=min(int(config["budgets"]["task_timeout_seconds"]), max(1, int(deadline-time.monotonic())))))
+                                timeout=min(int(config["budgets"]["task_timeout_seconds"]), max(1, int(early_deadline-time.monotonic())))))
                         except Exception as exc:
                             fail_owned_attempt(state, manifest, str(exc))
                             errors.append(f"role:{manifest['task_id']}:{exc}")
                 for work in industry_work(root, state, universe, ledger):
                     cap = int(config["budgets"]["daily_industry_limit"])
-                    if ledger.used(day, "industry") >= cap or time.monotonic() >= deadline:
+                    if ledger.used(day, "industry") >= cap or time.monotonic() >= early_deadline:
                         break
                     try:
                         request = ledger.db.execute("SELECT fingerprint,cutoff FROM industry_requests WHERE scope=?", (work["scope"],)).fetchone()
@@ -285,16 +712,46 @@ def run(args: argparse.Namespace) -> dict:
                         ledger.reserve(day, manifest["task_id"], "industry", cap)
                         try:
                             reports.append(run_role(root, root / path, binary=deployed["codex_bin"],
-                                timeout=min(int(config["budgets"]["task_timeout_seconds"]), max(1, int(deadline-time.monotonic())))))
+                                timeout=min(int(config["budgets"]["task_timeout_seconds"]), max(1, int(early_deadline-time.monotonic())))))
                         except Exception as exc:
                             fail_owned_attempt(state, manifest, str(exc))
                             raise
                         ledger.db.execute("INSERT OR REPLACE INTO industry_inputs VALUES(?,?)", (work["scope"], work["fingerprint"])); ledger.db.commit()
                     except Exception as exc:
                         errors.append(f"industry:{work['industry']}:{exc}")
+                try:
+                    quarterly = run_quarterly_step(root, config, universe, state, ledger, deployed, day, cutoff,
+                                                   run_id, logs, deadline, args.config, getattr(args, "manual_quarter", None))
+                    reports.extend(row for row in quarterly if row.get("report_path"))
+                    errors.extend(f"quarterly:{row.get('scope_id', 'market')}:{row.get('stage', 'unknown')}:{row.get('reason', row['status'])}"
+                                  for row in quarterly if row.get("status") in {"retryable_failed", "terminal_failed", "failed"})
+                except Exception as exc:
+                    quarterly = [{"status": "failed", "reason": str(exc)}]
+                    errors.append(f"quarterly:{exc}")
+                if config.get("publication", {}).get("enabled") is True:
+                    try:
+                        new_publications = run_publication_work(root, config, state, ledger, deployed, day, deadline,
+                                                               config_path=args.config)
+                        publications.extend(new_publications)
+                        errors.extend(f"publication:{row.get('job_id', 'unknown')}:{row.get('reason', 'failed')}"
+                                      for row in new_publications if row.get("status") == "failed")
+                    except Exception as exc:
+                        publications.append({"status": "failed", "reason": str(exc)})
+                        errors.append(f"publication:{exc}")
+                else:
+                    publications = [{"status": "skipped", "reason": "publication is explicitly disabled"}]
+            else:
+                quarterly = [{"status": "skipped", "reason": "collect-only batch"}]
+                publications = []
             exhausted = unresolved_terminal_count(state)
             if exhausted:
                 errors.append(f"terminal_tasks:{exhausted} current research tasks require operator review")
+            publication_exhausted = state.db.execute("SELECT COUNT(*) FROM publication_jobs WHERE state='terminal_failed'").fetchone()[0]
+            if publication_exhausted:
+                errors.append(f"terminal_publications:{publication_exhausted} publication jobs require operator review")
+            publication_gaps = state.db.execute("SELECT COUNT(*) FROM publication_gaps WHERE state='actionable'").fetchone()[0]
+            if publication_gaps:
+                errors.append(f"publication_gaps:{publication_gaps} reports require fiscal-period review")
             delivery = finalize(root, deployed, deployed_path, day, reports, errors, state, send=args.send)
             ledger.db.execute("INSERT OR REPLACE INTO health VALUES(?,?)", (day, int(bool(errors))))
             ledger.db.commit()
@@ -307,7 +764,8 @@ def run(args: argparse.Namespace) -> dict:
                 delivery["failure_delivery"] = deliver(root, failure, deployed_path, execute=args.send)
             result = {"schema_version": 1, "workflow": "earnings-daily", "status": "success" if not errors else "failed",
                 "run_id": run_id, "date": day, "cutoff": cutoff, "reports": reports, "errors": errors,
-                "delivery": delivery, "completed_at": utc_now(), "quarterly_automatic_trigger": "P4_disabled"}
+                "publications": publications, "quarterly": quarterly, "delivery": delivery, "completed_at": utc_now(),
+                "quarterly_automatic_trigger": bool(config["quarterly"].get("automatic_trigger_enabled"))}
             atomic_write_json(logs / "daily-result.json", result)
             return result
         finally:
@@ -322,6 +780,7 @@ def main() -> None:
     parser.add_argument("--collect-only", action="store_true")
     parser.add_argument("--resume-only", action="store_true")
     parser.add_argument("--send", action="store_true")
+    parser.add_argument("--manual-quarter", help="Explicitly advance one ended YYYY-QN scope using the same maturity gates")
     args = parser.parse_args()
     def interrupted(signum, frame):
         raise InterruptedError(f"batch interrupted by signal {signum}")

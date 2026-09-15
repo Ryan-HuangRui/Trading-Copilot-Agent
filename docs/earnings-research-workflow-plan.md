@@ -18,7 +18,7 @@
 - 初版每日默认 GPT-5.6 Sol / medium，季度默认 GPT-6 Astra / high；疑难任务按明确条件升级。
 - cc-connect 定时任务配置为静默执行；中间进度、日志、普通成功/跳过结果和 Codex 最终回复不自动转发。
 - 通知统一通过本仓库在 NAS 上绑定的 cc-connect 项目和飞书会话发送。外层交付程序只在流程收尾判定确有通知需要时调用 `cc-connect send`。
-- 完整报告先在本仓库归档；初版不依赖已绑定其他工作目录机器人的飞书 CLI，也不读取、改绑或复用其认证。
+- 完整报告先在本仓库归档；P4 可使用 NAS 显式配置的用户身份 lark-cli 写入/更新/回读文档，但不读取、改绑或复用机器人身份，通知仍只用本仓库 cc-connect。
 - 先完成 3—5 个行业、30—50 家公司的小样本验证，再扩大覆盖。
 
 用户已授权完成 P0、新任务实施 P1/P2、主任务 review 后提交推送 master 并完成 P3。P1/P2 完成主动回传，主任务按每小时兜底心跳恢复协调，P3 完成后解除心跳。
@@ -242,7 +242,7 @@ report/earnings/seasons/<SEASON_ID>/<VERSION>/
 
 消息路由沿用 NAS 当前 Trading-Copilot-Agent 对应的 `CC_CONNECT_BIN`、`CC_CONNECT_PROJECT` 和 `CC_CONNECT_SESSION` 配置。工作目录本身不保证正确选中机器人，发送时必须显式传入已核验的项目和会话，不能依赖其他项目的默认配置。仓库现有 wrapper 已使用 `send --project ... --session ... --stdin`，新路线复用此方式；目标缺失或不匹配时保留待发项，不尝试其他机器人。
 
-完整 Markdown/JSON 报告保留于本仓库；飞书摘要本身应包含可阅读的结论、证据、反证和后续验证事项。本次设计不再要求先用另一个工作目录的飞书 CLI 创建文档。附件或长文交付能力需在 NAS 核验本项目 cc-connect 的实际版本与能力后接入；未核验前不承诺文件上传或云文档链接，也不把 NAS 本地路径伪装成可访问链接。完整报告外部交付尚未启用时，在交付记录中明确区分“摘要已发送”和“完整报告仅本地归档”。
+完整 Markdown/JSON 报告保留于本仓库。P4 经用户授权后采用显式用户 profile 的 lark-cli 直接创建或更新云文档并回读；云文档成功与 cc-connect 摘要发送分开记录。未回读或无可访问 URL 时不把 NAS 本地路径伪装成入口。
 
 通知状态使用 `pending → ready → sent`，并保留 retryable_failed、unknown 等结果；不需通知的判断记录为 suppressed。记录报告版本、消息 ID（渠道可用时）、项目、目标会话及正文哈希。相同产物版本与目标只创建一个待发项。
 
@@ -294,7 +294,7 @@ report/earnings/seasons/<SEASON_ID>/<VERSION>/
 
 新增 `earnings-daily`、`earnings-deliver`。调度入口按依赖调用已有阶段组件，并从配置向每个 Codex 角色传入模型与 effort。新 wrapper 不能照搬现有盘前盘后固定摘要文件与单日交付键。
 
-在 NAS 检查 Codex 与 cc-connect、认证、网络、时区、磁盘、可用模型、现有任务资源占用，以及本仓库绑定的项目和目标会话；小样本试运行后配置 cc-connect 每日 10:00 的唯一生产任务，明确设置 `mute=true`。禁用 scheduler 的进度和最终结果自动转发，统一由交付程序在收尾时显式发送。本阶段不需要另一个工作目录的飞书 CLI 认证。
+在 NAS 检查 Codex、cc-connect 和文档专用 lark-cli 用户授权、网络、时区、磁盘、可用模型、现有任务资源占用，以及本仓库绑定的项目和目标会话；小样本试运行后配置 cc-connect 每日 10:00 的唯一生产任务，明确设置 `mute=true`。禁用 scheduler 的进度和最终结果自动转发，统一由交付程序在收尾时显式发送。
 
 验收：执行全过程无中间消息；最终回复不被自动转发；`should_send=false` 时没有任何发送调用；需要通知时仅调用本仓库指定项目和会话；无资料无积压时不调用模型；发送失败不重做研究；重启可恢复；已有价格行为和交易任务不受影响。外发联调在明确目标和授权下进行。
 
@@ -342,7 +342,7 @@ report/earnings/seasons/<SEASON_ID>/<VERSION>/
 实施前后需按阶段核验、但不阻碍当前方案落稿的事项：
 
 - NAS 的 Codex 版本、认证方式、可用模型、实际额度观察方式与现有生产日程。
-- NAS 上本仓库 cc-connect 的项目与会话绑定、`mute=true` 的实际行为、发送回执及附件/长文能力；不读取或改绑另一个工作目录的飞书 CLI 机器人。
+- NAS 上本仓库 cc-connect 的项目与会话绑定、`mute=true` 的实际行为和发送回执；文档 lark-cli 必须保持显式用户 profile，不读取或改绑机器人身份。
 - 小样本行业与公司名单，以及各行业关键披露对象；按覆盖与可验证性选择，不等同于交易推荐。
 - 用样本实测设定日频、季度、升级与回填预算，不预先承诺费用或节省比例。
 - IR/电话会实际可获得性，以及是否以后接入有授权的付费资料源。
@@ -356,4 +356,4 @@ report/earnings/seasons/<SEASON_ID>/<VERSION>/
 - [Codex 非交互运行](https://learn.chatgpt.com/docs/non-interactive-mode)：脚本执行与结构化输出。
 - [Codex 配置参考](https://learn.chatgpt.com/docs/config-file/config-reference)：模型与推理强度配置。
 - [GPT-5.6 Sol](https://developers.openai.com/api/docs/models/gpt-5.6-sol)、[GPT-6 Astra](https://developers.openai.com/api/docs/models/gpt-6-astra)、[GPT-5.6 Terra](https://developers.openai.com/api/docs/models/gpt-5.6-terra)：能力定位和推理支持；不作为 NAS 账户可用性证明。
-- cc-connect 通知依据本仓库 `ops/cc-connect/tca-report-wrapper.sh` 与 `docs/cc-connect-scheduler.md`；另一工作目录的飞书 CLI 不属于本方案交付依赖。
+- cc-connect 通知依据本仓库 `ops/cc-connect/tca-report-wrapper.sh` 与 `docs/cc-connect-scheduler.md`；P4 文档同步可使用单独配置的用户身份 lark-cli，但它不属于通知通道。

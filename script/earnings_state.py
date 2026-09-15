@@ -94,6 +94,36 @@ CREATE TABLE IF NOT EXISTS report_artifacts (
   completeness TEXT NOT NULL, created_at TEXT NOT NULL,
   FOREIGN KEY(task_id) REFERENCES research_tasks(task_id)
 );
+CREATE TABLE IF NOT EXISTS publication_artifacts (
+  publication_id TEXT PRIMARY KEY, series_id TEXT NOT NULL, publication_type TEXT NOT NULL,
+  scope_id TEXT NOT NULL, quarter_id TEXT NOT NULL, edition TEXT NOT NULL, version INTEGER NOT NULL,
+  manifest_path TEXT NOT NULL, manifest_sha256 TEXT NOT NULL, content_sha256 TEXT NOT NULL,
+  checker_status TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(series_id,version)
+);
+CREATE TABLE IF NOT EXISTS publication_delivery (
+  series_id TEXT PRIMARY KEY, publication_id TEXT NOT NULL, state TEXT NOT NULL,
+  document_id TEXT, url TEXT, local_sha256 TEXT, verified_remote_sha256 TEXT,
+  attempts INTEGER NOT NULL DEFAULT 0, reason TEXT, updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS publication_delivery_routes (
+  route_key TEXT NOT NULL, series_id TEXT NOT NULL, publication_id TEXT NOT NULL, state TEXT NOT NULL,
+  document_id TEXT, url TEXT, local_sha256 TEXT, verified_remote_sha256 TEXT,
+  attempts INTEGER NOT NULL DEFAULT 0, reason TEXT, updated_at TEXT NOT NULL,
+  PRIMARY KEY(route_key,series_id)
+);
+CREATE TABLE IF NOT EXISTS publication_jobs (
+  job_id TEXT PRIMARY KEY, series_key TEXT NOT NULL, source_path TEXT NOT NULL,
+  source_sha256 TEXT NOT NULL, publication_type TEXT NOT NULL, scope_id TEXT NOT NULL,
+  quarter_id TEXT NOT NULL, edition TEXT NOT NULL, revision INTEGER NOT NULL,
+  state TEXT NOT NULL, input_manifest_path TEXT, publication_manifest_path TEXT,
+  error TEXT, attempts INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  UNIQUE(series_key,revision), UNIQUE(source_sha256,publication_type,quarter_id)
+);
+CREATE INDEX IF NOT EXISTS idx_publication_jobs_state ON publication_jobs(state,updated_at);
+CREATE TABLE IF NOT EXISTS publication_gaps (
+  source_path TEXT PRIMARY KEY, source_sha256 TEXT NOT NULL, publication_type TEXT,
+  scope_id TEXT, reason TEXT NOT NULL, state TEXT NOT NULL, updated_at TEXT NOT NULL
+);
 """
 
 
