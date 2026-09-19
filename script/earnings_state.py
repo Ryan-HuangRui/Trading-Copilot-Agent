@@ -270,6 +270,19 @@ class EarningsState:
                 return
             db.execute("INSERT INTO task_attempt_manifests VALUES(?,?,?,?,?)", (task_id, attempt, path, digest, utc_now()))
 
+    def defer_attempt(self, task_id: str, attempt: int, reason: str, *, superseded: bool = False) -> None:
+        """Release a pre-model attempt without spending retry or model budget."""
+        with self.immediate() as db:
+            row = db.execute("SELECT state,attempts FROM research_tasks WHERE task_id=?", (task_id,)).fetchone()
+            if not row or row["state"] != "running" or int(row["attempts"]) != attempt:
+                return
+            db.execute("DELETE FROM task_attempt_manifests WHERE task_id=? AND attempt=?", (task_id, attempt))
+            db.execute(
+                """UPDATE research_tasks SET state=?,attempts=attempts-1,lease_owner=NULL,lease_expires_at=NULL,
+                error=?,next_attempt_at=NULL,updated_at=? WHERE task_id=? AND state='running' AND attempts=?""",
+                ("terminal_failed" if superseded else "queued", reason, utc_now(), task_id, attempt),
+            )
+
     def discover_source_item(self, source: str, scope: str, item_key: str, payload: dict[str, Any]) -> bool:
         encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         now = utc_now()
@@ -327,7 +340,8 @@ class EarningsState:
         ).rowcount
         return superseded + terminal + retryable
 
-    def claim_tasks(self, *, owner: str, limit: int, lease_seconds: int, task_type: str | None = None) -> list[dict[str, Any]]:
+    def claim_tasks(self, *, owner: str, limit: int, lease_seconds: int, task_type: str | None = None,
+                    company_tier: str | None = None, priority_symbols: Sequence[str] = ()) -> list[dict[str, Any]]:
         self.reap_expired_tasks()
         now = datetime.now(timezone.utc)
         now_text = now.isoformat(timespec="seconds")
@@ -337,7 +351,26 @@ class EarningsState:
         if task_type:
             filters.append("t.task_type=?")
             params.append(task_type)
-        params.append(limit)
+        current_expr = """t.period_end IS (SELECT MAX(x.period_end) FROM research_tasks x
+          JOIN earnings_events xe ON xe.event_id=x.subject_id JOIN earnings_events te ON te.event_id=t.subject_id
+          WHERE x.task_type='company' AND xe.issuer_id=te.issuer_id AND x.source_mode=t.source_mode
+          AND x.state IN ('queued','running','completed','retryable_failed') AND NOT EXISTS(
+            SELECT 1 FROM research_tasks xn WHERE xn.rowid>x.rowid AND xn.task_type=x.task_type
+            AND xn.subject_id=x.subject_id AND xn.period_start IS x.period_start AND xn.period_end IS x.period_end
+            AND xn.source_mode=x.source_mode))"""
+        depth_expr = """(SELECT COUNT(DISTINCT x.period_end) FROM research_tasks x
+          JOIN earnings_events xe ON xe.event_id=x.subject_id JOIN earnings_events te ON te.event_id=t.subject_id
+          WHERE x.task_type='company' AND xe.issuer_id=te.issuer_id AND x.source_mode=t.source_mode
+          AND COALESCE(x.period_end,'')>COALESCE(t.period_end,'')
+          AND x.state IN ('queued','running','completed','retryable_failed') AND NOT EXISTS(
+            SELECT 1 FROM research_tasks xn WHERE xn.rowid>x.rowid AND xn.task_type=x.task_type
+            AND xn.subject_id=x.subject_id AND xn.period_start IS x.period_start AND xn.period_end IS x.period_end
+            AND xn.source_mode=x.source_mode))"""
+        if company_tier not in {None, "current", "history"}:
+            raise ValueError("company_tier must be current or history")
+        if task_type == "company" and company_tier:
+            filters.append(current_expr if company_tier == "current" else f"NOT ({current_expr})")
+        priority = list(dict.fromkeys(str(symbol) for symbol in priority_symbols))
         with self.immediate() as db:
             rows = db.execute(
                 f"""SELECT t.* FROM research_tasks t WHERE {' AND '.join(filters)} AND NOT EXISTS(
@@ -350,16 +383,28 @@ class EarningsState:
                   AND n.task_type=t.task_type AND n.subject_id=t.subject_id
                   AND n.period_start IS t.period_start AND n.period_end IS t.period_end
                   AND n.source_mode=t.source_mode)
-                ORDER BY CASE WHEN t.task_type='company' THEN (
-                  SELECT COUNT(*) FROM research_tasks x
-                  JOIN earnings_events xe ON xe.event_id=x.subject_id
-                  JOIN earnings_events te ON te.event_id=t.subject_id
-                  WHERE x.task_type='company' AND xe.issuer_id=te.issuer_id
-                  AND COALESCE(x.period_end,'')>COALESCE(t.period_end,'')) ELSE 0 END,
-                  CASE WHEN t.attempts=0 THEN 0 ELSE 1 END,
-                  COALESCE(t.period_end,'') DESC,t.created_at,t.task_id LIMIT ?""",
+                ORDER BY t.created_at,t.task_id""",
                 params,
             ).fetchall()
+            def queue_key(row: sqlite3.Row) -> tuple[Any, ...]:
+                meta = db.execute("""SELECT e.issuer_id,i.symbol FROM earnings_events e
+                  LEFT JOIN issuers i ON i.issuer_id=e.issuer_id WHERE e.event_id=?""",
+                  (row["subject_id"],)).fetchone()
+                depth = 0
+                if row["task_type"] == "company" and meta:
+                    depth = db.execute("""SELECT COUNT(DISTINCT x.period_end) FROM research_tasks x
+                      JOIN earnings_events xe ON xe.event_id=x.subject_id WHERE x.task_type='company'
+                      AND xe.issuer_id=? AND x.source_mode=? AND COALESCE(x.period_end,'')>COALESCE(?, '')
+                      AND x.state IN ('queued','running','completed','retryable_failed') AND NOT EXISTS(
+                        SELECT 1 FROM research_tasks xn WHERE xn.rowid>x.rowid AND xn.task_type=x.task_type
+                        AND xn.subject_id=x.subject_id AND xn.period_start IS x.period_start
+                        AND xn.period_end IS x.period_end AND xn.source_mode=x.source_mode)""",
+                      (meta["issuer_id"], row["source_mode"], row["period_end"])).fetchone()[0]
+                return (0 if meta and meta["symbol"] in priority else 1, depth,
+                        0 if int(row["attempts"]) == 0 else 1,
+                        -int(str(row["period_end"] or "0").replace("-", "")),
+                        row["created_at"], row["task_id"])
+            rows = sorted(rows, key=queue_key)[:limit]
             claimed: list[dict[str, Any]] = []
             for row in rows:
                 db.execute(

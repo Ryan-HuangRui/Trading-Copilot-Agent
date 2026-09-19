@@ -596,6 +596,41 @@ class EarningsDailyRecoveryTests(unittest.TestCase):
 
 
 class EarningsRoleProcessTests(unittest.TestCase):
+    def test_superseded_company_artifact_is_rejected_before_popen_and_attempt_is_restored(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); state = EarningsState(root / 'runtime/earnings/state.sqlite')
+            old, _ = state.enqueue_task(task_type='company', subject_id='event', period_start=None,
+                period_end='2026-06-30', input_hash='old', method_version='v1', source_mode='live',
+                profile='daily', model='gpt-5.6-sol', effort='medium')
+            state.claim_task(old, owner='old', lease_seconds=60); state.complete_task(old, 'old-completion')
+            artifact = root / 'report/earnings/old.json'; atomic_write_json(artifact, {'cutoff': '2026-09-01T00:00:00Z'})
+            state.db.execute("""INSERT INTO report_artifacts VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                ('old-report', old, 'company', 'event', None, '2026-06-30', str(artifact.relative_to(root)),
+                 sha256_file(artifact), 'manifest', 'live', 'complete', '2026-09-01T00:00:00Z'))
+            state.enqueue_task(task_type='company', subject_id='event', period_start=None,
+                period_end='2026-06-30', input_hash='new', method_version='v1', source_mode='live',
+                profile='daily', model='gpt-5.6-sol', effort='medium')
+            role, _ = state.enqueue_task(task_type='industry', subject_id='industry', period_start=None,
+                period_end='2026-06-30', input_hash='role', method_version='v1', source_mode='live',
+                profile='daily', model='gpt-5.6-sol', effort='medium')
+            claimed = state.claim_task(role, owner='role-owner', lease_seconds=60)
+            manifest_path = root / 'runtime/earnings/runs/preflight/input-manifest.json'
+            manifest = {'manifest_type': 'earnings-role-input', 'task_id': role,
+                'profile': {'model': 'gpt-5.6-sol', 'effort': 'medium'}, 'source_mode': 'live',
+                'lease': {'owner': claimed['lease_owner'], 'attempt': claimed['attempts']}, 'input_hash': 'role',
+                'previous_artifacts': [], 'company_artifacts': [{'report_id': 'old-report', 'task_id': old,
+                    'path': str(artifact.relative_to(root)), 'sha256': sha256_file(artifact)}]}
+            atomic_write_json(manifest_path, manifest)
+            state.register_attempt_manifest(role, 1, str(manifest_path.relative_to(root)), sha256_file(manifest_path))
+            state.close()
+            with patch('earnings_role_runner.subprocess.Popen') as popen:
+                with self.assertRaisesRegex(ValueError, 'artifact superseded'):
+                    run_role(root, manifest_path, binary=sys.executable, timeout=1)
+            popen.assert_not_called()
+            state = EarningsState(root / 'runtime/earnings/state.sqlite')
+            row = state.db.execute('SELECT state,attempts FROM research_tasks WHERE task_id=?', (role,)).fetchone()
+            self.assertEqual(tuple(row), ('queued', 0)); state.close()
+
     def test_explicit_model_read_only_and_timeout_kills_process_group(self):
         import subprocess
         from unittest.mock import MagicMock

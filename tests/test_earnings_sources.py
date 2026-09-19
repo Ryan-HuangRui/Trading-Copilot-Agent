@@ -139,7 +139,7 @@ class EarningsSourcesTests(unittest.TestCase):
             self.assertEqual(state.status()["queue"], {"queued": 1, "terminal_failed": 1})
             state.close()
 
-    def test_scoped_config_hash_migration_reuses_identical_legacy_frozen_task(self):
+    def test_scoped_config_hash_does_not_guess_legacy_full_hash_compatible(self):
         with TemporaryDirectory() as temp:
             state = EarningsState(Path(temp) / "state.sqlite")
             state.upsert_issuer(issuer_id="issuer", cik=None, symbol="X", name="X", identity_status="resolved")
@@ -156,8 +156,9 @@ class EarningsSourcesTests(unittest.TestCase):
                 source_mode="live", profile="daily", model="gpt-5.6-sol", effort="medium")
             state.freeze_task_input(legacy, frozen, legacy_hash)
             current, created = _enqueue_event(state, self.config(), "unrelated-new-full-hash", event, "live")
-            self.assertEqual((current, created), (legacy, False))
-            self.assertEqual(state.db.execute("SELECT COUNT(*) FROM research_tasks").fetchone()[0], 1)
+            self.assertTrue(created)
+            self.assertNotEqual(current, legacy)
+            self.assertEqual(state.db.execute("SELECT COUNT(*) FROM research_tasks").fetchone()[0], 2)
             state.close()
 
     def test_bounded_fetch_keeps_discovered_backlog_and_initialization_reaches_eight_periods(self):

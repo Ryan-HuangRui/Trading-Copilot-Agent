@@ -72,4 +72,4 @@ adapter 的参数形状按官方 lark-cli 文档：它把 cwd 固定到准备目
 
 ### runtime 配置增量迁移
 
-NAS 的 `runtime/earnings/p4-config.json` 应从新 tracked 配置合并下列预算键，保留现有 activation flags、路径和身份配置，不整文件覆盖：`publication_repairs_per_day=1`、`publication_full_start_threshold_seconds=900`、`publication_checker_start_threshold_seconds=480`、`publication_stage_timeout_seconds=900`、`phase_reserve_seconds=1200`。已有 `daily_company_limit`/`strong_season_company_limit` 不扩大。部署前先用 `earnings-recovery` preview 精确列出待恢复 job；备份后只恢复所选任务。
+NAS 的 `runtime/earnings/p4-config.json` 应从新 tracked 配置合并下列预算键，保留现有 activation flags、路径和身份配置，不整文件覆盖：`company_history_limit=2`、`publication_repairs_per_day=1`、`publication_full_start_threshold_seconds=900`、`publication_checker_start_threshold_seconds=480`、`publication_stage_timeout_seconds=900`、`phase_reserve_seconds=1200`。`company_history_limit` 是每日公司总预算内的历史回补硬上限，其余容量优先当前期和关键公司缺口；已有 `daily_company_limit`/`strong_season_company_limit` 不扩大。部署前先用 `earnings-recovery` preview 精确列出待恢复 job；备份后只恢复所选任务。

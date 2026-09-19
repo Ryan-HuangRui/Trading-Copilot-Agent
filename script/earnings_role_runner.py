@@ -12,6 +12,7 @@ from typing import Any
 
 from earnings_common import atomic_write_json, classify_model_failure, ensure_inside, read_json, sha256_file, utc_now
 from earnings_delivery import runtime_path
+from earnings_manifest_preflight import preflight_or_defer
 
 
 SUPPORTED_PROFILES = {("gpt-5.6-sol", "medium"), ("gpt-5.6-sol", "high"),
@@ -52,6 +53,11 @@ def run_role(root: Path, manifest_path: Path, *, binary: str, timeout: int) -> d
         raise ValueError("unsupported role profile; silent fallback forbidden")
     if manifest.get("source_mode") != "live":
         raise ValueError("production role runner refuses fixture input")
+    # This gate intentionally precedes runner reservation/Popen so stale context
+    # consumes neither a task attempt nor model/token budget. Minimal legacy test
+    # harness manifests are not registered production role inputs.
+    if manifest.get("manifest_type") == "earnings-role-input":
+        manifest = preflight_or_defer(root, manifest_path)
     binary_path = Path(binary)
     if not binary_path.is_absolute() or not os.access(binary_path, os.X_OK):
         raise ValueError("Codex executable unavailable")
@@ -83,17 +89,27 @@ def run_role(root: Path, manifest_path: Path, *, binary: str, timeout: int) -> d
                "--sandbox", "read-only", "-C", str(root), "-m", model,
                "-c", f'model_reasoning_effort="{effort}"', "-c", 'approval_policy="never"',
                "--json", "--output-last-message", str(output_path), "-"]
-    atomic_write_json(request_path, {"schema_version": 1, "status": "reserved", "model": model, "effort": effort,
+    call_id = f"role:{manifest['task_id']}:{(manifest.get('lease') or {}).get('attempt', 'legacy')}:{manifest_hash[:12]}"
+    atomic_write_json(request_path, {"schema_version": 1, "status": "reserved", "call_id": call_id,
+        "model": model, "effort": effort,
         "provider": "codex-cli-openai-auth", "command": command, "manifest_sha256": manifest_hash,
         "timeout_seconds": timeout, "started_at": utc_now(), "usage": None})
     env = {key: value for key, value in os.environ.items()
            if not key.startswith(("CC_CONNECT_", "TCA_SEC_", "FEISHU_", "LARK_", "LONGBRIDGE_", "LONGPORT_"))}
     proc = None
+    usage = None
     try:
         with events_path.open("w") as events, stderr_path.open("w") as stderr:
             proc = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=events, stderr=stderr,
                                     env=env, text=True, start_new_session=True)
             proc.communicate(prompt, timeout=timeout)
+        for line in events_path.read_text().splitlines():
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if event.get("type") == "turn.completed":
+                usage = event.get("usage")
         if proc.returncode != 0:
             failure_class = classify_model_failure(stderr_path.read_text(errors="ignore"),
                                                    events_path.read_text(errors="ignore"))
@@ -104,14 +120,6 @@ def run_role(root: Path, manifest_path: Path, *, binary: str, timeout: int) -> d
         report = read_json(output_path)
         if not isinstance(report, dict):
             raise ValueError("role response must be a JSON object")
-        usage = None
-        for line in events_path.read_text().splitlines():
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if event.get("type") == "turn.completed":
-                usage = event.get("usage")
         provenance = report.setdefault("provenance", {})
         if not isinstance(provenance, dict):
             raise ValueError("invalid report provenance")
@@ -132,11 +140,13 @@ def run_role(root: Path, manifest_path: Path, *, binary: str, timeout: int) -> d
             detail = ""
             try:
                 payload = json.loads(record.stdout)
-                detail = str(payload.get("reason") or payload.get("errors") or "")[:1200]
+                validation_errors = ((payload.get("validation") or {}).get("errors") or payload.get("errors") or [])
+                detail = str(validation_errors or payload.get("reason") or "")[:1200]
             except json.JSONDecodeError:
                 pass
             raise ValueError("role report failed acceptance" + (f": {detail}" if detail else "; see local record.log"))
-        result = {"status": "completed", "task_id": manifest["task_id"], "report_path": str(report_path.relative_to(root)),
+        result = {"status": "completed", "task_id": manifest["task_id"], "call_id": call_id,
+                  "report_path": str(report_path.relative_to(root)),
                   "model": model, "effort": effort, "usage": usage, "manifest_sha256": manifest_hash,
                   "completed_at": utc_now(), "report_sha256": sha256_file(report_path)}
         atomic_write_json(attempt_dir / "runner-result.json", result)
@@ -145,8 +155,15 @@ def run_role(root: Path, manifest_path: Path, *, binary: str, timeout: int) -> d
         if proc is not None and proc.poll() is None:
             os.killpg(proc.pid, signal.SIGKILL)
             proc.wait(timeout=10)
-        atomic_write_json(attempt_dir / "runner-result.json", {"status": "failed", "task_id": manifest["task_id"],
-            "model": model, "effort": effort, "usage": None, "error": str(exc), "failed_at": utc_now()})
+        validation_errors = validation_errors if "validation_errors" in locals() else []
+        failed = {"status": "failed", "task_id": manifest["task_id"], "call_id": call_id,
+                  "model": model, "effort": effort, "usage": usage, "error": str(exc),
+                  "validation_errors": validation_errors, "failed_at": utc_now()}
+        for kind, path in (("report", locals().get("report_path")), ("markdown", locals().get("markdown_path"))):
+            if isinstance(path, Path) and path.exists():
+                failed[f"{kind}_path"] = str(path.relative_to(root))
+                failed[f"{kind}_sha256"] = sha256_file(path)
+        atomic_write_json(attempt_dir / "runner-result.json", failed)
         raise
 
 

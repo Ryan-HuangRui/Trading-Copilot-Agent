@@ -68,14 +68,19 @@ def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def company_research_configuration_basis(config: dict[str, Any]) -> dict[str, Any]:
+    """Return the complete, versioned semantic input policy for company research."""
+    budgets = config.get("budgets") or {}
+    return {"scope": "company-research-v1", "schema_version": config.get("schema_version"),
+            "sources": config.get("sources"),
+            "daily_profile": (config.get("profiles") or {}).get("daily"),
+            "company_policy": {key: budgets.get(key) for key in (
+                "max_task_attempts", "initialization_lookback_quarters")}}
+
+
 def company_research_configuration_hash(config: dict[str, Any]) -> str:
     """Hash company-research inputs, excluding publication/delivery operations."""
-    budgets = config.get("budgets") or {}
-    payload = {"schema_version": config.get("schema_version"), "sources": config.get("sources"),
-               "daily_profile": (config.get("profiles") or {}).get("daily"),
-               "company_policy": {key: budgets.get(key) for key in (
-                   "max_task_attempts", "initialization_lookback_quarters")}}
-    return sha256_bytes(canonical_json(payload))
+    return sha256_bytes(canonical_json(company_research_configuration_basis(config)))
 
 
 def sha256_file(path: Path) -> str:

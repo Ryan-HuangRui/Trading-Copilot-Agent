@@ -88,6 +88,7 @@
     "companies_per_batch": 5,
     "daily_company_limit": 10,
     "strong_season_company_limit": 20,
+    "company_history_limit": 2,
     "daily_industry_limit": 5,
     "quarterly_tasks_per_day": 1,
     "review_tasks_per_day": 2,

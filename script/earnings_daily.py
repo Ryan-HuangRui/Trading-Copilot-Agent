@@ -54,6 +54,10 @@ class DailyLedger:
         self.db.commit()
         return True
 
+    def release(self, day: str, task: str, role: str) -> None:
+        self.db.execute("DELETE FROM reservations WHERE day=? AND task_id=? AND role=?", (day, task, role))
+        self.db.commit()
+
 
 def command(root: Path, script: str, args: list[str], logs: Path, timeout: int) -> dict:
     result = subprocess.run([sys.executable, str(root / "script" / script), "--repo-root", str(root), *args],
@@ -108,6 +112,12 @@ def fail_owned_attempt(state: EarningsState, manifest: dict, error: str) -> None
     """An outer failure must never revert a committed report or another owner's lease."""
     lease = manifest["lease"]
     with state.immediate() as db:
+        if _quota_exhausted(error):
+            db.execute("""UPDATE research_tasks SET state='queued',attempts=attempts-1,error=?,next_attempt_at=NULL,
+              lease_owner=NULL,lease_expires_at=NULL,updated_at=? WHERE task_id=? AND state='running'
+              AND lease_owner=? AND attempts=?""",
+              (error, utc_now(), manifest["task_id"], lease["owner"], lease["attempt"]))
+            return
         next_attempt = ((datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat(timespec="seconds")
                         if "model_capacity_unavailable" in error.lower() else None)
         db.execute("""UPDATE research_tasks SET state=CASE WHEN attempts<max_attempts
@@ -274,7 +284,10 @@ def run_gap_review_step(root: Path, config: dict, ledger: DailyLedger, qledger: 
         return {"status": "queued", "scope_id": scope["scope_id"], "stage": "gap_review",
                 "attempts": attempts, "reason": "review budget or batch deadline exhausted"}
     attempt = attempts + 1
-    attempt_dir = root / "runtime/earnings/quarterly-scopes" / scope["scope_id"] / "gap-reviews" / input_hash / "attempts" / f"attempt-{attempt}"
+    attempt_name = f"attempt-{attempt}"
+    if row and _quota_exhausted(row["error"]):
+        attempt_name += f"-quota-retry-{uuid.uuid4().hex[:8]}"
+    attempt_dir = root / "runtime/earnings/quarterly-scopes" / scope["scope_id"] / "gap-reviews" / input_hash / "attempts" / attempt_name
     timeout = min(int(config["budgets"]["task_timeout_seconds"]), max(1, int(deadline - time.monotonic())))
     lease = (now + timedelta(seconds=timeout + 60)).isoformat()
     qledger.db.execute("""INSERT INTO quarterly_gap_attempts(scope_id,input_hash,state,attempts,lease_expires_at,
@@ -293,12 +306,16 @@ def run_gap_review_step(root: Path, config: dict, ledger: DailyLedger, qledger: 
             artifact_path=result["artifact"], artifact_sha256=sha256_file(root / result["artifact"]))
         return {**result, "stage": "gap_review", "attempts": attempt}
     except Exception as exc:
+        failure_is_quota = _quota_exhausted(exc)
+        if failure_is_quota:
+            ledger.release(day, task_key, "review")
+            attempt = attempts
         terminal = attempt >= max_attempts
-        failure_state = "terminal_failed" if terminal else "retryable_failed"
+        failure_state = "queued" if failure_is_quota else ("terminal_failed" if terminal else "retryable_failed")
         manifest_path = attempt_dir / "input-manifest.json"
-        qledger.db.execute("""UPDATE quarterly_gap_attempts SET state=?,lease_expires_at=NULL,error=?,updated_at=?
+        qledger.db.execute("""UPDATE quarterly_gap_attempts SET state=?,attempts=?,lease_expires_at=NULL,error=?,updated_at=?
           ,manifest_path=COALESCE(?,manifest_path) WHERE scope_id=? AND input_hash=?""",
-          (failure_state, str(exc), utc_now(), str(manifest_path.relative_to(root)) if manifest_path.exists() else None,
+          (failure_state, attempt, str(exc), utc_now(), str(manifest_path.relative_to(root)) if manifest_path.exists() else None,
            scope["scope_id"], input_hash))
         qledger.db.commit(); qledger.set_stage(scope["scope_id"], "gap_review", "blocked" if terminal else "failed",
                                                input_hash=input_hash, error=str(exc))
@@ -316,6 +333,7 @@ def run_quarterly_step(root: Path, config: dict, universe: dict, state: Earnings
                          universe_path=config["paths"]["universe"], manual_quarter=manual_quarter)
     qledger = QuarterlyReviewLedger(root / "runtime/earnings/quarterly.sqlite")
     outcomes = []
+    quota_open = False
     cap = int(config["budgets"]["quarterly_tasks_per_day"])
     try:
         for scope in review["scopes"]:
@@ -330,6 +348,9 @@ def run_quarterly_step(root: Path, config: dict, universe: dict, state: Earnings
             if scope["maturity"]["critical_gap_status"] == "unresolved":
                 gap = run_gap_review_step(root, config, ledger, qledger, deployed, day, scope, deadline)
                 outcomes.append(gap)
+                if _quota_exhausted(gap.get("reason")):
+                    quota_open = True
+                    break
                 if gap["status"] == "success":
                     refreshed = inspect_due(root, day=day, cutoff=cutoff, config_path=config_path,
                                             universe_path=config["paths"]["universe"], manual_quarter=manual_quarter)
@@ -389,9 +410,14 @@ def run_quarterly_step(root: Path, config: dict, universe: dict, state: Earnings
             except Exception as exc:
                 qledger.set_stage(scope["scope_id"], role, "failed", error=str(exc))
                 outcomes.append({"status": "failed", "scope_id": scope["scope_id"], "stage": role, "reason": str(exc)})
+                if "preflight rejected before model invocation" in str(exc):
+                    ledger.release(day, f"{scope['scope_id']}:{role}", "quarterly")
+                if _quota_exhausted(exc):
+                    quota_open = True
+                    break
                 continue
         # Formal market synthesis waits for every frozen industry synthesis in the same quarter.
-        if ledger.used(day, "quarterly") < cap and review["scopes"]:
+        if not quota_open and ledger.used(day, "quarterly") < cap and review["scopes"]:
             first = review["scopes"][0]; reports = []
             quarter_scopes = [{"scope_id": row["scope_id"], "industry_id": row["industry_id"],
                 "quarter_id": row["quarter_id"], "revision": row["revision"],
@@ -429,8 +455,13 @@ def run_quarterly_step(root: Path, config: dict, universe: dict, state: Earnings
                     for frozen_scope in quarter_scopes: args.extend(["--frozen-scope", frozen_scope["frozen_scope_path"]])
                     context = command(root, "earnings_market_context.py", args, logs, 120)
                     if context.get("model_execution_required"):
-                        market_result = run_role(root, root / context["artifacts"][0], binary=deployed["codex_bin"],
-                            timeout=min(int(config["budgets"]["task_timeout_seconds"]), max(1, int(deadline-time.monotonic()))))
+                        try:
+                            market_result = run_role(root, root / context["artifacts"][0], binary=deployed["codex_bin"],
+                                timeout=min(int(config["budgets"]["task_timeout_seconds"]), max(1, int(deadline-time.monotonic()))))
+                        except Exception as exc:
+                            if "preflight rejected before model invocation" in str(exc):
+                                ledger.release(day, market_key, "quarterly")
+                            raise
                         outcomes.append(market_result)
                         for frozen_scope in quarter_scopes: qledger.set_stage(frozen_scope["scope_id"], "market", "completed")
                     else: outcomes.append(context)
@@ -680,33 +711,36 @@ def operational_issue_summary(errors: list[str]) -> str:
 
 
 def summarize_batch_usage(root: Path, day: str, reports: list[dict], publications: list[dict]) -> dict:
-    calls: list[dict] = []
-    for report in reports:
-        if report.get("model"):
-            calls.append({"role": report.get("model"), "usage": report.get("usage"), "cached_result": False})
+    """Count durable model call identities once, including failed and gap-review calls."""
+    calls: dict[str, dict] = {}
     zone = ZoneInfo("Asia/Shanghai")
-    completed_tasks = {report.get("task_id") for report in reports if report.get("task_id")}
-    for result_path in (root / "runtime/earnings/runs").glob("**/runner-result.json"):
+    result_paths = list((root / "runtime/earnings/runs").glob("**/runner-result.json"))
+    result_paths += list((root / "runtime/earnings/quarterly-scopes").glob("**/runner-result.json"))
+    for result_path in result_paths:
         try:
             result = read_json(result_path)
         except (OSError, json.JSONDecodeError):
             continue
-        failed_at = parse_time(result.get("failed_at"))
-        if (result.get("status") == "failed" and result.get("task_id") not in completed_tasks
-                and failed_at and failed_at.astimezone(zone).date().isoformat() == day):
-            calls.append({"role": result.get("model"), "usage": result.get("usage"),
-                          "cached_result": False, "status": "failed"})
-    for result in publications:
-        if result.get("cached"):
+        at = parse_time(result.get("completed_at") or result.get("failed_at"))
+        if not at or at.astimezone(zone).date().isoformat() != day:
             continue
-        for call in (result.get("attempt") or {}).get("calls", []):
+        call_id = result.get("call_id") or f"legacy-result:{result_path.relative_to(root)}"
+        calls[call_id] = {"role": result.get("model"), "usage": result.get("usage"),
+                          "status": result.get("status")}
+    for state_path in (root / "runtime/earnings/publications/runs").glob("**/attempt-state.json"):
+        try:
+            state = read_json(state_path)
+        except (OSError, json.JSONDecodeError):
+            continue
+        for call in state.get("calls", []):
             started = parse_time(call.get("started_at"))
             if started and started.astimezone(zone).date().isoformat() == day:
-                calls.append({"role": call.get("role"), "usage": call.get("usage"), "cached_result": False,
-                              "status": call.get("status")})
+                call_id = call.get("call_id") or f"legacy-publication:{state_path.relative_to(root)}:{call.get('role')}:{call.get('attempt')}"
+                calls[call_id] = {"role": call.get("role"), "usage": call.get("usage"),
+                                  "status": call.get("status")}
     totals = {key: 0 for key in ("input_tokens", "cached_input_tokens", "output_tokens", "reasoning_output_tokens")}
     missing = 0
-    for call in calls:
+    for call in calls.values():
         usage = call.get("usage")
         if not isinstance(usage, dict):
             missing += 1
@@ -716,8 +750,9 @@ def summarize_batch_usage(root: Path, day: str, reports: list[dict], publication
             if isinstance(value, int):
                 totals[key] += value
     totals["non_cached_input_tokens"] = max(0, totals["input_tokens"] - totals["cached_input_tokens"])
+    cached_jobs = {str(row.get("job_id") or row.get("publication_id")) for row in publications if row.get("cached")}
     return {"actual_model_calls": len(calls), "calls_with_usage_null": missing,
-            "cached_results_reused": sum(bool(row.get("cached")) for row in publications), **totals}
+            "cached_results_reused": len(cached_jobs), **totals}
 
 
 def finalize(root: Path, deployed: dict, deployed_path: Path, day: str, reports: list[dict], errors: list[str],
@@ -880,32 +915,53 @@ def run(args: argparse.Namespace) -> dict:
                         publications.append({"status": "failed", "reason": str(exc)})
                         errors.append(f"publication-resume:{exc}")
                 context_attempts = 0
+                history_limit = min(limit, max(0, int(config["budgets"].get("company_history_limit", 2))))
+                current_limit = max(0, limit - history_limit)
+                current_exhausted = current_limit == 0
+                current_used = history_used = 0
                 while (not model_circuit_open and ledger.used(day, "company") < limit
                        and time.monotonic() < early_deadline and context_attempts < limit * 2):
                     context_attempts += 1
+                    tier = "history" if current_exhausted else "current"
+                    if tier == "history" and history_used >= history_limit:
+                        break
                     try:
-                        context = command(root, "earnings_context.py", [*context_common, "--limit", "1", "--run-id", f"{run_id}-{uuid.uuid4().hex[:8]}",
+                        context = command(root, "earnings_context.py", [*context_common, "--limit", "1", "--company-tier", tier,
+                            "--run-id", f"{run_id}-{uuid.uuid4().hex[:8]}",
                             "--lease-seconds", str(int(config["budgets"]["task_timeout_seconds"]) + 180)], logs, 120)
                     except (RuntimeError, subprocess.TimeoutExpired) as exc:
                         errors.append(f"company-context:{exc}")
                         continue
                     manifests = context.get("manifests", [])
                     if not manifests:
+                        if tier == "current":
+                            current_exhausted = True
+                            continue
                         break
                     for path in manifests:
                         manifest = read_json(root / path)
                         if not ledger.reserve(day, manifest["task_id"], "company", limit):
                             break
+                        if tier == "history": history_used += 1
+                        else: current_used += 1
                         try:
                             reports.append(run_role(root, root / path, binary=deployed["codex_bin"],
                                 timeout=min(int(config["budgets"]["task_timeout_seconds"]), max(1, int(early_deadline-time.monotonic())))))
                         except Exception as exc:
                             fail_owned_attempt(state, manifest, str(exc))
+                            if "preflight rejected before model invocation" in str(exc):
+                                ledger.release(day, manifest["task_id"], "company")
+                                if tier == "history": history_used -= 1
+                                else: current_used -= 1
+                            if _quota_exhausted(exc):
+                                ledger.release(day, manifest["task_id"], "company")
                             errors.append(f"role:{manifest['task_id']}:{exc}")
                             if _quota_exhausted(exc):
                                 model_circuit_open = True
                                 errors.append("model-circuit:quota exhausted; remaining model work deferred")
                                 break
+                    if tier == "current" and current_used >= current_limit:
+                        current_exhausted = True
                 if config.get("publication", {}).get("enabled") is True and not model_circuit_open:
                     try:
                         # Publish accepted current-company research before downstream work can consume
@@ -945,6 +1001,8 @@ def run(args: argparse.Namespace) -> dict:
                                 timeout=min(int(config["budgets"]["task_timeout_seconds"]), max(1, int(early_deadline-time.monotonic())))))
                         except Exception as exc:
                             fail_owned_attempt(state, manifest, str(exc))
+                            if "preflight rejected before model invocation" in str(exc):
+                                ledger.release(day, manifest["task_id"], "industry")
                             raise
                         ledger.db.execute("INSERT OR REPLACE INTO industry_inputs VALUES(?,?)", (work["scope"], work["fingerprint"])); ledger.db.commit()
                     except Exception as exc:
@@ -960,6 +1018,9 @@ def run(args: argparse.Namespace) -> dict:
                         quarterly = run_quarterly_step(root, config, universe, state, ledger, deployed, day, cutoff,
                                                        run_id, logs, deadline, args.config, getattr(args, "manual_quarter", None))
                     reports.extend(row for row in quarterly if row.get("report_path"))
+                    if any(_quota_exhausted(row.get("reason")) for row in quarterly):
+                        model_circuit_open = True
+                        errors.append("model-circuit:quota exhausted in quarterly work; publication deferred")
                     errors.extend(f"quarterly:{row.get('scope_id', 'market')}:{row.get('stage', 'unknown')}:{row.get('reason', row['status'])}"
                                   for row in quarterly if row.get("status") in {"retryable_failed", "terminal_failed", "failed"})
                 except Exception as exc:

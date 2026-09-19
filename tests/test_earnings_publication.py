@@ -358,7 +358,7 @@ class EarningsPublicationTests(unittest.TestCase):
                     recheck_publication(root, repair_manifest)
 
 
-    def test_failed_model_call_is_recorded_once_and_never_automatically_retried(self):
+    def test_failed_writer_call_gets_one_bounded_recovery_attempt(self):
         with TemporaryDirectory() as temp:
             root = Path(temp).resolve(); (root / "config").mkdir()
             config_source = Path(__file__).resolve().parents[1] / "config/earnings_research.json"
@@ -374,9 +374,11 @@ class EarningsPublicationTests(unittest.TestCase):
                 self.assertEqual((state["model_calls_started"], state["model_calls_completed"], state["model_calls_failed"]),
                                  (1, 0, 1))
                 self.assertIsNone(state["calls"][0]["usage"])
-                with self.assertRaisesRegex(ValueError, "already attempted"):
+                with self.assertRaises(subprocess.TimeoutExpired):
                     run_publication(root, manifest, binary=str(binary), timeout=60)
-                self.assertEqual(codex.call_count, 1)
+                self.assertEqual(codex.call_count, 2)
+                with self.assertRaisesRegex(ValueError, "bounded attempt limit"):
+                    run_publication(root, manifest, binary=str(binary), timeout=60)
 
     def test_completed_writer_can_resume_checker_with_new_bounded_timeout(self):
         with TemporaryDirectory() as temp:

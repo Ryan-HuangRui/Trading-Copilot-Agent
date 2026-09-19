@@ -88,6 +88,11 @@ def _codex(root: Path, binary: Path, profile: dict[str, Any], prompt: str, outpu
             proc = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=event_file, stderr=error_file,
                                     text=True, env=env, start_new_session=True)
             proc.communicate(prompt, timeout=timeout)
+        usage = None
+        for line in events.read_text().splitlines():
+            try: event = json.loads(line)
+            except json.JSONDecodeError: continue
+            if event.get("type") == "turn.completed": usage = event.get("usage")
         if proc.returncode:
             failure_class = classify_model_failure(stderr.read_text(errors="ignore"), events.read_text(errors="ignore"))
             prefix = f"model_{failure_class}: " if failure_class else ""
@@ -96,25 +101,30 @@ def _codex(root: Path, binary: Path, profile: dict[str, Any], prompt: str, outpu
         if proc is not None and proc.poll() is None:
             os.killpg(proc.pid, signal.SIGKILL); proc.wait(timeout=10)
         raise
-    usage = None
-    for line in events.read_text().splitlines():
-        try: event = json.loads(line)
-        except json.JSONDecodeError: continue
-        if event.get("type") == "turn.completed": usage = event.get("usage")
     return usage
 
 
 def _start_attempt_call(state_path: Path, role: str, profile: dict[str, Any], *, max_attempts: int = 1) -> int:
     state = read_json(state_path)
     calls = state.setdefault("calls", [])
+    recovered = False
+    for row in calls:
+        if row.get("role") == role and row.get("status") == "started":
+            row.update(status="unknown", failure="interrupted before durable completion",
+                       failure_class="ambiguous", finished_at=utc_now(), recovered_legacy_started=True)
+            recovered = True
     prior = [row for row in calls if row.get("role") == role]
     if any(row.get("status") == "completed" for row in prior):
         raise ValueError(f"{role} model call already completed")
-    if len(prior) >= max_attempts:
+    charged = [row for row in prior if row.get("failure_class") != "quota_exhausted"]
+    if len(charged) >= max_attempts:
+        if recovered:
+            atomic_write_json(state_path, state)
         raise ValueError(f"{role} model call was already attempted; bounded attempt limit reached")
-    attempt = len(prior) + 1
+    attempt = max([int(row.get("attempt") or 0) for row in prior] or [0]) + 1
     calls.append({"role": role, "model": profile["model"], "effort": profile["reasoning_effort"],
                   "attempt": attempt, "status": "started", "usage": None, "failure": None,
+                  "failure_class": None, "call_id": f"publication:{state_path.parent.name}:{role}:{attempt}",
                   "started_at": utc_now()})
     state["model_calls_started"] = len(calls)
     atomic_write_json(state_path, state)
@@ -122,12 +132,13 @@ def _start_attempt_call(state_path: Path, role: str, profile: dict[str, Any], *,
 
 
 def _finish_attempt_call(state_path: Path, role: str, *, status: str, usage: Any = None,
-                         failure: str | None = None) -> None:
+                         failure: str | None = None, failure_class: str | None = None) -> None:
     state = read_json(state_path); calls = state.setdefault("calls", [])
     matches = [row for row in calls if row.get("role") == role and row.get("status") == "started"]
     if len(matches) != 1:
         raise ValueError(f"{role} model call state is not uniquely started")
-    call = matches[0]; call.update({"status": status, "usage": usage, "failure": failure, "finished_at": utc_now()})
+    call = matches[0]; call.update({"status": status, "usage": usage, "failure": failure,
+                                   "failure_class": failure_class, "finished_at": utc_now()})
     state["model_calls_started"] = len(calls)
     state["model_calls_completed"] = sum(row.get("status") == "completed" for row in calls)
     state["model_calls_failed"] = sum(row.get("status") in {"failed", "unknown"} for row in calls)
@@ -160,7 +171,10 @@ def prepare_repair_input(root: Path, original_manifest_path: Path) -> Path:
     original_result_path = ensure_inside((root / original["permitted_outputs"]["runner_result"]).resolve(), [run_root])
     if original_result_path.exists() and read_json(original_result_path).get("status") == "success":
         raise ValueError("successful publication cannot be repaired")
-    draft_path = ensure_inside((root / original["permitted_outputs"]["draft"]).resolve(), [run_root])
+    writer_stage_path = original_dir / "writer-stage.json"
+    writer_stage = read_json(writer_stage_path) if writer_stage_path.exists() else {}
+    draft_path = ensure_inside((root / writer_stage.get("draft_path",
+        original["permitted_outputs"]["draft"])).resolve(), [run_root])
     checker_stage_path = original_dir / "checker-stage.json"
     checker_stage = read_json(checker_stage_path) if checker_stage_path.exists() else {}
     semantic_path = ensure_inside((root / checker_stage.get("semantic_path",
@@ -202,6 +216,7 @@ def prepare_repair_input(root: Path, original_manifest_path: Path) -> Path:
                    "parent_manifest_sha256": sha256_file(original_path),
                    "parent_draft_path": str(draft_path.relative_to(root)),
                    "parent_draft_sha256": sha256_file(draft_path),
+                   "parent_semantic_path": str(semantic_path.relative_to(root)),
                    "parent_semantic_sha256": sha256_file(semantic_path), "feedback": feedback},
         "permitted_outputs": {"draft": str((repair_dir / "reader-draft.md").relative_to(root)),
                               "semantic_check": str((repair_dir / "semantic-check.json").relative_to(root)),
@@ -238,7 +253,8 @@ def run_publication(root: Path, manifest_path: Path, *, binary: str, timeout: in
         if sha256_file(parent_manifest) != repair_meta.get("parent_manifest_sha256"):
             raise ValueError("parent manifest changed before repair execution")
         parent = read_json(parent_manifest)
-        parent_semantic = ensure_inside((root / parent["permitted_outputs"]["semantic_check"]).resolve(),
+        parent_semantic = ensure_inside((root / repair_meta.get("parent_semantic_path",
+            parent["permitted_outputs"]["semantic_check"])).resolve(),
                                         [root / "runtime/earnings/publications/runs"])
         if sha256_file(parent_semantic) != repair_meta.get("parent_semantic_sha256"):
             raise ValueError("parent semantic check changed before repair execution")
@@ -302,26 +318,33 @@ def run_publication(root: Path, manifest_path: Path, *, binary: str, timeout: in
         "明确支持同一对比期间和该因果。缺少一致预期或价格时明确未知，不写超预期、低估、目标价或买卖指令。只输出 Markdown。\n"
         + repair_prompt + json.dumps(manifest, ensure_ascii=False) + "\n冻结研究：\n" + "\n---\n".join(source_text))
     writer_stage = path.parent / "writer-stage.json"
+    active_draft = draft
     if writer_stage.exists():
         frozen_writer = read_json(writer_stage)
-        if not draft.exists() or sha256_file(draft) != frozen_writer.get("draft_sha256"):
+        active_draft = root / frozen_writer.get("draft_path", manifest["permitted_outputs"]["draft"])
+        if not active_draft.exists() or sha256_file(active_draft) != frozen_writer.get("draft_sha256"):
             raise ValueError("completed writer draft changed before checker retry")
         writer_usage = frozen_writer.get("usage")
         _adopt_completed_stage(attempt_state_path, "writer", manifest["writer_profile"], writer_usage)
-    elif draft.exists():
+    elif draft.exists() and not any(row.get("role") == "writer" for row in read_json(attempt_state_path).get("calls", [])):
         raise ValueError("writer result is ambiguous; preserve draft and reconcile before retry")
     else:
-        _start_attempt_call(attempt_state_path, "writer", manifest["writer_profile"])
+        writer_attempt = _start_attempt_call(attempt_state_path, "writer", manifest["writer_profile"], max_attempts=2)
+        active_draft = draft if writer_attempt == 1 else path.parent / f"reader-draft-attempt-{writer_attempt}.md"
         try:
-            writer_usage = _codex(root, binary_path, manifest["writer_profile"], writer_prompt, draft,
-                                  path.parent / "writer-events.jsonl", path.parent / "writer-stderr.log", remaining())
+            suffix = "" if writer_attempt == 1 else f"-attempt-{writer_attempt}"
+            writer_usage = _codex(root, binary_path, manifest["writer_profile"], writer_prompt, active_draft,
+                                  path.parent / f"writer-events{suffix}.jsonl", path.parent / f"writer-stderr{suffix}.log", remaining())
         except BaseException as exc:
-            _finish_attempt_call(attempt_state_path, "writer", status="failed", failure=f"{type(exc).__name__}: {exc}")
+            _finish_attempt_call(attempt_state_path, "writer", status="failed", failure=f"{type(exc).__name__}: {exc}",
+                                 failure_class=classify_model_failure(exc))
             raise
         _finish_attempt_call(attempt_state_path, "writer", status="completed", usage=writer_usage)
-        atomic_write_json(writer_stage, {"status": "completed", "draft_sha256": sha256_file(draft),
+        atomic_write_json(writer_stage, {"status": "completed", "draft_path": str(active_draft.relative_to(root)),
+            "draft_sha256": sha256_file(active_draft),
             "model": manifest["writer_profile"]["model"], "effort": manifest["writer_profile"]["reasoning_effort"],
             "usage": writer_usage, "completed_at": utc_now()})
+    draft = active_draft
     occurrence_inventory = claim_occurrence_inventory(draft.read_text(encoding="utf-8"))
     checker_prompt = ("你是独立财报发布核对者。逐项将读者稿与冻结研究比较，检查数字、单位、期间、来源链接、反证、推断强度、"
         "市场预期未知项和可读性。任何漂移或关键遗漏必须 failed。只输出 JSON："
@@ -358,7 +381,8 @@ def run_publication(root: Path, manifest_path: Path, *, binary: str, timeout: in
                                    path.parent / f"checker-events{suffix}.jsonl",
                                    path.parent / f"checker-stderr{suffix}.log", remaining())
         except BaseException as exc:
-            _finish_attempt_call(attempt_state_path, "checker", status="failed", failure=f"{type(exc).__name__}: {exc}")
+            _finish_attempt_call(attempt_state_path, "checker", status="failed", failure=f"{type(exc).__name__}: {exc}",
+                                 failure_class=classify_model_failure(exc))
             raise
         _finish_attempt_call(attempt_state_path, "checker", status="completed", usage=checker_usage)
         semantic = read_json(checker_output)
@@ -424,11 +448,11 @@ def recheck_publication(root: Path, manifest_path: Path) -> dict[str, Any]:
     check = dict(manifest); digest = check.pop("input_manifest_hash", None)
     if not digest or digest != sha256_bytes(canonical_json(check)):
         raise ValueError("publication input manifest hash mismatch")
-    draft_path = ensure_inside(root / manifest["permitted_outputs"]["draft"], [path.parent])
+    writer_stage = read_json(path.parent / "writer-stage.json")
+    draft_path = ensure_inside(root / writer_stage.get("draft_path", manifest["permitted_outputs"]["draft"]), [path.parent])
     checker_stage = read_json(path.parent / "checker-stage.json")
     semantic_path = ensure_inside(root / checker_stage.get("semantic_path",
         manifest["permitted_outputs"]["semantic_check"]), [path.parent])
-    writer_stage = read_json(path.parent / "writer-stage.json")
     if sha256_file(draft_path) != writer_stage.get("draft_sha256"):
         raise ValueError("completed writer draft changed")
     if sha256_file(semantic_path) != checker_stage.get("semantic_sha256"):

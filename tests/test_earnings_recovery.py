@@ -2,6 +2,7 @@ import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+from datetime import datetime, timedelta, timezone
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "script"))
@@ -12,6 +13,30 @@ from earnings_state import EarningsState
 
 
 class EarningsRecoveryTests(unittest.TestCase):
+    def test_release_expired_task_mutates_only_selected_lease(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            state = EarningsState(root / "runtime/earnings/state.sqlite")
+            task_ids = []
+            for subject in ("one", "two"):
+                task_id, _ = state.enqueue_task(task_type="company", subject_id=subject, period_start=None,
+                    period_end="2026-06-30", input_hash=subject, method_version="v1", source_mode="live",
+                    profile="daily", model="gpt-5.6-sol", effort="medium")
+                state.claim_task(task_id, owner=subject, lease_seconds=60)
+                task_ids.append(task_id)
+            expired = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+            state.db.execute("UPDATE research_tasks SET lease_expires_at=? WHERE task_id IN (?,?)",
+                             (expired, *task_ids))
+            state.close()
+            preview = recover(root, action="release-expired-task", task_id=task_ids[0])
+            self.assertEqual(preview["planned"]["state"], "retryable_failed")
+            recover(root, action="release-expired-task", task_id=task_ids[0], execute=True)
+            state = EarningsState(root / "runtime/earnings/state.sqlite")
+            rows = {row["task_id"]: row["state"] for row in state.db.execute("SELECT task_id,state FROM research_tasks")}
+            self.assertEqual(rows[task_ids[0]], "retryable_failed")
+            self.assertEqual(rows[task_ids[1]], "running")
+            state.close()
+
     def test_exact_checker_recovery_previews_then_backs_up_and_executes_once(self):
         with TemporaryDirectory() as temp:
             root = Path(temp).resolve()

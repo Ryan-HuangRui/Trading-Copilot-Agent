@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import ExitStack
 from datetime import datetime, timezone
 import json
 from pathlib import Path
@@ -10,6 +11,7 @@ import sqlite3
 
 from earnings_common import ROOT, atomic_write_json, read_json, safe_segment, utc_now
 from earnings_publication_runner import prepare_repair_input
+from earnings_delivery import exclusive_lock
 from earnings_state import EarningsState
 
 
@@ -25,10 +27,13 @@ def _backup(state: EarningsState, target: Path) -> None:
 def recover(root: Path, *, action: str, job_id: str | None = None, task_id: str | None = None,
             execute: bool = False) -> dict:
     root = root.resolve()
-    state = EarningsState(root / "runtime/earnings/state.sqlite")
     target_id = safe_segment(job_id or task_id or "", "recovery target")
     audit_dir = root / "runtime/earnings/recovery"
     audit_path = audit_dir / f"{action}-{target_id}.json"
+    stack = ExitStack()
+    if execute:
+        stack.enter_context(exclusive_lock(root / "runtime/earnings/daily.lock"))
+    state = EarningsState(root / "runtime/earnings/state.sqlite")
     try:
         if audit_path.exists() and read_json(audit_path).get("executed"):
             raise ValueError("this exact bounded recovery was already executed")
@@ -73,7 +78,16 @@ def recover(root: Path, *, action: str, job_id: str | None = None, task_id: str 
             lease = datetime.fromisoformat(row["lease_expires_at"].replace("Z", "+00:00"))
             if lease >= datetime.now(timezone.utc):
                 raise ValueError("research task lease is still active")
-            mutation = {"state": "retryable_failed" if row["attempts"] < row["max_attempts"] else "terminal_failed"}
+            newer = state.db.execute("""SELECT 1 FROM research_tasks n JOIN research_tasks t ON t.task_id=?
+              WHERE n.rowid>t.rowid AND n.task_type=t.task_type AND n.subject_id=t.subject_id
+              AND n.period_start IS t.period_start AND n.period_end IS t.period_end AND n.source_mode=t.source_mode""",
+              (task_id,)).fetchone()
+            if newer:
+                mutation = {"state": "terminal_failed", "error": "superseded while lease was active"}
+            elif row["attempts"] >= row["max_attempts"]:
+                mutation = {"state": "terminal_failed", "error": "lease expired at maximum attempts"}
+            else:
+                mutation = {"state": "retryable_failed", "error": "lease expired; eligible for bounded recovery"}
         else:
             raise ValueError("unsupported recovery action")
         result = {"schema_version": 1, "workflow": "earnings-recovery", "status": "preview",
@@ -93,13 +107,20 @@ def recover(root: Path, *, action: str, job_id: str | None = None, task_id: str 
               (mutation["state"], mutation["attempts"], mutation["input_manifest_path"],
                f"operator bounded recovery: {action}", utc_now(), job_id))
         else:
-            state.reap_expired_tasks()
+            cursor = state.db.execute("""UPDATE research_tasks SET state=?,error=?,lease_owner=NULL,
+              lease_expires_at=NULL,updated_at=? WHERE task_id=? AND state='running'
+              AND lease_expires_at=? AND attempts=? AND max_attempts=?""",
+              (mutation["state"], mutation["error"], utc_now(), task_id, before["lease_expires_at"],
+               before["attempts"], before["max_attempts"]))
+            if cursor.rowcount != 1:
+                raise ValueError("research task changed after preview; no recovery applied")
         result.update(status="success", executed=True, backup_path=str(backup.relative_to(root)), executed_at=utc_now())
         audit_dir.mkdir(parents=True, exist_ok=True)
         atomic_write_json(audit_path, result)
         return result
     finally:
         state.close()
+        stack.close()
 
 
 def main() -> None:

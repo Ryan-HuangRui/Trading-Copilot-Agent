@@ -40,12 +40,46 @@ def bounded_financial_history(facts: list[dict[str, Any]], anchor: date, limit: 
     return selected[:limit], len(selected) > limit
 
 
+def _retry_feedback(root: Path, state: EarningsState, task: dict[str, Any]) -> dict[str, Any] | None:
+    """Preserve actionable validator feedback and immutable prior draft references."""
+    if int(task.get("attempts", 0)) <= 1:
+        return None
+    feedback: dict[str, Any] = {"reason": task.get("error"), "prior_attempts": []}
+    rows = state.db.execute(
+        """SELECT attempt,path,sha256 FROM task_attempt_manifests
+        WHERE task_id=? AND attempt<? ORDER BY attempt DESC""",
+        (task["task_id"], int(task["attempts"])),
+    ).fetchall()
+    for row in rows[:2]:
+        manifest_path = resolve_path(root, row["path"])
+        item: dict[str, Any] = {"attempt": row["attempt"], "manifest_path": row["path"],
+                               "manifest_sha256": row["sha256"]}
+        result_path = manifest_path.parent / "runner-result.json"
+        if result_path.exists():
+            result = read_json(result_path)
+            item["result"] = {key: result.get(key) for key in ("status", "error", "validation_errors")}
+        if manifest_path.exists():
+            prior = read_json(manifest_path)
+            for kind in ("json", "markdown"):
+                value = (prior.get("permitted_outputs") or {}).get(kind)
+                if value:
+                    path = resolve_path(root, value)
+                    if path.exists():
+                        item[f"{kind}_path"] = value
+                        item[f"{kind}_sha256"] = sha256_file(path)
+        feedback["prior_attempts"].append(item)
+    return feedback
+
+
 def _manifest_for_task(root: Path, state: EarningsState, task: dict[str, Any], cutoff: datetime,
                        config_hash: str, universe_path: Path, run_id: str) -> dict[str, Any]:
     frozen = state.task_input(task["task_id"])
     frozen_config_hash = frozen.get("configuration_hash")
     if not isinstance(frozen_config_hash, str) or not frozen_config_hash:
         raise ValueError("frozen task configuration hash is missing")
+    frozen_basis = frozen.get("configuration_basis")
+    if not isinstance(frozen_basis, dict) or sha256_bytes(canonical_json(frozen_basis)) != frozen_config_hash:
+        raise ValueError("frozen task semantic configuration is missing or hash-mismatched")
     # Running tasks retain the configuration hash captured when they were created.
     # Current delivery/publication tuning cannot invalidate their evidence input.
     config_hash = frozen_config_hash
@@ -116,7 +150,11 @@ def _manifest_for_task(root: Path, state: EarningsState, task: dict[str, Any], c
     for artifact in state.db.execute(
         """SELECT a.* FROM report_artifacts a JOIN research_tasks t ON t.task_id=a.task_id
         WHERE a.report_type='company' AND t.subject_id IN (SELECT event_id FROM earnings_events WHERE issuer_id=?)
-        AND a.task_id!=? ORDER BY a.period_end DESC,a.created_at DESC LIMIT 4""", (event["issuer_id"], task["task_id"]),
+        AND a.task_id!=? AND t.state='completed' AND NOT EXISTS(
+          SELECT 1 FROM research_tasks n WHERE n.rowid>t.rowid AND n.task_type=t.task_type
+          AND n.subject_id=t.subject_id AND n.period_start IS t.period_start AND n.period_end IS t.period_end
+          AND n.source_mode=t.source_mode AND n.task_id!=? AND n.state IN ('queued','running','completed','retryable_failed'))
+        ORDER BY a.period_end DESC,a.created_at DESC LIMIT 4""", (event["issuer_id"], task["task_id"], task["task_id"]),
     ):
         artifact = dict(artifact)
         artifact_path = ensure_inside(resolve_path(root, artifact["path"]), [root / "report" / "earnings"])
@@ -158,7 +196,7 @@ def _manifest_for_task(root: Path, state: EarningsState, task: dict[str, Any], c
         "normalized_financials": normalized,
         "missing_inputs": missing,
         "previous_artifacts": previous_artifacts,
-        "retry_feedback": task.get("error") if int(task.get("attempts", 0)) > 1 else None,
+        "retry_feedback": _retry_feedback(root, state, task),
         "permitted_outputs": {"json": relative_to_root(root, output_json), "markdown": relative_to_root(root, output_md),
                               "completion": relative_to_root(root, output_dir / "completion.json")},
         "instructions": {
@@ -187,6 +225,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--owner")
     parser.add_argument("--limit", type=int)
     parser.add_argument("--lease-seconds", type=int)
+    parser.add_argument("--company-tier", choices=["current", "history"])
     return parser
 
 
@@ -210,7 +249,11 @@ def main() -> None:
     manifests: list[str] = []
     failures: list[dict[str, Any]] = []
     try:
-        tasks = state.claim_tasks(owner=owner, limit=limit, lease_seconds=lease, task_type="company")
+        universe_payload = read_json(universe)
+        key_symbols = [symbol for industry in universe_payload.get("industries", [])
+                       for symbol in industry.get("key_symbols", [])]
+        tasks = state.claim_tasks(owner=owner, limit=limit, lease_seconds=lease, task_type="company",
+                                  company_tier=args.company_tier, priority_symbols=key_symbols)
         for task in tasks:
             try:
                 manifest = _manifest_for_task(root, state, task, cutoff, config_hash, universe, run_id)

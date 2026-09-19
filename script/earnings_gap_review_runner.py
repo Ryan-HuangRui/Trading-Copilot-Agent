@@ -9,7 +9,7 @@ import signal
 import subprocess
 from typing import Any
 
-from earnings_common import atomic_write_json, ensure_inside, read_json, sha256_file, utc_now
+from earnings_common import atomic_write_json, classify_model_failure, ensure_inside, read_json, sha256_file, utc_now
 from earnings_delivery import runtime_path
 from earnings_period_review import record_gap_review
 from earnings_role_runner import SUPPORTED_PROFILES
@@ -64,18 +64,27 @@ def run_gap_review(root: Path, input_path: Path, *, binary: str, profile: dict[s
     command = [str(binary_path), "exec", "--ignore-user-config", "--ephemeral", "--sandbox", "read-only",
                "-C", str(root), "-m", model, "-c", f'model_reasoning_effort="{effort}"',
                "-c", 'approval_policy="never"', "--json", "--output-last-message", str(output_path), "-"]
-    atomic_write_json(request_path, {"schema_version": 1, "status": "reserved", "command": command,
+    call_id = f"gap-review:{review_input['scope_id']}:{review_input['input_hash']}:{attempt_dir.name}"
+    atomic_write_json(request_path, {"schema_version": 1, "status": "reserved", "call_id": call_id, "command": command,
         "manifest_sha256": manifest_hash, "timeout_seconds": timeout, "started_at": utc_now(), "usage": None})
     env = {key: value for key, value in os.environ.items()
            if not key.startswith(("CC_CONNECT_", "TCA_SEC_", "FEISHU_", "LARK_", "LONGBRIDGE_", "LONGPORT_"))}
     proc = None
+    usage = None
     try:
         with events_path.open("w") as events, stderr_path.open("w") as stderr:
             proc = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=events, stderr=stderr,
                                     env=env, text=True, start_new_session=True)
             proc.communicate(prompt, timeout=timeout)
+        for line in events_path.read_text().splitlines():
+            try: event = json.loads(line)
+            except json.JSONDecodeError: continue
+            if event.get("type") == "turn.completed": usage = event.get("usage")
         if proc.returncode != 0:
-            raise RuntimeError(f"gap review process failed: exit {proc.returncode}; see local stderr")
+            failure_class = classify_model_failure(stderr_path.read_text(errors="ignore"),
+                                                   events_path.read_text(errors="ignore"))
+            prefix = f"model_{failure_class}: " if failure_class else ""
+            raise RuntimeError(f"{prefix}gap review process failed: exit {proc.returncode}; see local stderr")
         if sha256_file(manifest_path) != manifest_hash or sha256_file(input_path) != manifest["gap_input_sha256"]:
             raise ValueError("frozen gap review input changed during execution")
         for row in review_input.get("reports", []):
@@ -87,19 +96,15 @@ def run_gap_review(root: Path, input_path: Path, *, binary: str, profile: dict[s
         candidate_path = attempt_dir / "candidate-result.json"
         atomic_write_json(candidate_path, candidate)
         accepted = record_gap_review(root, review_input["scope_id"], candidate_path)
-        usage = None
-        for line in events_path.read_text().splitlines():
-            try: event = json.loads(line)
-            except json.JSONDecodeError: continue
-            if event.get("type") == "turn.completed": usage = event.get("usage")
         result = {**accepted, "attempt_manifest": str(manifest_path.relative_to(root)),
                   "candidate_path": str(candidate_path.relative_to(root)), "model": model,
-                  "effort": effort, "usage": usage, "completed_at": utc_now()}
+                  "effort": effort, "call_id": call_id, "usage": usage, "completed_at": utc_now()}
         atomic_write_json(attempt_dir / "runner-result.json", result)
         return result
     except BaseException as exc:
         if proc is not None and proc.poll() is None:
             os.killpg(proc.pid, signal.SIGKILL); proc.wait(timeout=10)
         atomic_write_json(attempt_dir / "runner-result.json", {"status": "failed", "error": str(exc),
-                          "model": model, "effort": effort, "usage": None, "failed_at": utc_now()})
+                          "model": model, "effort": effort, "call_id": call_id,
+                          "usage": usage, "failed_at": utc_now()})
         raise
