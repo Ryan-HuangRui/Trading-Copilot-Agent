@@ -10,7 +10,7 @@ from pathlib import Path
 import re
 from typing import Any
 
-from earnings_common import (ROOT, atomic_write_json, canonical_json, confined_path, configuration_path, emit, envelope, ensure_inside, load_config, parse_time,
+from earnings_common import (ROOT, atomic_write_json, canonical_json, company_research_configuration_hash, confined_path, configuration_path, emit, envelope, ensure_inside, load_config, parse_time,
                              read_json, relative_to_root, resolve_path, safe_segment, sha256_bytes, shanghai_date, stable_id, utc_now)
 from earnings_sources import IssuerIRClient, SecClient, SharedRateLimiter, SourceError, sec_recent_filings
 from earnings_state import EarningsState
@@ -175,7 +175,20 @@ def _enqueue_event(state: EarningsState, config: dict[str, Any], config_hash: st
         raise ValueError(f"issuer missing before task freeze: {event['issuer_id']}")
     frozen_issuer = {key: issuer[key] for key in ("issuer_id", "cik", "symbol", "name", "identity_status")}
     frozen.update({"event": dict(event), "issuer": frozen_issuer,
-                   "configuration_hash": config_hash, "source_mode": source_mode})
+                   "configuration_hash": company_research_configuration_hash(config), "source_mode": source_mode})
+    comparable = {key: value for key, value in frozen.items() if key != "configuration_hash"}
+    # Compatibility migration: legacy tasks froze the full config hash.  Reuse an
+    # otherwise identical frozen input instead of re-researching every company when
+    # only publication/delivery tuning changes or this scoped hash is introduced.
+    for existing in state.db.execute("""SELECT task_id FROM research_tasks WHERE task_type='company'
+      AND subject_id=? AND period_start IS ? AND period_end IS ? AND source_mode=? ORDER BY rowid DESC""",
+      (event["event_id"], event.get("reporting_start"), event.get("reporting_end"), source_mode)):
+        try:
+            prior = state.task_input(existing["task_id"])
+        except ValueError:
+            continue
+        if {key: value for key, value in prior.items() if key != "configuration_hash"} == comparable:
+            return str(existing["task_id"]), False
     input_hash = sha256_bytes(canonical_json(frozen))
     task_id, created = state.enqueue_task(
         task_type="company", subject_id=event["event_id"], period_start=event.get("reporting_start"),

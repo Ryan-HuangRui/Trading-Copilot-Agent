@@ -10,7 +10,7 @@ import subprocess
 import sys
 from typing import Any
 
-from earnings_common import atomic_write_json, ensure_inside, read_json, sha256_file, utc_now
+from earnings_common import atomic_write_json, classify_model_failure, ensure_inside, read_json, sha256_file, utc_now
 from earnings_delivery import runtime_path
 
 
@@ -75,6 +75,8 @@ def run_role(root: Path, manifest_path: Path, *, binary: str, timeout: int) -> d
               "coverage 直接包含 expected_issuers/disclosed_issuers/fetched_issuers/researched_issuers/key_missing_issuers，不得再嵌套 counts；"
               "有 manifest.coverage_audit.counts 时完整照抄。numeric_facts[].period.kind 必须是 duration 或 instant，日期为 YYYY-MM-DD 或 null。"
               "short_quote 必须逐字摘录，HTML 可以仅去除标签、解码实体和折叠空白，不能改写、拼接不连续句子或补上表格省略的文字。"
+              "每条 short_quote 同时保留规范化前的连续原文和精确 source_locator；若 manifest.retry_feedback 存在，只定向修正被指出的字段，"
+              "不得无反馈地改变其他已支持结论。资料包未包含某项内容不等于公司未披露该内容。"
               "如关键材料不足，明确 partial/insufficient 并给出缺口，不得补造。\n冻结输入文件："
               + str(manifest_path.relative_to(root)) + "\n" + json.dumps(manifest, ensure_ascii=False))
     command = [str(binary_path), "exec", "--ignore-user-config", "--ephemeral",
@@ -93,7 +95,10 @@ def run_role(root: Path, manifest_path: Path, *, binary: str, timeout: int) -> d
                                     env=env, text=True, start_new_session=True)
             proc.communicate(prompt, timeout=timeout)
         if proc.returncode != 0:
-            raise RuntimeError(f"role process failed: exit {proc.returncode}; see local stderr")
+            failure_class = classify_model_failure(stderr_path.read_text(errors="ignore"),
+                                                   events_path.read_text(errors="ignore"))
+            prefix = f"model_{failure_class}: " if failure_class else ""
+            raise RuntimeError(f"{prefix}role process failed: exit {proc.returncode}; see local stderr")
         if sha256_file(manifest_path) != manifest_hash:
             raise ValueError("frozen manifest changed during role execution")
         report = read_json(output_path)
@@ -124,7 +129,13 @@ def run_role(root: Path, manifest_path: Path, *, binary: str, timeout: int) -> d
             capture_output=True, text=True, timeout=60, check=False)
         (attempt_dir / "record.log").write_text(record.stdout + "\n" + record.stderr)
         if record.returncode:
-            raise ValueError("role report failed acceptance; see local record.log")
+            detail = ""
+            try:
+                payload = json.loads(record.stdout)
+                detail = str(payload.get("reason") or payload.get("errors") or "")[:1200]
+            except json.JSONDecodeError:
+                pass
+            raise ValueError("role report failed acceptance" + (f": {detail}" if detail else "; see local record.log"))
         result = {"status": "completed", "task_id": manifest["task_id"], "report_path": str(report_path.relative_to(root)),
                   "model": model, "effort": effort, "usage": usage, "manifest_sha256": manifest_hash,
                   "completed_at": utc_now(), "report_sha256": sha256_file(report_path)}

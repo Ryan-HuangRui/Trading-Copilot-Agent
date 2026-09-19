@@ -284,7 +284,8 @@ def _validate_report_inner(report_path: Path, manifest_path: Path, root: Path) -
             if source_path and isinstance(quote, str) and source_path.suffix.lower() in {".txt", ".htm", ".html", ".xhtml", ".json", ".xml"}:
                 try:
                     if not quote_in_original(quote, source_path.read_text(encoding="utf-8", errors="ignore"), source_path.suffix):
-                        errors.append(f"evidence {evidence_id}: quote not found in original")
+                        normalized_quote = " ".join(quote.split())[:240]
+                        errors.append(f"evidence {evidence_id}: quote not found in original at {item.get('source_locator')}: {normalized_quote}")
                 except OSError as exc:
                     errors.append(f"evidence {evidence_id}: cannot inspect original quote: {exc}")
         if not item.get("source_locator"):

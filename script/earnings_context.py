@@ -10,7 +10,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from earnings_common import (ROOT, atomic_write_json, canonical_json, confined_path, configuration_path, emit, envelope, ensure_inside, load_config,
+from earnings_common import (ROOT, atomic_write_json, canonical_json, company_research_configuration_hash, confined_path, configuration_path, emit, envelope, ensure_inside, load_config,
                              parse_time, read_json, relative_to_root, resolve_path, sha256_bytes,
                              sha256_file, safe_segment, shanghai_date, stable_id, utc_now)
 from earnings_financials import derive_standalone_facts, extract_sec_company_facts
@@ -43,8 +43,12 @@ def bounded_financial_history(facts: list[dict[str, Any]], anchor: date, limit: 
 def _manifest_for_task(root: Path, state: EarningsState, task: dict[str, Any], cutoff: datetime,
                        config_hash: str, universe_path: Path, run_id: str) -> dict[str, Any]:
     frozen = state.task_input(task["task_id"])
-    if frozen.get("configuration_hash") != config_hash:
-        raise ValueError("task configuration was superseded; recollect before research")
+    frozen_config_hash = frozen.get("configuration_hash")
+    if not isinstance(frozen_config_hash, str) or not frozen_config_hash:
+        raise ValueError("frozen task configuration hash is missing")
+    # Running tasks retain the configuration hash captured when they were created.
+    # Current delivery/publication tuning cannot invalidate their evidence input.
+    config_hash = frozen_config_hash
     event = frozen.get("event") or {}
     issuer = frozen.get("issuer") or {}
     if event.get("event_id") != task["subject_id"] or not issuer or event.get("issuer_id") != issuer.get("issuer_id"):
@@ -154,6 +158,7 @@ def _manifest_for_task(root: Path, state: EarningsState, task: dict[str, Any], c
         "normalized_financials": normalized,
         "missing_inputs": missing,
         "previous_artifacts": previous_artifacts,
+        "retry_feedback": task.get("error") if int(task.get("attempts", 0)) > 1 else None,
         "permitted_outputs": {"json": relative_to_root(root, output_json), "markdown": relative_to_root(root, output_md),
                               "completion": relative_to_root(root, output_dir / "completion.json")},
         "instructions": {
@@ -189,7 +194,8 @@ def main() -> None:
     args = build_parser().parse_args()
     root = Path(args.repo_root).resolve()
     config_path = configuration_path(root, args.config)
-    config, config_hash = load_config(root, str(config_path))
+    config, _ = load_config(root, str(config_path))
+    config_hash = company_research_configuration_hash(config)
     cutoff = parse_time(args.cutoff)
     if cutoff is None:
         raise ValueError("cutoff is required")

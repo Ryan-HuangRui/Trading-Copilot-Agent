@@ -8,7 +8,7 @@
 
 日批次固定为 Asia/Shanghai 10:00，一天一次。当前真实时刻作为 UTC 资料截止；报告中的财务期间单独保留。初始化每天最多处理 5 家，采集限额与公司模型调用限额分开；普通日最多 10 次公司角色，强财报季 20 次，行业最多 5 次。实际调用前预留预算，进程失败和同日重启均不会重置预算。配置中的 token/currency 硬预算暂不支持：如非 null，runner 显式拒绝运行，不能声称订阅登录提供硬金额限额。
 
-初始并发为 1。整个日批次默认最多 7200 秒，单角色最多 1800 秒；未完成工作保留在状态库，后续日批次继续。P3 的日行业比较保留兼容；P4 已实现财政期间重叠映射与自动季度 DAG，但配置开关默认关闭，启用和恢复见 `docs/earnings-research-p4-runbook.md`。
+初始并发为 1。整个日批次默认最多 7200 秒，研究单角色最多 1800 秒；发布另行区分批次剩余预算、启动阈值和单次执行超时。默认完整 writer+checker 至少剩余 900 秒才启动，已完成 writer 的 checker 至少剩余 480 秒才启动，单次发布执行最多 900 秒。未达到阈值时保持排队。已完成 writer 可在次日以新的、有审计记录且最多一次的 checker attempt 继续，首次调用的绝对 deadline 和 timeout 不再永久锁死任务。未完成工作保留在状态库，后续日批次继续。P3 的日行业比较保留兼容；P4 已实现财政期间重叠映射与自动季度 DAG，但配置开关默认关闭，启用和恢复见 `docs/earnings-research-p4-runbook.md`。
 
 `script/earnings_role_runner.py` 以显式 model/effort 启动独立 `codex exec`，使用 `--ignore-user-config --ephemeral --sandbox read-only`。模型返回 JSON，外层写报告、校验并登记；模型不负责写 state 或发送消息。CLI 事件中可用 usage 原样保存，缺失为 null。需要 NAS CLI 支持这些参数，不能悄悄降级模型或绕过沙箱。
 
@@ -23,7 +23,7 @@
 
 ## 通知行为
 
-正常日最多一条合并摘要。P3 首版只自动推送有证据、完整度至少 partial 的 thesis_state 新建或变化；普通数值更新和同一 thesis_state 下的细节变化先归档。此规则便于控制初期通知质量，可在实际样本评估后增加重要数值变化规则。
+正常日最多一条合并摘要。P3 首版只自动推送有证据、完整度至少 partial 的 thesis_state 新建或变化；普通数值更新和同一 thesis_state 下的细节变化先归档。摘要明确写“今日新增并回读全文 N 份”；N=0 时不得使用固定的全文交付成功话术。成功全文必须列真实云文档 URL，同日研究进展与问题尽量合并；没有正常摘要但连续失败时，失败通知只给稳定的问题分类和数量，同一问题指纹不重复发送，命令、内部路径和堆栈只留本地。
 
 无工作或无值得推送的变化会落一份 suppressed 决策，不发送“执行成功”等消息。跨两个不同日批次持续失败才形成运行异常通知。达到重试上限的当前任务持续计入健康状态，不能因退出可执行队列而被误报为恢复；被新输入替代的旧失败保留为历史。公司/行业完整报告与通知状态分开；已登记报告即便此前外层进程中断，也可在下次 finalizer 恢复处理。
 
@@ -45,8 +45,16 @@
 ```bash
 python3 script/earnings_daily.py --collect-only
 python3 script/earnings_daily.py --resume-only
+python3 script/trading_copilot.py earnings-recovery --action resume-checker --job-id <EXACT_JOB_ID>
+python3 script/trading_copilot.py earnings-recovery --action resume-checker --job-id <EXACT_JOB_ID> --execute
 python3 script/earnings_delivery.py --decision runtime/earnings/outbox/<ID>/decision.json
 python3 script/earnings_delivery.py --decision runtime/earnings/outbox/<ID>/decision.json --execute
 ```
 
 默认 daily CLI 不发送，只有 `--send` 或 NAS wrapper 会触发已开启的交付；delivery CLI 默认 preview。上述占位路径须替换成已生成文件。统一 CLI 已注册 earnings-daily 与 earnings-deliver，参数与对应脚本一致。
+
+`earnings-recovery` 同样默认 preview，必须精确指定一个 job/task；`--execute` 前程序以 SQLite backup API 写入 `runtime/earnings/recovery/backups/`，并留下单次恢复审计，禁止对同一目标重复扩张尝试。`resume-checker` 只复用已冻结 writer，`schedule-repair` 只对已有 checker/validator 失败创建唯一修稿，`release-expired-task` 只处理已过期租约。不要删除 SQLite、清空 publication 目录或全量重跑。
+
+模型错误分为 quota 与 capacity：明确额度耗尽会立即熔断本批次后续模型调用，采集、状态和可恢复队列仍保留；容量不足只进入有限退避，不冒充额度耗尽，也不升级模型。`daily-result.json.usage_summary` 记录本批次真实调用数、缓存/非缓存输入、输出、缺失 usage 和缓存结果复用数；usage 缺失保持 null 语义，不填零。
+
+公司研究任务的配置指纹只包含 source policy、daily profile 和公司研究重试/历史窗口；publication、cloud、通知和批次时间参数不再触发全量公司重研。升级时会复用除旧全量配置哈希外完全相同的 legacy frozen task；已运行任务继续使用创建时冻结的配置哈希。

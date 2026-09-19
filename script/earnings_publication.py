@@ -40,11 +40,13 @@ _UNIT = {
     "CNY": ("CNY", Decimal("1")), "元": ("CNY", Decimal("1")),
     "CNY million": ("CNY", Decimal("1000000")), "CNY billion": ("CNY", Decimal("1000000000")),
     "百万元": ("CNY", Decimal("1000000")), "亿元": ("CNY", Decimal("100000000")),
+    "year": ("duration_year", Decimal("1")), "years": ("duration_year", Decimal("1")),
+    "年": ("duration_year", Decimal("1")),
 }
 
 _NUMBER_PATTERN = r"[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?"
 _FINANCIAL_UNIT_PATTERN = (r"USD\s+(?:million|billion)|CNY\s+(?:million|billion)|million\s+USD|billion\s+USD|"
-                           r"percentage\s+points|百万美元|亿美元|百万元|亿元|个百分点|个基点|美元|元|%|％|bps")
+                           r"percentage\s+points|百万美元|亿美元|百万元|亿元|个百分点|个基点|美元|元|%|％|bps|years?|年")
 
 
 def _unit(value: str) -> tuple[str, Decimal] | None:
@@ -62,7 +64,7 @@ def _display_candidates(value: str, unit: str, *, rounded: bool = False) -> list
         return [] if unit.strip().lower() in {"million", "billion"} else [{"value": value, "unit": unit}]
     targets = {"USD": ("USD", "USD million", "USD billion", "亿美元"),
                "CNY": ("CNY", "百万元", "亿元"),
-               "ratio": (unit,)}[source[0]]
+               "ratio": (unit,), "duration_year": ("年", "year", "years")}[source[0]]
     base = Decimal(value) * source[1]
     rows: list[dict[str, str]] = []
     for target in targets:
@@ -283,6 +285,13 @@ def _claims(markdown: str) -> list[dict[str, Any]]:
     pattern = rf"(?<![0-9.])({_NUMBER_PATTERN})\s*({_FINANCIAL_UNIT_PATTERN})"
     rows = []
     for match in re.finditer(pattern, clean, re.I):
+        # Calendar labels such as “2026年” are periods, not financial quantities.
+        if match.group(2) == "年" and "," not in match.group(1) and "." not in match.group(1):
+            try:
+                if 1900 <= int(match.group(1)) <= 2100:
+                    continue
+            except ValueError:
+                pass
         context = clean[max(0, match.start() - 40):match.end() + 15]
         basis = "non-GAAP" if re.search(r"non[- ]?GAAP|非GAAP", context, re.I) else ("GAAP" if re.search(r"\bGAAP\b", context, re.I) else None)
         value = match.group(1).replace(",", "")

@@ -20,7 +20,8 @@ from earnings_delivery import destination, deliver, exclusive_lock, prepare_noti
 from earnings_gap_review_runner import run_gap_review
 from earnings_lark import LarkDocumentPublisher
 from earnings_period_review import QuarterlyReviewLedger, inspect_due, map_fiscal_period, resolve_report_period
-from earnings_publication_runner import prepare_input as prepare_publication_input, run_publication
+from earnings_publication_runner import (prepare_input as prepare_publication_input,
+                                         prepare_repair_input, run_publication)
 from earnings_role_runner import run_role
 from earnings_state import EarningsState
 
@@ -107,10 +108,12 @@ def fail_owned_attempt(state: EarningsState, manifest: dict, error: str) -> None
     """An outer failure must never revert a committed report or another owner's lease."""
     lease = manifest["lease"]
     with state.immediate() as db:
+        next_attempt = ((datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat(timespec="seconds")
+                        if "model_capacity_unavailable" in error.lower() else None)
         db.execute("""UPDATE research_tasks SET state=CASE WHEN attempts<max_attempts
-          THEN 'retryable_failed' ELSE 'terminal_failed' END,error=?,lease_owner=NULL,lease_expires_at=NULL,updated_at=?
+          THEN 'retryable_failed' ELSE 'terminal_failed' END,error=?,next_attempt_at=?,lease_owner=NULL,lease_expires_at=NULL,updated_at=?
           WHERE task_id=? AND state='running' AND lease_owner=? AND attempts=?""",
-          (error, utc_now(), manifest["task_id"], lease["owner"], lease["attempt"]))
+          (error, next_attempt, utc_now(), manifest["task_id"], lease["owner"], lease["attempt"]))
 
 
 def notification_material(report: dict, prior: dict | None) -> bool:
@@ -185,6 +188,23 @@ def _publication_matches_current_head(publication: dict, heads: dict[tuple[str, 
     head = heads.get((publication["publication_type"], str(publication["scope_id"])))
     source_hashes = {source.get("sha256") for source in publication.get("sources", [])}
     return head is not None and head["sha256"] in source_hashes
+
+
+def _publication_failure_detail(result: dict) -> str:
+    """Persist the real checker/validator failure without leaking a traceback into notifications."""
+    detail = {"reason": result.get("reason"), "semantic_errors": result.get("semantic_errors") or [],
+              "deterministic_errors": result.get("deterministic_errors") or []}
+    return json.dumps(detail, ensure_ascii=False, sort_keys=True)
+
+
+def _cached_publication_result(root: Path, manifest_path: Path) -> dict | None:
+    manifest = read_json(manifest_path)
+    result_path = root / manifest["permitted_outputs"]["runner_result"]
+    return read_json(result_path) if result_path.exists() else None
+
+
+def _quota_exhausted(value: object) -> bool:
+    return "model_quota_exhausted" in str(value).lower()
 
 
 def unresolved_terminal_count(state: EarningsState) -> int:
@@ -426,6 +446,7 @@ def run_publication_work(root: Path, config: dict, state: EarningsState, ledger:
     outcomes: list[dict] = []
     writer_cap = int(config["budgets"].get("publication_writers_per_day", 0))
     checker_cap = int(config["budgets"].get("publication_checkers_per_day", 0))
+    repair_cap = int(config["budgets"].get("publication_repairs_per_day", 1))
     cloud_cap = int(config["budgets"].get("publication_cloud_operations_per_day", 0))
     backfill_cap = int(config["budgets"].get("publication_backfill_limit", 1))
     rows = state.db.execute("SELECT * FROM report_artifacts WHERE source_mode='live' ORDER BY rowid DESC").fetchall() if discover else []
@@ -499,6 +520,7 @@ def run_publication_work(root: Path, config: dict, state: EarningsState, ledger:
         if is_backfill and ledger.used(day, "publication_backfill") >= backfill_cap:
             continue
         has_writer = False
+        is_repair = False
         try:
             if job.get("input_manifest_path"):
                 manifest_path = root / job["input_manifest_path"]
@@ -509,11 +531,37 @@ def run_publication_work(root: Path, config: dict, state: EarningsState, ledger:
                     config_path=config_path)
                 state.db.execute("UPDATE publication_jobs SET input_manifest_path=?,updated_at=? WHERE job_id=?",
                                  (str(manifest_path.relative_to(root)), utc_now(), job["job_id"]))
+            cached = _cached_publication_result(root, manifest_path)
+            if cached and cached.get("status") == "success":
+                state.db.execute("UPDATE publication_jobs SET state='cloud_pending',publication_manifest_path=?,error=NULL,updated_at=? WHERE job_id=?",
+                                 (cached["manifest_path"], utc_now(), job["job_id"]))
+                outcomes.append({**cached, "cached": True, "job_id": job["job_id"]})
+                continue
+            if cached and cached.get("status") == "failed":
+                original = read_json(manifest_path)
+                if original.get("repair"):
+                    state.db.execute("UPDATE publication_jobs SET state='terminal_failed',error=?,updated_at=? WHERE job_id=?",
+                                     (_publication_failure_detail(cached), utc_now(), job["job_id"]))
+                    outcomes.append({"status": "failed", "job_id": job["job_id"], "reason": cached.get("reason"),
+                                     "cached": True, "failure": _publication_failure_detail(cached)})
+                    continue
+                manifest_path = prepare_repair_input(root, manifest_path)
+                state.db.execute("UPDATE publication_jobs SET state='retryable_failed',input_manifest_path=?,error=?,updated_at=? WHERE job_id=?",
+                                 (str(manifest_path.relative_to(root)), _publication_failure_detail(cached), utc_now(), job["job_id"]))
+                has_writer = False
+            is_repair = bool(read_json(manifest_path).get("repair"))
         except Exception as exc:
             exhausted = int(job.get("attempts", 0)) + 1 >= int(config["budgets"].get("max_task_attempts", 2))
             state.db.execute("UPDATE publication_jobs SET state=?,error=?,attempts=attempts+1,updated_at=? WHERE job_id=?",
                              ("terminal_failed" if exhausted else "retryable_failed", str(exc), utc_now(), job["job_id"]))
             outcomes.append({"status": "failed", "job_id": job["job_id"], "reason": str(exc)})
+            continue
+        remaining = int(deadline - time.monotonic())
+        checker_start = int(config["budgets"].get("publication_checker_start_threshold_seconds", 480))
+        full_start = int(config["budgets"].get("publication_full_start_threshold_seconds", 900))
+        if remaining < (checker_start if has_writer else full_start):
+            continue
+        if is_repair and ledger.used(day, "publication_repair") >= repair_cap:
             continue
         if has_writer:
             if ledger.used(day, "publication_checker") >= checker_cap:
@@ -530,9 +578,25 @@ def run_publication_work(root: Path, config: dict, state: EarningsState, ledger:
             if not ledger.reserve(day, job["job_id"] + ":writer", "publication_writer", writer_cap): continue
             if not ledger.reserve(day, job["job_id"] + ":checker", "publication_checker", checker_cap):
                 continue
+        if is_repair and not ledger.reserve(day, job["job_id"] + ":repair", "publication_repair", repair_cap):
+            continue
         try:
+            stage_timeout = int(config["budgets"].get("publication_stage_timeout_seconds",
+                                                       config["budgets"]["task_timeout_seconds"]))
             result = run_publication(root, manifest_path, binary=deployed["codex_bin"],
-                timeout=min(int(config["budgets"]["task_timeout_seconds"]), max(1, int(deadline-time.monotonic()))))
+                timeout=min(stage_timeout, max(1, int(deadline-time.monotonic()))))
+            if result.get("status") != "success" or not result.get("manifest_path"):
+                detail = _publication_failure_detail(result)
+                if not is_repair:
+                    repair_path = prepare_repair_input(root, manifest_path)
+                    state.db.execute("UPDATE publication_jobs SET state='retryable_failed',input_manifest_path=?,error=?,attempts=attempts+1,updated_at=? WHERE job_id=?",
+                                     (str(repair_path.relative_to(root)), detail, utc_now(), job["job_id"]))
+                else:
+                    state.db.execute("UPDATE publication_jobs SET state='terminal_failed',error=?,attempts=attempts+1,updated_at=? WHERE job_id=?",
+                                     (detail, utc_now(), job["job_id"]))
+                outcomes.append({"status": "failed", "job_id": job["job_id"], "reason": result.get("reason"),
+                                 "failure": detail, "repair_scheduled": not is_repair})
+                continue
             state.db.execute("UPDATE publication_jobs SET state='cloud_pending',publication_manifest_path=?,error=NULL,attempts=attempts+1,updated_at=? WHERE job_id=?",
                              (result["manifest_path"], utc_now(), job["job_id"])); outcomes.append(result)
             if job["publication_type"] == "industry":
@@ -548,7 +612,14 @@ def run_publication_work(root: Path, config: dict, state: EarningsState, ledger:
             exhausted = int(job.get("attempts", 0)) + 1 >= int(config["budgets"].get("max_task_attempts", 2))
             next_state = "terminal_failed" if exhausted else ("checker_pending" if (manifest_path.parent / "writer-stage.json").exists() else "retryable_failed")
             state.db.execute("UPDATE publication_jobs SET state=?,error=?,attempts=attempts+1,updated_at=? WHERE job_id=?",
-                             (next_state, str(exc), utc_now(), job["job_id"])); outcomes.append({"status": "failed", "job_id": job["job_id"], "reason": str(exc)})
+                             (next_state, str(exc), utc_now(), job["job_id"]))
+            attempt_path = manifest_path.parent / "attempt-state.json"
+            attempt = read_json(attempt_path) if attempt_path.exists() else None
+            outcomes.append({"status": "failed", "job_id": job["job_id"], "reason": str(exc), "attempt": attempt})
+            if _quota_exhausted(exc):
+                break
+            if "model_capacity_unavailable" in str(exc).lower():
+                break
 
     cloud_states = "'cloud_pending','auth_failed','readback_failed'" + (",'archived'" if config["delivery"].get("lark_documents_enabled") is True else "")
     cloud_jobs = state.db.execute(f"SELECT * FROM publication_jobs WHERE state IN ({cloud_states}) OR (state='retryable_failed' AND publication_manifest_path IS NOT NULL) ORDER BY revision DESC,updated_at").fetchall()
@@ -598,6 +669,55 @@ def render_publication_entries(rows: list[tuple[dict, dict, dict]]) -> list[str]
     """Never truncate checked cloud report entries; notification size is gated later as a whole."""
     return [f"- {publication['title']}（{publication['edition']} v{publication['version']}）：{cloud['url']}"
             for publication, cloud, _version in rows]
+
+
+def operational_issue_summary(errors: list[str]) -> str:
+    categories: dict[str, int] = {}
+    for error in errors:
+        category = str(error).split(":", 1)[0].replace("model-circuit", "模型额度")
+        categories[category] = categories.get(category, 0) + 1
+    return "；".join(f"{name} {count} 项" for name, count in sorted(categories.items()))
+
+
+def summarize_batch_usage(root: Path, day: str, reports: list[dict], publications: list[dict]) -> dict:
+    calls: list[dict] = []
+    for report in reports:
+        if report.get("model"):
+            calls.append({"role": report.get("model"), "usage": report.get("usage"), "cached_result": False})
+    zone = ZoneInfo("Asia/Shanghai")
+    completed_tasks = {report.get("task_id") for report in reports if report.get("task_id")}
+    for result_path in (root / "runtime/earnings/runs").glob("**/runner-result.json"):
+        try:
+            result = read_json(result_path)
+        except (OSError, json.JSONDecodeError):
+            continue
+        failed_at = parse_time(result.get("failed_at"))
+        if (result.get("status") == "failed" and result.get("task_id") not in completed_tasks
+                and failed_at and failed_at.astimezone(zone).date().isoformat() == day):
+            calls.append({"role": result.get("model"), "usage": result.get("usage"),
+                          "cached_result": False, "status": "failed"})
+    for result in publications:
+        if result.get("cached"):
+            continue
+        for call in (result.get("attempt") or {}).get("calls", []):
+            started = parse_time(call.get("started_at"))
+            if started and started.astimezone(zone).date().isoformat() == day:
+                calls.append({"role": call.get("role"), "usage": call.get("usage"), "cached_result": False,
+                              "status": call.get("status")})
+    totals = {key: 0 for key in ("input_tokens", "cached_input_tokens", "output_tokens", "reasoning_output_tokens")}
+    missing = 0
+    for call in calls:
+        usage = call.get("usage")
+        if not isinstance(usage, dict):
+            missing += 1
+            continue
+        for key in totals:
+            value = usage.get(key)
+            if isinstance(value, int):
+                totals[key] += value
+    totals["non_cached_input_tokens"] = max(0, totals["input_tokens"] - totals["cached_input_tokens"])
+    return {"actual_model_calls": len(calls), "calls_with_usage_null": missing,
+            "cached_results_reused": sum(bool(row.get("cached")) for row in publications), **totals}
 
 
 def finalize(root: Path, deployed: dict, deployed_path: Path, day: str, reports: list[dict], errors: list[str],
@@ -666,11 +786,16 @@ def finalize(root: Path, deployed: dict, deployed_path: Path, day: str, reports:
         lines.extend(render_publication_entries(publication_material))
         for publication, cloud, version in publication_material:
             versions.append(version)
+    else:
+        lines.extend(["", "今日新增并回读全文：0 份。"])
     if errors:
-        lines.append("本批次存在未完成步骤，已保留本地失败记录和待处理任务。")
+        lines.append(f"待处理问题：{operational_issue_summary(errors)}；详细诊断已保留在 NAS 本地审计记录。")
+    delivery_audit = (f"交付审计：今日新增全文 {len(publication_material)} 份"
+                      + ("，以上链接均已由显式用户身份写入并回读；" if publication_material else "；")
+                      + "消息仅由仓库绑定的 cc-connect 发送。")
     lines.extend(["", "数据质量：仅采用已归档的 SEC/发行人披露，覆盖缺口随报告保留。",
                   f"运行校验：本批次完成 {len(reports)} 个角色，失败步骤 {len(errors)} 个。",
-                  "交付审计：核对通过的全文由显式用户身份写入并回读；消息仅由仓库绑定的 cc-connect 发送。"])
+                  delivery_audit])
     decision = prepare_notification(root, deployed, day=day, body="\n".join(lines), report_versions=versions,
         kind="daily", rationale="evidenced thesis-state change or checked formal publication" if material or publication_material else "no material thesis-state change or deliverable publication",
         should_send=bool(material or publication_material))
@@ -705,6 +830,7 @@ def run(args: argparse.Namespace) -> dict:
         ledger = DailyLedger(root)
         state = EarningsState(root / "runtime/earnings/state.sqlite")
         reports, errors = [], []
+        model_circuit_open = False
         deadline = time.monotonic() + batch_seconds
         phase_reserve = min(int(config["budgets"].get("phase_reserve_seconds", 300)), max(0, batch_seconds // 4))
         early_deadline = deadline - phase_reserve
@@ -749,11 +875,13 @@ def run(args: argparse.Namespace) -> dict:
                         publications.extend(resumed_publications)
                         errors.extend(f"publication-resume:{row.get('job_id', 'unknown')}:{row.get('reason', 'failed')}"
                                       for row in resumed_publications if row.get("status") == "failed")
+                        model_circuit_open = any(_quota_exhausted(row.get("reason")) for row in resumed_publications)
                     except Exception as exc:
                         publications.append({"status": "failed", "reason": str(exc)})
                         errors.append(f"publication-resume:{exc}")
                 context_attempts = 0
-                while ledger.used(day, "company") < limit and time.monotonic() < early_deadline and context_attempts < limit * 2:
+                while (not model_circuit_open and ledger.used(day, "company") < limit
+                       and time.monotonic() < early_deadline and context_attempts < limit * 2):
                     context_attempts += 1
                     try:
                         context = command(root, "earnings_context.py", [*context_common, "--limit", "1", "--run-id", f"{run_id}-{uuid.uuid4().hex[:8]}",
@@ -774,7 +902,11 @@ def run(args: argparse.Namespace) -> dict:
                         except Exception as exc:
                             fail_owned_attempt(state, manifest, str(exc))
                             errors.append(f"role:{manifest['task_id']}:{exc}")
-                if config.get("publication", {}).get("enabled") is True:
+                            if _quota_exhausted(exc):
+                                model_circuit_open = True
+                                errors.append("model-circuit:quota exhausted; remaining model work deferred")
+                                break
+                if config.get("publication", {}).get("enabled") is True and not model_circuit_open:
                     try:
                         # Publish accepted current-company research before downstream work can consume
                         # the remaining batch clock. The final pass discovers later formal reports.
@@ -783,10 +915,11 @@ def run(args: argparse.Namespace) -> dict:
                         publications.extend(current_publications)
                         errors.extend(f"publication-current:{row.get('job_id', 'unknown')}:{row.get('reason', 'failed')}"
                                       for row in current_publications if row.get("status") == "failed")
+                        model_circuit_open = any(_quota_exhausted(row.get("reason")) for row in current_publications)
                     except Exception as exc:
                         publications.append({"status": "failed", "reason": str(exc)})
                         errors.append(f"publication-current:{exc}")
-                for work in industry_work(root, state, universe, ledger):
+                for work in ([] if model_circuit_open else industry_work(root, state, universe, ledger)):
                     cap = int(config["budgets"]["daily_industry_limit"])
                     if ledger.used(day, "industry") >= cap or time.monotonic() >= early_deadline:
                         break
@@ -816,16 +949,23 @@ def run(args: argparse.Namespace) -> dict:
                         ledger.db.execute("INSERT OR REPLACE INTO industry_inputs VALUES(?,?)", (work["scope"], work["fingerprint"])); ledger.db.commit()
                     except Exception as exc:
                         errors.append(f"industry:{work['industry']}:{exc}")
+                        if _quota_exhausted(exc):
+                            model_circuit_open = True
+                            errors.append("model-circuit:quota exhausted; remaining model work deferred")
+                            break
                 try:
-                    quarterly = run_quarterly_step(root, config, universe, state, ledger, deployed, day, cutoff,
-                                                   run_id, logs, deadline, args.config, getattr(args, "manual_quarter", None))
+                    if model_circuit_open:
+                        quarterly = [{"status": "queued", "reason": "model quota circuit open; deferred"}]
+                    else:
+                        quarterly = run_quarterly_step(root, config, universe, state, ledger, deployed, day, cutoff,
+                                                       run_id, logs, deadline, args.config, getattr(args, "manual_quarter", None))
                     reports.extend(row for row in quarterly if row.get("report_path"))
                     errors.extend(f"quarterly:{row.get('scope_id', 'market')}:{row.get('stage', 'unknown')}:{row.get('reason', row['status'])}"
                                   for row in quarterly if row.get("status") in {"retryable_failed", "terminal_failed", "failed"})
                 except Exception as exc:
                     quarterly = [{"status": "failed", "reason": str(exc)}]
                     errors.append(f"quarterly:{exc}")
-                if config.get("publication", {}).get("enabled") is True:
+                if config.get("publication", {}).get("enabled") is True and not model_circuit_open:
                     try:
                         new_publications = run_publication_work(root, config, state, ledger, deployed, day, deadline,
                                                                config_path=args.config)
@@ -843,7 +983,9 @@ def run(args: argparse.Namespace) -> dict:
             exhausted = unresolved_terminal_count(state)
             if exhausted:
                 errors.append(f"terminal_tasks:{exhausted} current research tasks require operator review")
-            publication_exhausted = state.db.execute("SELECT COUNT(*) FROM publication_jobs WHERE state='terminal_failed'").fetchone()[0]
+            publication_exhausted = state.db.execute("""SELECT COUNT(*) FROM publication_jobs p
+              WHERE p.state='terminal_failed' AND NOT EXISTS(SELECT 1 FROM publication_jobs n
+                WHERE n.series_key=p.series_key AND n.revision>p.revision)""").fetchone()[0]
             if publication_exhausted:
                 errors.append(f"terminal_publications:{publication_exhausted} publication jobs require operator review")
             publication_gaps = state.db.execute("SELECT COUNT(*) FROM publication_gaps WHERE state='actionable'").fetchone()[0]
@@ -853,15 +995,18 @@ def run(args: argparse.Namespace) -> dict:
             ledger.db.execute("INSERT OR REPLACE INTO health VALUES(?,?)", (day, int(bool(errors))))
             ledger.db.commit()
             health = ledger.db.execute("SELECT failed FROM health ORDER BY day DESC LIMIT 2").fetchall()
-            if errors and len(health) == 2 and all(row[0] for row in health):
-                # Persistent failures warrant one separate operational notice, deduplicated until content changes.
-                body = "财报研究连续两个日批次未完整完成，请核对 NAS 本地 earnings 运行日志。\n" + "\n".join(errors[:3])[:1500]
+            normal_notified = delivery.get("delivery", {}).get("state") in {"sent", "sending", "unknown"}
+            if errors and not normal_notified and len(health) == 2 and all(row[0] for row in health):
+                # Stable category text deduplicates the same persistent event across days.
+                body = ("财报研究连续两个日批次仍有未完成步骤。已保留可恢复队列，未自动扩大模型预算。\n"
+                        + operational_issue_summary(errors))
                 failure = prepare_notification(root, deployed, day=day, body=body, report_versions=[], kind="failure",
                     rationale="two distinct failed daily batches", should_send=True)
                 delivery["failure_delivery"] = deliver(root, failure, deployed_path, execute=args.send)
             result = {"schema_version": 1, "workflow": "earnings-daily", "status": "success" if not errors else "failed",
                 "run_id": run_id, "date": day, "cutoff": cutoff, "reports": reports, "errors": errors,
                 "publications": publications, "quarterly": quarterly, "delivery": delivery, "completed_at": utc_now(),
+                "usage_summary": summarize_batch_usage(root, day, reports, publications),
                 "quarterly_automatic_trigger": bool(config["quarterly"].get("automatic_trigger_enabled"))}
             atomic_write_json(logs / "daily-result.json", result)
             return result

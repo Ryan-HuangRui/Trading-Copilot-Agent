@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'script'))
 from earnings_common import atomic_write_json, sha256_file
 from earnings_daily import (DailyLedger, _latest_company_publication_heads, _publication_matches_current_head,
-    fail_owned_attempt, notification_material, render_publication_entries, run, run_gap_review_step,
+    fail_owned_attempt, finalize, notification_material, render_publication_entries, run, run_gap_review_step,
     run_publication_work, season_limit, unresolved_terminal_count)
 from earnings_period_review import QuarterlyReviewLedger
 from earnings_state import EarningsState
@@ -145,6 +145,8 @@ print(json.dumps({'type':'turn.completed','usage':{'input_tokens':1,'output_toke
             config['publication']['enabled'] = True; config['delivery']['lark_documents_enabled'] = True
             config['quarterly']['automatic_trigger_enabled'] = False
             config['budgets']['publication_writers_per_day'] = 2; config['budgets']['publication_checkers_per_day'] = 2
+            config['budgets']['publication_full_start_threshold_seconds'] = 1
+            config['budgets']['publication_checker_start_threshold_seconds'] = 1
             atomic_write_json(root / 'config/earnings_research.json', config)
             atomic_write_json(root / 'config/earnings_universe.json', {'schema_version': 1, 'industries': [
                 {'industry_id': 'test', 'label': 'Test', 'metric_template': 'test', 'key_symbols': ['TEST'],
@@ -280,7 +282,8 @@ print(json.dumps({'ok':True,'identity':'user','data':data}))
                     (label, task, 'company', event, None, period, str(source.relative_to(root)), digest,
                      'manifest', 'live', 'partial', now))
                 manifest = root / f'runtime/earnings/publications/runs/{label}/input-manifest.json'
-                atomic_write_json(manifest, {'name': label})
+                atomic_write_json(manifest, {'name': label, 'permitted_outputs': {
+                    'runner_result': str((manifest.parent / 'runner-result.json').relative_to(root))}})
                 if label == 'old': atomic_write_json(manifest.with_name('writer-stage.json'), {'status': 'complete'})
                 job_id = f'job-{label}'
                 state.db.execute("""INSERT INTO publication_jobs(job_id,series_key,source_path,source_sha256,publication_type,
@@ -292,7 +295,9 @@ print(json.dumps({'ok':True,'identity':'user','data':data}))
             state.db.commit()
             config = json.loads((ROOT / 'config/earnings_research.json').read_text())
             config['budgets']['publication_writers_per_day'] = 1; config['budgets']['publication_checkers_per_day'] = 1
-            with patch('earnings_daily.run_publication', return_value={'manifest_path': 'report/publication.json'}) as publish:
+            config['budgets']['publication_full_start_threshold_seconds'] = 1
+            config['budgets']['publication_checker_start_threshold_seconds'] = 1
+            with patch('earnings_daily.run_publication', return_value={'status': 'success', 'manifest_path': 'report/publication.json'}) as publish:
                 run_publication_work(root, config, state, ledger, {'codex_bin': '/bin/false'}, '2026-09-16',
                                      time.monotonic() + 5, discover=False)
             self.assertEqual(publish.call_count, 1)
@@ -321,7 +326,8 @@ print(json.dumps({'ok':True,'identity':'user','data':data}))
                      'manifest', 'live', 'partial', now))
                 if label != 'head':
                     manifest = root / f'runtime/earnings/publications/runs/{label}/input-manifest.json'
-                    atomic_write_json(manifest, {'name': label})
+                    atomic_write_json(manifest, {'name': label, 'permitted_outputs': {
+                        'runner_result': str((manifest.parent / 'runner-result.json').relative_to(root))}})
                     state.db.execute("""INSERT INTO publication_jobs(job_id,series_key,source_path,source_sha256,publication_type,
                         scope_id,quarter_id,edition,revision,state,input_manifest_path,publication_manifest_path,error,attempts,created_at,updated_at)
                         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (f'job-{label}', f'series-{label}',
@@ -331,7 +337,9 @@ print(json.dumps({'ok':True,'identity':'user','data':data}))
             config = json.loads((ROOT / 'config/earnings_research.json').read_text())
             config['budgets']['publication_writers_per_day'] = 3; config['budgets']['publication_checkers_per_day'] = 3
             config['budgets']['publication_backfill_limit'] = 1
-            with patch('earnings_daily.run_publication', return_value={'manifest_path': 'report/publication.json'}) as publish:
+            config['budgets']['publication_full_start_threshold_seconds'] = 1
+            config['budgets']['publication_checker_start_threshold_seconds'] = 1
+            with patch('earnings_daily.run_publication', return_value={'status': 'success', 'manifest_path': 'report/publication.json'}) as publish:
                 run_publication_work(root, config, state, ledger, {'codex_bin': '/bin/false'}, '2026-09-16',
                                      time.monotonic() + 5, discover=False)
             self.assertEqual(publish.call_count, 1)
@@ -339,6 +347,54 @@ print(json.dumps({'ok':True,'identity':'user','data':data}))
             heads = _latest_company_publication_heads(root, state)
             self.assertFalse(_publication_matches_current_head({'publication_type': 'company', 'scope_id': 'TEST',
                 'sources': [{'sha256': 'not-the-head'}]}, heads))
+            state.close(); ledger.db.close()
+
+    def test_cached_failed_publication_schedules_repair_without_new_budget_or_cloud(self):
+        import time
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); state = EarningsState(root / 'runtime/earnings/state.sqlite'); ledger = DailyLedger(root)
+            manifest = root / 'runtime/earnings/publications/runs/original/input-manifest.json'
+            result_path = manifest.parent / 'runner-result.json'
+            atomic_write_json(manifest, {'permitted_outputs': {'runner_result': str(result_path.relative_to(root))}})
+            atomic_write_json(result_path, {'status': 'failed', 'reason': 'semantic drift',
+                'semantic_errors': ['nine-month fact used as one quarter'], 'deterministic_errors': []})
+            repair = manifest.parent / 'repair-attempt-1/input-manifest.json'; atomic_write_json(repair, {'repair': {'attempt': 1}})
+            now = '2026-09-16T00:00:00Z'
+            state.db.execute("""INSERT INTO publication_jobs(job_id,series_key,source_path,source_sha256,publication_type,
+                scope_id,quarter_id,edition,revision,state,input_manifest_path,publication_manifest_path,error,attempts,created_at,updated_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", ('job', 'series', 'report/source.json', 'hash', 'company',
+                'TEST', '2026-Q2', 'stage', 1, 'retryable_failed', str(manifest.relative_to(root)), None, None, 1, now, now))
+            config = json.loads((ROOT / 'config/earnings_research.json').read_text())
+            with patch('earnings_daily.prepare_repair_input', return_value=repair), \
+                 patch('earnings_daily.run_publication', side_effect=AssertionError('cached failure must not call model')):
+                outcomes = run_publication_work(root, config, state, ledger, {'codex_bin': '/bin/false'},
+                                                '2026-09-16', time.monotonic() + 5, discover=False)
+            row = state.db.execute("SELECT state,input_manifest_path,publication_manifest_path,error FROM publication_jobs").fetchone()
+            self.assertEqual((row['state'], row['input_manifest_path'], row['publication_manifest_path']),
+                             ('retryable_failed', str(repair.relative_to(root)), None))
+            self.assertIn('nine-month fact', row['error'])
+            self.assertEqual(ledger.used('2026-09-16', 'publication_checker'), 0)
+            self.assertEqual(outcomes, [])
+            state.close(); ledger.db.close()
+
+    def test_publication_does_not_start_below_stage_threshold(self):
+        import time
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); state = EarningsState(root / 'runtime/earnings/state.sqlite'); ledger = DailyLedger(root)
+            manifest = root / 'runtime/earnings/publications/runs/job/input-manifest.json'
+            atomic_write_json(manifest, {'permitted_outputs': {'runner_result': 'runtime/earnings/publications/runs/job/result.json'}})
+            now = '2026-09-16T00:00:00Z'
+            state.db.execute("""INSERT INTO publication_jobs(job_id,series_key,source_path,source_sha256,publication_type,
+                scope_id,quarter_id,edition,revision,state,input_manifest_path,publication_manifest_path,error,attempts,created_at,updated_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", ('job', 'series', 'report/source.json', 'hash', 'company',
+                'TEST', '2026-Q2', 'stage', 1, 'local_pending', str(manifest.relative_to(root)), None, None, 0, now, now))
+            config = json.loads((ROOT / 'config/earnings_research.json').read_text())
+            config['budgets']['publication_full_start_threshold_seconds'] = 60
+            with patch('earnings_daily.run_publication', side_effect=AssertionError('insufficient clock must stay queued')):
+                run_publication_work(root, config, state, ledger, {'codex_bin': '/bin/false'},
+                                     '2026-09-16', time.monotonic() + 5, discover=False)
+            self.assertEqual(state.db.execute('SELECT state FROM publication_jobs').fetchone()[0], 'local_pending')
+            self.assertEqual(ledger.used('2026-09-16', 'publication_writer'), 0)
             state.close(); ledger.db.close()
 
     def test_enabled_daily_calls_recovery_before_discovery(self):
@@ -415,6 +471,23 @@ print(json.dumps({'ok':True,'identity':'user','data':data}))
         self.assertTrue(notification_material(report, {'thesis_state': 'emerging'}))
         self.assertFalse(notification_material(report, report))
         self.assertFalse(notification_material({**report, 'evidence': []}, None))
+
+    def test_no_new_fulltext_notification_states_zero_without_fixed_success_claim(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); (root / 'config').mkdir(); (root / 'runtime/earnings').mkdir(parents=True)
+            atomic_write_json(root / 'config/earnings_universe.json', {'industries': []})
+            deployed = {'schema_version': 1, 'verified_repo': str(root), 'project': 'p', 'session': 's',
+                'cc_connect_bin': '/bin/false', 'verified_at': 'now', 'verified_from_cron_id': 'cron',
+                'delivery_enabled': False}
+            deployed_path = root / 'runtime/earnings/deployment.json'; atomic_write_json(deployed_path, deployed)
+            state = EarningsState(root / 'runtime/earnings/state.sqlite')
+            result = finalize(root, deployed, deployed_path, '2026-09-20', [], ['publication:failed'], state, send=False)
+            decision = json.loads((root / result['decision']).read_text())
+            body = (root / decision['body_path']).read_text()
+            self.assertIn('今日新增并回读全文：0 份', body)
+            self.assertNotIn('核对通过的全文由显式用户身份写入并回读', body)
+            self.assertFalse(decision['should_send'])
+            state.close()
 
     def test_more_than_five_publications_keep_every_cloud_entry(self):
         rows = [({'title': f'报告{i}', 'edition': 'full', 'version': 1}, {'url': f'https://lark/{i}'}, {}) for i in range(7)]

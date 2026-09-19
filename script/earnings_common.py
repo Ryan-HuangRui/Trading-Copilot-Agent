@@ -20,6 +20,24 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="microseconds")
 
 
+def classify_model_failure(*values: object) -> str | None:
+    """Classify explicit backend failures without treating timeouts as quota events."""
+    text = "\n".join(str(value) for value in values if value).lower()
+    quota_markers = (
+        "usage limit", "rate limit exceeded", "quota exceeded", "insufficient_quota",
+        "no weighted tokens left", "limit has been reached",
+    )
+    capacity_markers = (
+        "server is overloaded", "overloaded", "capacity", "temporarily unavailable",
+        "service unavailable", "try again later",
+    )
+    if any(marker in text for marker in quota_markers):
+        return "quota_exhausted"
+    if any(marker in text for marker in capacity_markers):
+        return "capacity_unavailable"
+    return None
+
+
 def shanghai_date() -> str:
     from zoneinfo import ZoneInfo
 
@@ -48,6 +66,16 @@ def canonical_json(payload: Any) -> bytes:
 
 def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def company_research_configuration_hash(config: dict[str, Any]) -> str:
+    """Hash company-research inputs, excluding publication/delivery operations."""
+    budgets = config.get("budgets") or {}
+    payload = {"schema_version": config.get("schema_version"), "sources": config.get("sources"),
+               "daily_profile": (config.get("profiles") or {}).get("daily"),
+               "company_policy": {key: budgets.get(key) for key in (
+                   "max_task_attempts", "initialization_lookback_quarters")}}
+    return sha256_bytes(canonical_json(payload))
 
 
 def sha256_file(path: Path) -> str:

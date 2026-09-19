@@ -3847,6 +3847,7 @@ def run_earnings_passthrough(args: argparse.Namespace) -> None:
         "earnings-collect": "script/earnings_collect.py",
         "earnings-context": "script/earnings_context.py",
         "earnings-status": "script/earnings_state.py",
+        "earnings-recovery": "script/earnings_recovery.py",
         "earnings-industry-context": "script/earnings_industry_context.py",
         "earnings-review-context": "script/earnings_period_review.py",
         "earnings-market-context": "script/earnings_market_context.py",
@@ -3871,6 +3872,7 @@ def run_earnings_passthrough(args: argparse.Namespace) -> None:
         "reconcile_document_id": "reconcile-document-id", "reconcile_url": "reconcile-url",
         "frozen_scope": "frozen-scope", "record_gap_review": "record-gap-review", "scope_id": "scope-id",
         "input_manifest_hash": "input-manifest-hash",
+        "action": "action", "job_id": "job-id", "task_id": "task-id",
     }
     for name, option in option_names.items():
         value = getattr(args, name, None)
@@ -3962,6 +3964,15 @@ def build_parser() -> argparse.ArgumentParser:
     earnings_status.add_argument("--state", default="runtime/earnings/state.sqlite")
     earnings_status.add_argument("--date")
     earnings_status.set_defaults(func=run_earnings_passthrough)
+
+    earnings_recovery = sub.add_parser("earnings-recovery", help="Preview or apply one explicitly selected bounded recovery")
+    earnings_recovery.add_argument("--repo-root", default=str(ROOT))
+    earnings_recovery.add_argument("--action", required=True,
+        choices=["resume-checker", "schedule-repair", "release-expired-task"])
+    earnings_recovery.add_argument("--job-id")
+    earnings_recovery.add_argument("--task-id")
+    earnings_recovery.add_argument("--execute", action="store_true")
+    earnings_recovery.set_defaults(func=run_earnings_passthrough)
 
     earnings_industry = sub.add_parser("earnings-industry-context", help="Build manual industry/challenge/synthesis role context")
     earnings_industry.add_argument("--repo-root", default=str(ROOT))

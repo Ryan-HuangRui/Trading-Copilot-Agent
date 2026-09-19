@@ -309,12 +309,23 @@ class EarningsState:
 
     def reap_expired_tasks(self) -> int:
         now = utc_now()
-        cursor = self.db.execute(
+        superseded = self.db.execute(
+            """UPDATE research_tasks AS t SET state='terminal_failed',error='superseded while lease was active',
+            lease_owner=NULL,lease_expires_at=NULL,updated_at=? WHERE state='running' AND lease_expires_at<? AND EXISTS(
+              SELECT 1 FROM research_tasks n WHERE n.rowid>t.rowid AND n.task_type=t.task_type
+              AND n.subject_id=t.subject_id AND n.period_start IS t.period_start AND n.period_end IS t.period_end
+              AND n.source_mode=t.source_mode)""", (now, now)).rowcount
+        terminal = self.db.execute(
             """UPDATE research_tasks SET state='terminal_failed',error='lease expired at maximum attempts',
             lease_owner=NULL,lease_expires_at=NULL,updated_at=? WHERE state='running' AND lease_expires_at<? AND attempts>=max_attempts""",
             (now, now),
-        )
-        return cursor.rowcount
+        ).rowcount
+        retryable = self.db.execute(
+            """UPDATE research_tasks SET state='retryable_failed',error='lease expired; eligible for bounded recovery',
+            lease_owner=NULL,lease_expires_at=NULL,updated_at=? WHERE state='running' AND lease_expires_at<? AND attempts<max_attempts""",
+            (now, now),
+        ).rowcount
+        return superseded + terminal + retryable
 
     def claim_tasks(self, *, owner: str, limit: int, lease_seconds: int, task_type: str | None = None) -> list[dict[str, Any]]:
         self.reap_expired_tasks()
@@ -331,7 +342,22 @@ class EarningsState:
             rows = db.execute(
                 f"""SELECT t.* FROM research_tasks t WHERE {' AND '.join(filters)} AND NOT EXISTS(
                 SELECT 1 FROM task_dependencies d JOIN research_tasks p ON p.task_id=d.dependency_task_id
-                WHERE d.task_id=t.task_id AND p.state!='completed') ORDER BY t.created_at LIMIT ?""",
+                WHERE d.task_id=t.task_id AND (p.state!='completed' OR EXISTS(
+                  SELECT 1 FROM research_tasks pn WHERE pn.rowid>p.rowid AND pn.task_type=p.task_type
+                  AND pn.subject_id=p.subject_id AND pn.period_start IS p.period_start
+                  AND pn.period_end IS p.period_end AND pn.source_mode=p.source_mode)))
+                AND NOT EXISTS(SELECT 1 FROM research_tasks n WHERE n.rowid>t.rowid
+                  AND n.task_type=t.task_type AND n.subject_id=t.subject_id
+                  AND n.period_start IS t.period_start AND n.period_end IS t.period_end
+                  AND n.source_mode=t.source_mode)
+                ORDER BY CASE WHEN t.task_type='company' THEN (
+                  SELECT COUNT(*) FROM research_tasks x
+                  JOIN earnings_events xe ON xe.event_id=x.subject_id
+                  JOIN earnings_events te ON te.event_id=t.subject_id
+                  WHERE x.task_type='company' AND xe.issuer_id=te.issuer_id
+                  AND COALESCE(x.period_end,'')>COALESCE(t.period_end,'')) ELSE 0 END,
+                  CASE WHEN t.attempts=0 THEN 0 ELSE 1 END,
+                  COALESCE(t.period_end,'') DESC,t.created_at,t.task_id LIMIT ?""",
                 params,
             ).fetchall()
             claimed: list[dict[str, Any]] = []
@@ -351,7 +377,7 @@ class EarningsState:
         now_text = now.isoformat(timespec="seconds")
         expires = (now + timedelta(seconds=lease_seconds)).isoformat(timespec="seconds")
         with self.immediate() as db:
-            row = db.execute("SELECT * FROM research_tasks WHERE task_id=?", (task_id,)).fetchone()
+            row = db.execute("SELECT rowid AS db_rowid,* FROM research_tasks WHERE task_id=?", (task_id,)).fetchone()
             if not row:
                 raise ValueError(f"unknown task_id: {task_id}")
             eligible_state = row["state"] == "queued" or (
@@ -359,9 +385,16 @@ class EarningsState:
             ) or (row["state"] == "running" and row["lease_expires_at"] and row["lease_expires_at"] < now_text)
             blocked = db.execute(
                 """SELECT COUNT(*) count FROM task_dependencies d JOIN research_tasks p ON p.task_id=d.dependency_task_id
-                WHERE d.task_id=? AND p.state!='completed'""", (task_id,),
+                WHERE d.task_id=? AND (p.state!='completed' OR EXISTS(
+                  SELECT 1 FROM research_tasks pn WHERE pn.rowid>p.rowid AND pn.task_type=p.task_type
+                  AND pn.subject_id=p.subject_id AND pn.period_start IS p.period_start
+                  AND pn.period_end IS p.period_end AND pn.source_mode=p.source_mode))""", (task_id,),
             ).fetchone()["count"]
-            if not eligible_state or blocked or row["attempts"] >= row["max_attempts"]:
+            superseded = db.execute("""SELECT 1 FROM research_tasks n WHERE n.rowid>? AND n.task_type=?
+              AND n.subject_id=? AND n.period_start IS ? AND n.period_end IS ? AND n.source_mode=?""",
+              (row["db_rowid"], row["task_type"], row["subject_id"],
+               row["period_start"], row["period_end"], row["source_mode"])).fetchone()
+            if not eligible_state or blocked or superseded or row["attempts"] >= row["max_attempts"]:
                 return None
             db.execute("UPDATE research_tasks SET state='running',lease_owner=?,lease_expires_at=?,attempts=attempts+1,updated_at=? WHERE task_id=?",
                        (owner, expires, now_text, task_id))

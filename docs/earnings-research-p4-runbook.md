@@ -7,6 +7,7 @@ P4 已实现但自动开关默认关闭。它复用每日 10:00 Asia/Shanghai �
 - `runtime/earnings/state.sqlite` 增量增加 publication 索引和云交付状态；P3 表保持兼容。
 - `runtime/earnings/quarterly.sqlite` 冻结 industry-quarter 成员和方法，并逐 revision 保存统一 cutoff、阶段状态与历史；新的已验收公司输入可触发修订，无需等待前一阶段版或跨行业报告完成。没有任何公司研究证据的行业只记录待补资料，不启动模型。
 - `runtime/earnings/daily.sqlite` 持久化 company、quarterly、writer、checker、cloud 的每日实际尝试次数；跨日重新获得额度，未完成任务保留。恢复队列先获得有界时间片，新研究和季度阶段也保留时间片。
+- publication 的缓存结果不计为新模型调用；失败结果保留 semantic/deterministic 错误，不能进入 `cloud_pending`。每日最多一次自动定向 repair，仍占 writer/checker 与 repair 预算。当前公司报告先于历史发布，历史发布默认每日最多 1 份。
 - `runtime/earnings/quarterly-scopes/<scope_id>/gap-reviews/<input_hash>/input.json` 是按 scope revision/cutoff/公司报告哈希生成的不可变审查输入；`gap-review-input.json` 只是当前指针。启用季度自动任务后，daily runner 使用 `review` profile、独立每日额度和有租约的 bounded attempt 自动审查，再调用 `record_gap_review` 验收。失败可跨日恢复，达到 `max_task_attempts` 后终止；证据不完整必须保持 unresolved。
 
 默认关闭 `quarterly.automatic_trigger_enabled`、`quarterly.weekly_review_enabled`、`publication.enabled`、`delivery.lark_documents_enabled`。任务并发仍为 1；季度、writer、checker 各有独立每日尝试上限，usage 不可用时保存 null。
@@ -63,6 +64,12 @@ adapter 的参数形状按官方 lark-cli 文档：它把 cwd 固定到准备目
 
 数字目录由程序从已验收证据生成，保留发行人、指标、币种、口径、期间和来源定位。writer 只使用目录中的展示值；派生量仅允许同发行人且口径兼容的指定操作。checker 独立选择事实/派生 ID 并核对语义，程序补全已验证的来源元数据，原始 checker 输出保留用于审计。
 
-已完成但未通过核对的稿件，可显式执行一次 `earnings-publication-runner --repair <failed-input-manifest.json> --execute --codex-bin <absolute-path>`。它复用冻结研究，将错误反馈给新 writer，再独立核对；每次修复至多两个模型调用，不重复研究，不覆盖父稿，不能嵌套修复。此入口不由日任务自动调用，应单独计入人工验收预算。失败或结果不明的模型调用不会自动重复；保留状态等待审查。修复也未通过时仍禁止发布。
+已完成但未通过核对的稿件，可显式执行一次 `earnings-publication-runner --repair <failed-input-manifest.json> --execute --codex-bin <absolute-path>`。它复用冻结研究，将错误反馈给新 writer，再独立核对；每次修复至多两个模型调用，不重复研究，不覆盖父稿，不能嵌套修复。daily 会把首次完整 checker/validator 失败排入同一套唯一 repair；人工入口只用于审查后精确恢复旧生产卡单，不增加第二次 repair。失败或结果不明的模型调用不会自动重复；保留状态等待审查。修复也未通过时仍禁止发布。
+
+九个月/半年累计事实不得混入单季语境，“本次资料未包含”不得扩大成“公司未披露”；期限类事实（例如 6.4 年）也必须出现在 occurrence inventory 并绑定目录事实。
 
 独立语义核对已通过、仅程序校验误判时，修复 validator 后可使用 `earnings-publication-runner --recheck <input-manifest.json>`。该入口不调用模型，核对原稿、原 checker、研究输入和 manifest 哈希，重新校验并生成带代码哈希的独立审计记录；不能用于放行语义核对失败的稿件，也不覆盖旧失败记录。
+
+### runtime 配置增量迁移
+
+NAS 的 `runtime/earnings/p4-config.json` 应从新 tracked 配置合并下列预算键，保留现有 activation flags、路径和身份配置，不整文件覆盖：`publication_repairs_per_day=1`、`publication_full_start_threshold_seconds=900`、`publication_checker_start_threshold_seconds=480`、`publication_stage_timeout_seconds=900`、`phase_reserve_seconds=1200`。已有 `daily_company_limit`/`strong_season_company_limit` 不扩大。部署前先用 `earnings-recovery` preview 精确列出待恢复 job；备份后只恢复所选任务。

@@ -7,6 +7,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "script"))
 
+from earnings_common import classify_model_failure, company_research_configuration_hash
 from earnings_state import EarningsState
 
 
@@ -36,12 +37,58 @@ class EarningsStateTests(unittest.TestCase):
             input_hash="same", method_version="v1", source_mode="fixture", profile="daily", model="gpt-5.6-sol", effort="medium")
         self.assertEqual(first, second); self.assertTrue(created); self.assertFalse(created_again)
 
+    def test_delivery_and_publication_tuning_does_not_change_company_research_hash(self):
+        config = {"schema_version": 1, "sources": {"primary": ["sec"]},
+                  "profiles": {"daily": {"model": "gpt-5.6-sol", "reasoning_effort": "medium"}},
+                  "budgets": {"max_task_attempts": 2, "initialization_lookback_quarters": 8,
+                              "publication_stage_timeout_seconds": 300},
+                  "delivery": {"enabled": False}}
+        first = company_research_configuration_hash(config)
+        config["budgets"]["publication_stage_timeout_seconds"] = 900
+        config["delivery"]["enabled"] = True
+        self.assertEqual(first, company_research_configuration_hash(config))
+        config["profiles"]["daily"]["reasoning_effort"] = "high"
+        self.assertNotEqual(first, company_research_configuration_hash(config))
+
+    def test_quota_and_capacity_are_distinct_and_timeout_is_neither(self):
+        self.assertEqual(classify_model_failure("Codex usage limit has been reached"), "quota_exhausted")
+        self.assertEqual(classify_model_failure("server capacity temporarily unavailable"), "capacity_unavailable")
+        self.assertIsNone(classify_model_failure("process timed out after 300 seconds"))
+
     def test_dependency_blocks_until_completed(self):
         parent = self.enqueue("parent")
         child = self.enqueue("child", [parent])
         self.assertEqual([row["task_id"] for row in self.state.claim_tasks(owner="x", limit=5, lease_seconds=60)], [parent])
         self.state.complete_task(parent, "completion.json")
         self.assertEqual(self.state.claim_task(child, owner="x", lease_seconds=60)["task_id"], child)
+
+    def test_superseded_completed_dependency_blocks_child_before_model_claim(self):
+        parent = self.enqueue("parent")
+        child = self.enqueue("child", [parent])
+        self.state.complete_task(parent, "completion.json")
+        newer, _ = self.state.enqueue_task(task_type="company", subject_id="parent",
+            period_start="2026-01-01", period_end="2026-03-31", input_hash="new-hash",
+            method_version="v1", source_mode="fixture", profile="daily", model="gpt-5.6-sol", effort="medium")
+        claimed = self.state.claim_tasks(owner="x", limit=5, lease_seconds=60)
+        self.assertIn(newer, [row["task_id"] for row in claimed])
+        self.assertNotIn(child, [row["task_id"] for row in claimed])
+        self.assertIsNone(self.state.claim_task(child, owner="x", lease_seconds=60))
+
+    def test_company_queue_round_robins_issuers_before_deeper_history(self):
+        for issuer in ("issuer-a", "issuer-b"):
+            self.state.upsert_issuer(issuer_id=issuer, cik=None, symbol=issuer[-1].upper(),
+                                     name=issuer, identity_status="resolved")
+            for index, period in enumerate(("2026-06-30", "2026-03-31", "2025-12-31")):
+                event = f"{issuer}-event-{index}"
+                self.state.refresh_event(event, issuer, "earnings", None, period)
+                self.state.enqueue_task(task_type="company", subject_id=event, period_start=None, period_end=period,
+                    input_hash=f"{event}-hash", method_version="v1", source_mode="live", profile="daily",
+                    model="gpt-5.6-sol", effort="medium")
+        claimed = self.state.claim_tasks(owner="x", limit=4, lease_seconds=60)
+        periods = [(row["subject_id"].split("-event-")[0], row["period_end"]) for row in claimed]
+        self.assertEqual([period for _, period in periods],
+                         ["2026-06-30", "2026-06-30", "2026-03-31", "2026-03-31"])
+        self.assertEqual(len({issuer for issuer, period in periods[:2]}), 2)
 
     def test_live_lease_not_reentered_but_expired_lease_recovers(self):
         task = self.enqueue("lease")

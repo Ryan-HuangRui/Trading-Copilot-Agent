@@ -181,6 +181,12 @@ class EarningsPublicationTests(unittest.TestCase):
         self.assertEqual([(row["display"], row["occurrence"]) for row in table],
                          [("962.21", {"line": 4, "column": 2}), ("962.21", {"line": 5, "column": 2})])
 
+    def test_occurrence_inventory_binds_year_duration_without_treating_calendar_year_as_quantity(self):
+        body = "2026年第二季度，合同加权平均剩余期限为6.4年；对比样本为5 years。"
+        claims = claim_occurrence_inventory(body)["claims"]
+        self.assertEqual([(row["display"], row["value"], row["unit"]) for row in claims],
+                         [("6.4年", "6.4", "年"), ("5 years", "5", "years")])
+
     def test_period_inventory_uses_only_explicit_local_modifiers_across_mixed_rows(self):
         body = """经营期间：2026-04-27 至 2026-07-26。\n收入962.21亿美元。\n截至2026-07-26，库存315.75亿美元；库存由截至2026-01-25的214.03亿美元增至截至2026-07-26的315.75亿美元，增长47.5%。\n| 指标 | 数值（亿美元） |\n|---|---:|\n| 上半年经营现金流 | 744.21 |\n| 应收账款 | 630.59 |\n| 期后承诺 | 1050 |"""
         claims = claim_occurrence_inventory(body)["claims"]
@@ -371,6 +377,41 @@ class EarningsPublicationTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "already attempted"):
                     run_publication(root, manifest, binary=str(binary), timeout=60)
                 self.assertEqual(codex.call_count, 1)
+
+    def test_completed_writer_can_resume_checker_with_new_bounded_timeout(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); (root / "config").mkdir()
+            config_source = Path(__file__).resolve().parents[1] / "config/earnings_research.json"
+            (root / "config/earnings_research.json").write_bytes(config_source.read_bytes())
+            live = {**SOURCE, "source_mode": "live"}
+            source = root / "report/earnings/source.json"; atomic_write_json(source, live)
+            binary = root / "fake-codex"; binary.write_text("fake"); binary.chmod(0o700)
+            manifest = prepare_input(root, publication_type="company", scope_id="TEST", quarter_id="2026-Q2",
+                                     source_paths=[source])
+            timeouts = []
+            def fake_codex(_root, _binary, _profile, _prompt, output, _events, _stderr, timeout):
+                timeouts.append(timeout)
+                if output.name == "reader-draft.md":
+                    output.write_text(markdown())
+                    return {"input_tokens": 1, "cached_input_tokens": 0, "output_tokens": 1}
+                if output.name == "semantic-check.json":
+                    raise subprocess.TimeoutExpired("checker", timeout)
+                mappings = validate_reader_markdown(markdown(), [live])["fact_mappings"]
+                for binding in mappings: binding["input_fact_ids"] = []
+                atomic_write_json(output, {"status": "passed", "errors": [], "warnings": [],
+                    "source_mapping": [{"section": "全文", "claim_ids": ["c1"], "evidence_ids": ["e1"]}],
+                    "fact_bindings": mappings})
+                return {"input_tokens": 2, "cached_input_tokens": 1, "output_tokens": 1}
+            with patch("earnings_publication_runner._codex", side_effect=fake_codex):
+                with self.assertRaises(subprocess.TimeoutExpired):
+                    run_publication(root, manifest, binary=str(binary), timeout=30)
+                result = run_publication(root, manifest, binary=str(binary), timeout=60)
+            self.assertEqual(result["status"], "success", result)
+            state = read_json(manifest.parent / "attempt-state.json")
+            self.assertEqual([row["attempt"] for row in state["calls"] if row["role"] == "checker"], [1, 2])
+            self.assertEqual([row["timeout_seconds"] for row in state["invocations"]], [30, 60])
+            self.assertEqual(len(timeouts), 3)
+            self.assertGreater(timeouts[-1], timeouts[1])
 
     def test_accepted_nvda_contract_uses_decimal_strings_and_evidence_period_enrichment(self):
         path = Path("/Users/cenxiangxiang/hr/repo/Trading-Copilot-Agent/report/earnings/deployment-acceptance/2026-09-15/company_report.json")

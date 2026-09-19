@@ -108,6 +108,10 @@ Advance a source checkpoint only after safely registering every item in the boun
 
 Profiles: daily Sol medium, review Sol high, quarterly Astra high, escalation Astra xhigh. Initial extraction profile is disabled. Daily, quarterly, upgrades and initialization have separate allowances. One active research process initially. Model effort is not a hard token cap; only enforce observable configured limits and persist unavailable usage as null. Check unsupported profiles before executing; no silent model fallback. Reuse cache and completed artifacts before spending budget on repeated analysis.
 
+Publication recovery separates batch remaining time, stage start thresholds and per-execution timeout. A completed writer is immutable and may be followed on a later day by one new audited checker attempt; an expired absolute deadline or changed invocation timeout cannot permanently poison the job. Cached failed results consume no new model allowance, retain semantic/deterministic feedback, and may schedule at most one repair writer+checker pair. Only successful results with a manifest may enter cloud state. Explicit operator recovery is exact-target, preview-first, backed up and one-shot.
+
+Before a role claim, every dependency must still be the current accepted version for its task identity; stale dependencies block model execution and are regenerated or awaited. Expired leases are projected as retryable/terminal/superseded rather than indefinitely displayed as running. Company claims prioritize each issuer's newest pending period and round-robin issuers before deeper history; total daily company limits remain unchanged. Explicit quota exhaustion opens a batch circuit, while capacity errors use bounded retry timing and remain a separate class.
+
 ## Daily and quarterly trigger contract
 
 Daily trigger is 10:00 Asia/Shanghai, seven days/week. Keep actual public cutoff in UTC and original timezone metadata. No trading-day skip for earnings work. No-work requires checking new inputs, queue, retries and due reviews; then skip model use.
