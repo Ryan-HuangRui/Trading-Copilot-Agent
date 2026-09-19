@@ -10,7 +10,9 @@ import os
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'script'))
 from earnings_common import atomic_write_json, sha256_file
-from earnings_daily import DailyLedger, fail_owned_attempt, notification_material, render_publication_entries, run, run_gap_review_step, run_publication_work, season_limit, unresolved_terminal_count
+from earnings_daily import (DailyLedger, _latest_company_publication_heads, _publication_matches_current_head,
+    fail_owned_attempt, notification_material, render_publication_entries, run, run_gap_review_step,
+    run_publication_work, season_limit, unresolved_terminal_count)
 from earnings_period_review import QuarterlyReviewLedger
 from earnings_state import EarningsState
 from earnings_role_runner import run_role
@@ -258,6 +260,87 @@ print(json.dumps({'ok':True,'identity':'user','data':data}))
             self.assertEqual(prepare.call_args.kwargs['config_path'], 'runtime/earnings/runtime-config.json')
             state.close(); ledger.db.close()
 
+    def test_latest_company_publication_precedes_older_checker_recovery(self):
+        import time
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); state = EarningsState(root / 'runtime/earnings/state.sqlite'); ledger = DailyLedger(root)
+            state.upsert_issuer(issuer_id='issuer', cik=None, symbol='TEST', name='Test', identity_status='resolved')
+            now = '2026-09-16T00:00:00Z'
+            jobs = []
+            for label, period, job_state in [('old', '2025-03-31', 'checker_pending'), ('new', '2026-06-30', 'local_pending')]:
+                event = f'event-{label}'; state.refresh_event(event, 'issuer', 'earnings', None, period)
+                task, _ = state.enqueue_task(task_type='company', subject_id=event, period_start=None, period_end=period,
+                    input_hash=label, method_version='v1', source_mode='live', profile='daily', model='gpt-5.6-sol', effort='medium')
+                state.db.execute("UPDATE research_tasks SET state='completed' WHERE task_id=?", (task,))
+                source = root / f'report/earnings/{label}.json'
+                atomic_write_json(source, {'report_id': label, 'report_type': 'company', 'task_id': task,
+                    'source_mode': 'live', 'scope': {'symbol': 'TEST', 'reporting_end': period}})
+                digest = sha256_file(source)
+                state.db.execute('INSERT INTO report_artifacts VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
+                    (label, task, 'company', event, None, period, str(source.relative_to(root)), digest,
+                     'manifest', 'live', 'partial', now))
+                manifest = root / f'runtime/earnings/publications/runs/{label}/input-manifest.json'
+                atomic_write_json(manifest, {'name': label})
+                if label == 'old': atomic_write_json(manifest.with_name('writer-stage.json'), {'status': 'complete'})
+                job_id = f'job-{label}'
+                state.db.execute("""INSERT INTO publication_jobs(job_id,series_key,source_path,source_sha256,publication_type,
+                    scope_id,quarter_id,edition,revision,state,input_manifest_path,publication_manifest_path,error,attempts,created_at,updated_at)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (job_id, f'series-{label}', str(source.relative_to(root)), digest,
+                    'company', 'TEST', period[:4] + '-Q1', 'stage', 1, job_state, str(manifest.relative_to(root)),
+                    None, None, 0, now, now))
+                jobs.append((label, manifest))
+            state.db.commit()
+            config = json.loads((ROOT / 'config/earnings_research.json').read_text())
+            config['budgets']['publication_writers_per_day'] = 1; config['budgets']['publication_checkers_per_day'] = 1
+            with patch('earnings_daily.run_publication', return_value={'manifest_path': 'report/publication.json'}) as publish:
+                run_publication_work(root, config, state, ledger, {'codex_bin': '/bin/false'}, '2026-09-16',
+                                     time.monotonic() + 5, discover=False)
+            self.assertEqual(publish.call_count, 1)
+            self.assertEqual(publish.call_args.args[1], jobs[1][1])
+            self.assertEqual(state.db.execute("SELECT state FROM publication_jobs WHERE job_id='job-old'").fetchone()[0],
+                             'checker_pending')
+            state.close(); ledger.db.close()
+
+    def test_historical_publication_budget_is_separate_and_bounded(self):
+        import time
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); state = EarningsState(root / 'runtime/earnings/state.sqlite'); ledger = DailyLedger(root)
+            state.upsert_issuer(issuer_id='issuer', cik=None, symbol='TEST', name='Test', identity_status='resolved')
+            now = '2026-09-16T00:00:00Z'
+            for label, period in [('old-1', '2025-03-31'), ('old-2', '2025-06-30'), ('head', '2026-06-30')]:
+                event = f'event-{label}'; state.refresh_event(event, 'issuer', 'earnings', None, period)
+                task, _ = state.enqueue_task(task_type='company', subject_id=event, period_start=None, period_end=period,
+                    input_hash=label, method_version='v1', source_mode='live', profile='daily', model='gpt-5.6-sol', effort='medium')
+                state.db.execute("UPDATE research_tasks SET state='completed' WHERE task_id=?", (task,))
+                source = root / f'report/earnings/{label}.json'
+                atomic_write_json(source, {'report_id': label, 'report_type': 'company', 'task_id': task,
+                    'source_mode': 'live', 'scope': {'symbol': 'TEST', 'reporting_end': period}})
+                digest = sha256_file(source)
+                state.db.execute('INSERT INTO report_artifacts VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
+                    (label, task, 'company', event, None, period, str(source.relative_to(root)), digest,
+                     'manifest', 'live', 'partial', now))
+                if label != 'head':
+                    manifest = root / f'runtime/earnings/publications/runs/{label}/input-manifest.json'
+                    atomic_write_json(manifest, {'name': label})
+                    state.db.execute("""INSERT INTO publication_jobs(job_id,series_key,source_path,source_sha256,publication_type,
+                        scope_id,quarter_id,edition,revision,state,input_manifest_path,publication_manifest_path,error,attempts,created_at,updated_at)
+                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (f'job-{label}', f'series-{label}',
+                        str(source.relative_to(root)), digest, 'company', 'TEST', period[:4] + '-Q1', 'stage', 1,
+                        'local_pending', str(manifest.relative_to(root)), None, None, 0, now, now))
+            state.db.commit()
+            config = json.loads((ROOT / 'config/earnings_research.json').read_text())
+            config['budgets']['publication_writers_per_day'] = 3; config['budgets']['publication_checkers_per_day'] = 3
+            config['budgets']['publication_backfill_limit'] = 1
+            with patch('earnings_daily.run_publication', return_value={'manifest_path': 'report/publication.json'}) as publish:
+                run_publication_work(root, config, state, ledger, {'codex_bin': '/bin/false'}, '2026-09-16',
+                                     time.monotonic() + 5, discover=False)
+            self.assertEqual(publish.call_count, 1)
+            self.assertEqual(ledger.used('2026-09-16', 'publication_backfill'), 1)
+            heads = _latest_company_publication_heads(root, state)
+            self.assertFalse(_publication_matches_current_head({'publication_type': 'company', 'scope_id': 'TEST',
+                'sources': [{'sha256': 'not-the-head'}]}, heads))
+            state.close(); ledger.db.close()
+
     def test_enabled_daily_calls_recovery_before_discovery(self):
         with TemporaryDirectory() as temp:
             root = Path(temp).resolve(); (root / 'config').mkdir()
@@ -273,7 +356,7 @@ print(json.dumps({'ok':True,'identity':'user','data':data}))
                  patch('earnings_daily.run_publication_work', return_value=[]) as publication:
                 result = run(args)
             self.assertEqual(result['status'], 'success')
-            self.assertEqual([call.kwargs.get('discover', True) for call in publication.call_args_list], [False, True])
+            self.assertEqual([call.kwargs.get('discover', True) for call in publication.call_args_list], [False, True, True])
 
     def test_archived_local_publication_can_cloud_sync_later_without_writer(self):
         import time

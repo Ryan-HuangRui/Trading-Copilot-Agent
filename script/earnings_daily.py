@@ -123,6 +123,70 @@ def notification_material(report: dict, prior: dict | None) -> bool:
     return prior is None or prior.get("thesis_state") != current_state
 
 
+def _latest_company_publication_heads(root: Path, state: EarningsState) -> dict[tuple[str, str], dict]:
+    """Return the newest accepted company/IPO report for each reader-publication scope."""
+    heads: dict[tuple[str, str], dict] = {}
+    rows = state.db.execute("""SELECT a.*,e.event_kind FROM report_artifacts a
+      LEFT JOIN earnings_events e ON e.event_id=a.subject_id
+      WHERE a.source_mode='live' AND a.report_type='company'
+      ORDER BY a.period_end DESC,a.rowid DESC""").fetchall()
+    for row in rows:
+        try:
+            report = read_json(root / row["path"]); scope = report.get("scope") or {}
+        except Exception:
+            continue
+        publication_type = "ipo" if scope.get("event_kind") == "ipo" or row["event_kind"] == "ipo" else "company"
+        scope_id = scope.get("symbol") or scope.get("issuer_id")
+        if not scope_id:
+            continue
+        key = (publication_type, str(scope_id))
+        if key not in heads:
+            heads[key] = {"sha256": row["sha256"], "path": row["path"],
+                          "reporting_end": scope.get("reporting_end") or row["period_end"]}
+    return heads
+
+
+def _publication_job_sort_key(root: Path, job: dict, heads: dict[tuple[str, str], dict]) -> tuple:
+    """Prioritize current accepted reports before formal reports and historical backfill."""
+    head = heads.get((job["publication_type"], str(job["scope_id"])))
+    is_backfill = job["publication_type"] in {"company", "ipo"} and head is not None \
+        and job["source_sha256"] != head["sha256"]
+    if is_backfill:
+        priority = 2
+    elif job["publication_type"] in {"industry", "market"}:
+        priority = 1
+    else:
+        priority = 0
+    # Resume a checker before rerunning its writer, but only inside the same business priority.
+    checker_ready = job["state"] == "checker_pending"
+    if job["state"] == "retryable_failed" and job.get("input_manifest_path"):
+        checker_ready = (root / job["input_manifest_path"]).parent.joinpath("writer-stage.json").exists()
+    stage_priority = 0 if checker_ready else 1
+    reporting_end = ""
+    try:
+        report = read_json(root / job["source_path"])
+        reporting_end = str((report.get("scope") or {}).get("reporting_end") or "")
+    except Exception:
+        pass
+    try:
+        period_priority = -date.fromisoformat(reporting_end).toordinal()
+    except ValueError:
+        period_priority = 0
+    return priority, stage_priority, period_priority, job["updated_at"], job["job_id"]
+
+
+def _publication_job_is_backfill(job: dict, heads: dict[tuple[str, str], dict]) -> bool:
+    head = heads.get((job["publication_type"], str(job["scope_id"])))
+    return job["publication_type"] in {"company", "ipo"} and head is not None \
+        and job["source_sha256"] != head["sha256"]
+
+
+def _publication_matches_current_head(publication: dict, heads: dict[tuple[str, str], dict]) -> bool:
+    head = heads.get((publication["publication_type"], str(publication["scope_id"])))
+    source_hashes = {source.get("sha256") for source in publication.get("sources", [])}
+    return head is not None and head["sha256"] in source_hashes
+
+
 def unresolved_terminal_count(state: EarningsState) -> int:
     """Keep exhausted current work visible; superseded attempts are historical."""
     return state.db.execute("""SELECT COUNT(*) FROM research_tasks t
@@ -363,6 +427,7 @@ def run_publication_work(root: Path, config: dict, state: EarningsState, ledger:
     writer_cap = int(config["budgets"].get("publication_writers_per_day", 0))
     checker_cap = int(config["budgets"].get("publication_checkers_per_day", 0))
     cloud_cap = int(config["budgets"].get("publication_cloud_operations_per_day", 0))
+    backfill_cap = int(config["budgets"].get("publication_backfill_limit", 1))
     rows = state.db.execute("SELECT * FROM report_artifacts WHERE source_mode='live' ORDER BY rowid DESC").fetchall() if discover else []
     seen_series: set[str] = set()
     seen_subjects: set[tuple[str, str, str]] = set()
@@ -423,10 +488,17 @@ def run_publication_work(root: Path, config: dict, state: EarningsState, ledger:
                 (job_id, series_key, row["path"], row["sha256"], publication_type, str(scope_id), quarter, edition,
                  revision, "local_pending", None, None, None, 0, now, now))
 
-    jobs = state.db.execute("SELECT * FROM publication_jobs WHERE state IN ('checker_pending','local_pending') OR (state='retryable_failed' AND publication_manifest_path IS NULL) ORDER BY CASE state WHEN 'checker_pending' THEN 0 ELSE 1 END,updated_at").fetchall()
-    for raw in jobs:
+    jobs = [dict(row) for row in state.db.execute("""SELECT * FROM publication_jobs
+      WHERE state IN ('checker_pending','local_pending')
+      OR (state='retryable_failed' AND publication_manifest_path IS NULL)""").fetchall()]
+    publication_heads = _latest_company_publication_heads(root, state)
+    jobs.sort(key=lambda job: _publication_job_sort_key(root, job, publication_heads))
+    for job in jobs:
         if time.monotonic() >= deadline: break
-        job = dict(raw); has_writer = False
+        is_backfill = _publication_job_is_backfill(job, publication_heads)
+        if is_backfill and ledger.used(day, "publication_backfill") >= backfill_cap:
+            continue
+        has_writer = False
         try:
             if job.get("input_manifest_path"):
                 manifest_path = root / job["input_manifest_path"]
@@ -444,9 +516,16 @@ def run_publication_work(root: Path, config: dict, state: EarningsState, ledger:
             outcomes.append({"status": "failed", "job_id": job["job_id"], "reason": str(exc)})
             continue
         if has_writer:
-            if not ledger.reserve(day, job["job_id"] + ":checker", "publication_checker", checker_cap): continue
+            if ledger.used(day, "publication_checker") >= checker_cap:
+                continue
+            if is_backfill and not ledger.reserve(day, job["job_id"] + ":backfill", "publication_backfill", backfill_cap):
+                continue
+            if not ledger.reserve(day, job["job_id"] + ":checker", "publication_checker", checker_cap):
+                continue
         else:
             if ledger.used(day, "publication_writer") >= writer_cap or ledger.used(day, "publication_checker") >= checker_cap:
+                continue
+            if is_backfill and not ledger.reserve(day, job["job_id"] + ":backfill", "publication_backfill", backfill_cap):
                 continue
             if not ledger.reserve(day, job["job_id"] + ":writer", "publication_writer", writer_cap): continue
             if not ledger.reserve(day, job["job_id"] + ":checker", "publication_checker", checker_cap):
@@ -555,6 +634,7 @@ def finalize(root: Path, deployed: dict, deployed_path: Path, day: str, reports:
     publication_material = []
     key_symbols = {symbol for industry in read_json(root / "config/earnings_universe.json")["industries"]
                    for symbol in industry.get("key_symbols", [])}
+    publication_heads = _latest_company_publication_heads(root, state)
     cloud_by_id = {}
     for cloud_path in runtime_path(root, "runtime/earnings/publications/cloud").glob("*/state.json"):
         cloud = read_json(cloud_path); cloud_by_id[cloud.get("publication_id")] = cloud
@@ -564,7 +644,8 @@ def finalize(root: Path, deployed: dict, deployed_path: Path, day: str, reports:
         publication = read_json(manifest_path); cloud = cloud_by_id.get(publication["publication_id"], {})
         formal = publication["publication_type"] in {"industry", "market"} and publication["edition"] in {"full", "revision"}
         priority_company = publication["publication_type"] in {"company", "ipo"} and publication["scope_id"] in key_symbols
-        if publication.get("checker", {}).get("status") == "passed" and cloud.get("state") == "verified" and (formal or priority_company):
+        current_company = priority_company and _publication_matches_current_head(publication, publication_heads)
+        if publication.get("checker", {}).get("status") == "passed" and cloud.get("state") == "verified" and (formal or current_company):
             publication_material.append((publication, cloud, {"path": str(manifest_path.relative_to(root)), "sha256": digest}))
     lines = [f"财报研究 · {day}", ""]
     versions = [{"path": r["report_path"], "sha256": r["report_sha256"]} for r in candidates]
@@ -693,6 +774,18 @@ def run(args: argparse.Namespace) -> dict:
                         except Exception as exc:
                             fail_owned_attempt(state, manifest, str(exc))
                             errors.append(f"role:{manifest['task_id']}:{exc}")
+                if config.get("publication", {}).get("enabled") is True:
+                    try:
+                        # Publish accepted current-company research before downstream work can consume
+                        # the remaining batch clock. The final pass discovers later formal reports.
+                        current_publications = run_publication_work(root, config, state, ledger, deployed, day,
+                                                                   early_deadline, config_path=args.config)
+                        publications.extend(current_publications)
+                        errors.extend(f"publication-current:{row.get('job_id', 'unknown')}:{row.get('reason', 'failed')}"
+                                      for row in current_publications if row.get("status") == "failed")
+                    except Exception as exc:
+                        publications.append({"status": "failed", "reason": str(exc)})
+                        errors.append(f"publication-current:{exc}")
                 for work in industry_work(root, state, universe, ledger):
                     cap = int(config["budgets"]["daily_industry_limit"])
                     if ledger.used(day, "industry") >= cap or time.monotonic() >= early_deadline:

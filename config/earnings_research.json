@@ -94,6 +94,7 @@
     "publication_writers_per_day": 3,
     "publication_checkers_per_day": 3,
     "publication_cloud_operations_per_day": 2,
+    "publication_backfill_limit": 1,
     "escalations_per_day": 1,
     "task_timeout_seconds": 1800,
     "max_task_attempts": 2,
