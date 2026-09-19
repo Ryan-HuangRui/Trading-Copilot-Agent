@@ -19,6 +19,57 @@ from earnings_role_runner import run_role
 
 
 class EarningsDailyTests(unittest.TestCase):
+    def test_gap_quota_stops_later_quarterly_scopes_and_market_work(self):
+        import time
+        from earnings_daily import run_quarterly_step
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); state = EarningsState(root / 'runtime/earnings/state.sqlite'); ledger = DailyLedger(root)
+            config = json.loads((ROOT / 'config/earnings_research.json').read_text())
+            config['quarterly']['automatic_trigger_enabled'] = True
+            scopes = []
+            for index in range(2):
+                scopes.append({'scope_id': f'scope-{index}', 'industry_id': f'industry-{index}',
+                    'period_start': '2026-04-01', 'period_end': '2026-06-30', 'quarter_id': '2026-Q2',
+                    'revision': 1, 'cutoff': '2026-08-31T00:00:00Z', 'frozen_scope_path': f'frozen-{index}.json',
+                    'frozen_industry': {'industry_id': f'industry-{index}', 'issuers': [], 'key_symbols': []},
+                    'input_fingerprint': f'fingerprint-{index}', 'eligible_stage': True, 'deadline_stage_allowed': False,
+                    'maturity': {'counts': {'researched_issuers': 1}, 'critical_gap_status': 'unresolved'}})
+            review = {'quarter': '2026-Q2', 'scopes': scopes}
+            quota = {'status': 'queued', 'scope_id': 'scope-0', 'stage': 'gap_review',
+                     'reason': 'model_quota_exhausted: usage limit'}
+            with patch('earnings_daily.inspect_due', return_value=review), \
+                 patch('earnings_daily.run_gap_review_step', return_value=quota) as gap, \
+                 patch('earnings_daily.command') as command, patch('earnings_daily.run_role') as role:
+                outcomes = run_quarterly_step(root, config, {'industries': []}, state, ledger,
+                    {'codex_bin': '/bin/false'}, '2026-09-16', '2026-09-15T00:00:00Z', 'quota-run',
+                    root / 'runtime/earnings/logs', time.monotonic() + 5)
+            self.assertEqual(outcomes, [quota]); gap.assert_called_once(); command.assert_not_called(); role.assert_not_called()
+            self.assertEqual(ledger.used('2026-09-16', 'quarterly'), 0)
+            state.close(); ledger.db.close()
+
+    def test_daily_gap_quota_skips_final_publication_pass(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); (root / 'config').mkdir()
+            config = json.loads((ROOT / 'config/earnings_research.json').read_text())
+            config['publication']['enabled'] = True
+            atomic_write_json(root / 'config/earnings_research.json', config)
+            atomic_write_json(root / 'config/earnings_universe.json', {'industries': []})
+            atomic_write_json(root / 'runtime/earnings/deployment.json', {'schema_version': 1,
+                'verified_repo': str(root), 'project': 'test', 'session': 'test', 'verified_at': 'test',
+                'verified_from_cron_id': 'test', 'cc_connect_bin': '/bin/false', 'codex_bin': '/bin/false',
+                'delivery_enabled': False, 'batch_timeout_seconds': 120})
+            args = argparse.Namespace(repo_root=str(root), config='config/earnings_research.json',
+                deployment='runtime/earnings/deployment.json', resume_only=True, collect_only=False,
+                send=False, manual_quarter=None)
+            quota = [{'status': 'queued', 'scope_id': 'scope', 'stage': 'gap_review',
+                      'reason': 'model_quota_exhausted: usage limit'}]
+            with patch('earnings_daily.command', return_value={'status': 'skipped', 'manifests': []}), \
+                 patch('earnings_daily.run_publication_work', side_effect=[[], []]) as publication, \
+                 patch('earnings_daily.run_quarterly_step', return_value=quota):
+                result = run(args)
+            self.assertEqual(publication.call_count, 2)  # resume + current; no post-quarterly pass
+            self.assertTrue(any('quota exhausted in quarterly work' in error for error in result['errors']))
+
     def test_quarterly_empty_cohorts_do_not_consume_model_budget(self):
         from earnings_daily import run_quarterly_step
         import time
@@ -524,6 +575,62 @@ print(json.dumps({'ok':True,'identity':'user','data':data}))
             self.assertEqual(result['delivery']['delivery']['state'], 'suppressed')
 
 class EarningsDailyRecoveryTests(unittest.TestCase):
+    def test_quota_releases_company_and_quarterly_attempt_manifest_for_next_day_success(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); state = EarningsState(root / 'runtime/earnings/state.sqlite')
+            for task_type in ('company', 'industry'):
+                task, _ = state.enqueue_task(task_type=task_type, subject_id=f'{task_type}-subject', period_start=None,
+                    period_end='2026-06-30', input_hash=task_type, method_version='v1', source_mode='live',
+                    profile='daily', model='gpt-5.6-sol', effort='medium')
+                claimed = state.claim_task(task, owner='day-one', lease_seconds=60)
+                manifest_path = root / f'runtime/earnings/runs/day-one/{task_type}/input-manifest.json'
+                atomic_write_json(manifest_path, {'task_id': task})
+                state.register_attempt_manifest(task, 1, str(manifest_path.relative_to(root)), sha256_file(manifest_path))
+                manifest = {'task_id': task, 'lease': {'owner': 'day-one', 'attempt': claimed['attempts']}}
+                fail_owned_attempt(state, manifest, 'model_quota_exhausted: usage limit')
+                row = state.db.execute('SELECT state,attempts FROM research_tasks WHERE task_id=?', (task,)).fetchone()
+                self.assertEqual(tuple(row), ('queued', 0))
+                self.assertFalse(state.db.execute('SELECT 1 FROM task_attempt_manifests WHERE task_id=?', (task,)).fetchone())
+                next_claim = state.claim_task(task, owner='day-two', lease_seconds=60)
+                next_manifest = root / f'runtime/earnings/runs/day-two/{task_type}/input-manifest.json'
+                atomic_write_json(next_manifest, {'task_id': task, 'mock_model': 'success'})
+                state.register_attempt_manifest(task, 1, str(next_manifest.relative_to(root)), sha256_file(next_manifest))
+                self.assertEqual(next_claim['attempts'], 1)
+                state.complete_task(task, f'{task_type}-mock-success.json')
+                self.assertEqual(state.db.execute('SELECT state FROM research_tasks WHERE task_id=?', (task,)).fetchone()[0], 'completed')
+            state.close()
+
+    def test_publication_quota_releases_budget_and_attempt_before_next_day_mock_success(self):
+        import time
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); state = EarningsState(root / 'runtime/earnings/state.sqlite'); ledger = DailyLedger(root)
+            manifest = root / 'runtime/earnings/publications/runs/quota/input-manifest.json'
+            atomic_write_json(manifest, {'permitted_outputs': {'runner_result':
+                str((manifest.parent / 'runner-result.json').relative_to(root))}})
+            now = '2026-09-16T00:00:00Z'
+            state.db.execute("""INSERT INTO publication_jobs(job_id,series_key,source_path,source_sha256,publication_type,
+              scope_id,quarter_id,edition,revision,state,input_manifest_path,publication_manifest_path,error,attempts,created_at,updated_at)
+              VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", ('quota-job', 'series', 'report/source.json', 'hash', 'company',
+              'TEST', '2026-Q2', 'stage', 1, 'local_pending', str(manifest.relative_to(root)), None, None, 1, now, now))
+            config = json.loads((ROOT / 'config/earnings_research.json').read_text())
+            config['budgets']['publication_full_start_threshold_seconds'] = 1
+            config['budgets']['publication_checker_start_threshold_seconds'] = 1
+            with patch('earnings_daily.run_publication', side_effect=RuntimeError('model_quota_exhausted: usage limit')):
+                first = run_publication_work(root, config, state, ledger, {'codex_bin': '/bin/false'},
+                                             '2026-09-16', time.monotonic() + 5, discover=False)
+            row = state.db.execute("SELECT state,attempts FROM publication_jobs WHERE job_id='quota-job'").fetchone()
+            self.assertEqual(tuple(row), ('retryable_failed', 1))
+            self.assertEqual(ledger.used('2026-09-16', 'publication_writer'), 0)
+            self.assertEqual(ledger.used('2026-09-16', 'publication_checker'), 0)
+            self.assertIn('model_quota_exhausted', first[0]['reason'])
+            with patch('earnings_daily.run_publication', return_value={
+                    'status': 'success', 'manifest_path': 'report/earnings/publications/mock.json'}):
+                run_publication_work(root, config, state, ledger, {'codex_bin': '/bin/false'},
+                                     '2026-09-17', time.monotonic() + 5, discover=False)
+            row = state.db.execute("SELECT state,attempts FROM publication_jobs WHERE job_id='quota-job'").fetchone()
+            self.assertEqual(tuple(row), ('archived', 2))
+            state.close(); ledger.db.close()
+
     def test_exhausted_work_stays_visible_until_superseded(self):
         with TemporaryDirectory() as temp:
             state = EarningsState(Path(temp) / 'runtime/earnings/state.sqlite')
@@ -596,6 +703,32 @@ class EarningsDailyRecoveryTests(unittest.TestCase):
 
 
 class EarningsRoleProcessTests(unittest.TestCase):
+    def test_stale_manifest_cannot_release_foreign_owner_same_attempt(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); state = EarningsState(root / 'runtime/earnings/state.sqlite')
+            task, _ = state.enqueue_task(task_type='industry', subject_id='industry', period_start=None,
+                period_end='2026-06-30', input_hash='input', method_version='v1', source_mode='live',
+                profile='daily', model='gpt-5.6-sol', effort='medium')
+            claimed = state.claim_task(task, owner='old-owner', lease_seconds=60)
+            manifest_path = root / 'runtime/earnings/runs/foreign/input-manifest.json'
+            manifest = {'manifest_type': 'earnings-role-input', 'task_id': task,
+                'profile': {'model': 'gpt-5.6-sol', 'effort': 'medium'}, 'source_mode': 'live',
+                'lease': {'owner': 'old-owner', 'attempt': claimed['attempts']}, 'input_hash': 'input',
+                'previous_artifacts': [], 'company_artifacts': []}
+            atomic_write_json(manifest_path, manifest)
+            state.register_attempt_manifest(task, 1, str(manifest_path.relative_to(root)), sha256_file(manifest_path))
+            state.db.execute("UPDATE research_tasks SET lease_owner='new-owner' WHERE task_id=?", (task,))
+            state.close()
+            with patch('earnings_role_runner.subprocess.Popen') as popen:
+                with self.assertRaisesRegex(ValueError, 'stale task lease'):
+                    run_role(root, manifest_path, binary=sys.executable, timeout=1)
+            popen.assert_not_called()
+            state = EarningsState(root / 'runtime/earnings/state.sqlite')
+            row = state.db.execute('SELECT state,attempts,lease_owner FROM research_tasks WHERE task_id=?', (task,)).fetchone()
+            self.assertEqual(tuple(row), ('running', 1, 'new-owner'))
+            self.assertEqual(state.db.execute('SELECT COUNT(*) FROM task_attempt_manifests').fetchone()[0], 1)
+            state.close()
+
     def test_superseded_company_artifact_is_rejected_before_popen_and_attempt_is_restored(self):
         with TemporaryDirectory() as temp:
             root = Path(temp).resolve(); state = EarningsState(root / 'runtime/earnings/state.sqlite')

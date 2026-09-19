@@ -74,7 +74,9 @@ def preflight_or_defer(root: Path, manifest_path: Path) -> dict[str, Any]:
         if not errors:
             return manifest
         reason = "preflight rejected before model invocation: " + "; ".join(errors)
-        state.defer_attempt(manifest["task_id"], int((manifest.get("lease") or {}).get("attempt", 0)), reason,
+        lease = manifest.get("lease") or {}
+        state.defer_attempt(manifest["task_id"], int(lease.get("attempt", 0)), str(lease.get("owner") or ""),
+                            relative_to_root(root, manifest_path), sha256_file(manifest_path), reason,
                             superseded="task input superseded" in errors)
         raise ValueError(reason)
     finally:

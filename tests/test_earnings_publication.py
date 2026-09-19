@@ -13,7 +13,8 @@ from earnings_publication import (_facts, build_publication, claim_occurrence_in
                                   financial_fact_catalog, validate_reader_markdown)
 from earnings_period_review import resolve_report_period
 from earnings_lark import LarkDocumentPublisher, _readback_key, normalize_markdown_for_lark
-from earnings_publication_runner import prepare_input, prepare_repair_input, run_publication, recheck_publication
+from earnings_publication_runner import (_start_attempt_call, prepare_input, prepare_repair_input,
+                                         run_publication, recheck_publication)
 
 
 SOURCE = {
@@ -68,6 +69,18 @@ def markdown(value="100", include_risk=True, link="https://example.com/filing"):
 
 
 class EarningsPublicationTests(unittest.TestCase):
+    def test_repair_call_ids_include_full_run_path(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); ids = []
+            profile = {"model": "gpt-5.6-sol", "reasoning_effort": "medium"}
+            for company in ("company-a", "company-b"):
+                state_path = root / "runtime/earnings/publications/runs" / company / "repair-attempt-1" / "attempt-state.json"
+                atomic_write_json(state_path, {"calls": []})
+                _start_attempt_call(state_path, "writer", profile)
+                ids.append(read_json(state_path)["calls"][0]["call_id"])
+            self.assertEqual(len(set(ids)), 2)
+            self.assertIn("company-a/repair-attempt-1", ids[0])
+
     def test_catalog_normalizes_scaled_units_only_with_explicit_currency(self):
         report = json.loads(json.dumps(SOURCE)); report["evidence"][0]["numeric_facts"] = [
             {"metric": "UsdScaled", "value": "12", "unit": "million", "currency": "USD",
@@ -310,6 +323,8 @@ class EarningsPublicationTests(unittest.TestCase):
                     atomic_write_json(output, {"status": "passed", "errors": [], "warnings": [],
                         "source_mapping": [{"section": "全文", "claim_ids": ["c1"], "evidence_ids": ["e1"]}],
                         "fact_bindings": mappings})
+                elif output.name == "semantic-check.json":
+                    raise subprocess.TimeoutExpired("legacy-checker", 60)
                 else:
                     atomic_write_json(output, {"status": "failed",
                         "errors": ["毛利率改善不能推出定价权"], "warnings": [],
@@ -318,8 +333,11 @@ class EarningsPublicationTests(unittest.TestCase):
                 return {"input_tokens": 10, "output_tokens": 5}
 
             with patch("earnings_publication_runner._codex", side_effect=fake_codex):
+                with self.assertRaises(subprocess.TimeoutExpired):
+                    run_publication(root, manifest, binary=str(binary), timeout=60)
                 failed = run_publication(root, manifest, binary=str(binary), timeout=60)
                 self.assertEqual(failed["status"], "failed")
+                self.assertEqual(read_json(manifest.parent / "checker-stage.json")["attempt"], 2)
                 with self.assertRaisesRegex(ValueError, "independently passed"):
                     recheck_publication(root, manifest)
                 original_draft = root / read_json(manifest)["permitted_outputs"]["draft"]
@@ -344,9 +362,9 @@ class EarningsPublicationTests(unittest.TestCase):
             self.assertEqual(repaired["attempt"]["model_calls_completed"], 2)
             self.assertEqual([row["usage"] for row in repaired["attempt"]["calls"]],
                              [{"input_tokens": 10, "output_tokens": 5}] * 2)
-            self.assertEqual(len(calls), 4)
+            self.assertEqual(len(calls), 5)
             repair_result = run_publication(root, repair_manifest, binary=str(binary), timeout=60)
-            self.assertEqual(repair_result, repaired); self.assertEqual(len(calls), 4)
+            self.assertEqual(repair_result, repaired); self.assertEqual(len(calls), 5)
             with patch("earnings_publication_runner._codex", side_effect=AssertionError("must not call model")):
                 rechecked = recheck_publication(root, repair_manifest)
                 self.assertEqual(rechecked["status"], "success")
@@ -380,6 +398,41 @@ class EarningsPublicationTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "bounded attempt limit"):
                     run_publication(root, manifest, binary=str(binary), timeout=60)
 
+    def test_publication_quota_call_is_uncharged_and_next_invocation_succeeds(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); (root / "config").mkdir()
+            (root / "config/earnings_research.json").write_bytes(
+                (Path(__file__).resolve().parents[1] / "config/earnings_research.json").read_bytes())
+            live = {**SOURCE, "source_mode": "live"}
+            source = root / "report/earnings/source.json"; atomic_write_json(source, live)
+            binary = root / "fake-codex"; binary.write_text("fake"); binary.chmod(0o700)
+            manifest = prepare_input(root, publication_type="company", scope_id="TEST", quarter_id="2026-Q2",
+                                     source_paths=[source])
+            calls = 0
+            def fake_codex(_root, _binary, _profile, _prompt, output, _events, _stderr, _timeout):
+                nonlocal calls; calls += 1
+                if calls == 1:
+                    raise RuntimeError("model_quota_exhausted: usage limit")
+                if output.suffix == ".md":
+                    output.write_text(markdown())
+                else:
+                    mappings = validate_reader_markdown(markdown(), [live])["fact_mappings"]
+                    for binding in mappings: binding["input_fact_ids"] = []
+                    atomic_write_json(output, {"status": "passed", "errors": [], "warnings": [],
+                        "source_mapping": [{"section": "全文", "claim_ids": ["c1"], "evidence_ids": ["e1"]}],
+                        "fact_bindings": mappings})
+                return {"input_tokens": 2, "output_tokens": 1}
+            with patch("earnings_publication_runner._codex", side_effect=fake_codex):
+                with self.assertRaisesRegex(RuntimeError, "model_quota_exhausted"):
+                    run_publication(root, manifest, binary=str(binary), timeout=60)
+                state = read_json(manifest.parent / "attempt-state.json")
+                self.assertEqual(state["calls"][0]["failure_class"], "quota_exhausted")
+                result = run_publication(root, manifest, binary=str(binary), timeout=60)
+            self.assertEqual(result["status"], "success", result)
+            state = read_json(manifest.parent / "attempt-state.json")
+            self.assertEqual([row["attempt"] for row in state["calls"] if row["role"] == "writer"], [1, 2])
+            self.assertTrue((manifest.parent / "reader-draft-attempt-2.md").exists())
+
     def test_completed_writer_can_resume_checker_with_new_bounded_timeout(self):
         with TemporaryDirectory() as temp:
             root = Path(temp).resolve(); (root / "config").mkdir()
@@ -407,10 +460,21 @@ class EarningsPublicationTests(unittest.TestCase):
             with patch("earnings_publication_runner._codex", side_effect=fake_codex):
                 with self.assertRaises(subprocess.TimeoutExpired):
                     run_publication(root, manifest, binary=str(binary), timeout=30)
+                # Production legacy records did not persist an explicit attempt.
+                legacy_state = read_json(manifest.parent / "attempt-state.json")
+                checker_call = next(row for row in legacy_state["calls"] if row["role"] == "checker")
+                checker_call.pop("attempt", None)
+                atomic_write_json(manifest.parent / "attempt-state.json", legacy_state)
+                old_semantic = manifest.parent / "semantic-check.json"
+                atomic_write_json(old_semantic, {"legacy": "preserve"})
+                old_events = manifest.parent / "checker-events.jsonl"; old_events.write_text("legacy-events\n")
                 result = run_publication(root, manifest, binary=str(binary), timeout=60)
             self.assertEqual(result["status"], "success", result)
             state = read_json(manifest.parent / "attempt-state.json")
             self.assertEqual([row["attempt"] for row in state["calls"] if row["role"] == "checker"], [1, 2])
+            self.assertEqual(read_json(old_semantic), {"legacy": "preserve"})
+            self.assertEqual(old_events.read_text(), "legacy-events\n")
+            self.assertTrue((manifest.parent / "semantic-check-attempt-2.json").exists())
             self.assertEqual([row["timeout_seconds"] for row in state["invocations"]], [30, 60])
             self.assertEqual(len(timeouts), 3)
             self.assertGreater(timeouts[-1], timeouts[1])

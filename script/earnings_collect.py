@@ -10,7 +10,7 @@ from pathlib import Path
 import re
 from typing import Any
 
-from earnings_common import (ROOT, atomic_write_json, canonical_json, company_research_configuration_basis, company_research_configuration_hash, confined_path, configuration_path, emit, envelope, ensure_inside, load_config, parse_time,
+from earnings_common import (ROOT, atomic_write_json, canonical_json, company_research_configuration_basis, company_research_configuration_hash, confined_path, configuration_path, emit, envelope, ensure_inside, legacy_company_configuration_status, load_config, parse_time,
                              read_json, relative_to_root, resolve_path, safe_segment, sha256_bytes, shanghai_date, stable_id, utc_now)
 from earnings_sources import IssuerIRClient, SecClient, SharedRateLimiter, SourceError, sec_recent_filings
 from earnings_state import EarningsState
@@ -166,8 +166,12 @@ def _profile(config: dict[str, Any], name: str = "daily") -> tuple[str, str]:
     return str(row["model"]), str(row["reasoning_effort"])
 
 
+class LegacyConfigurationMigrationRequired(ValueError):
+    pass
+
+
 def _enqueue_event(state: EarningsState, config: dict[str, Any], config_hash: str,
-                   event: dict[str, Any], source_mode: str) -> tuple[str, bool]:
+                   event: dict[str, Any], source_mode: str, *, root: Path | None = None) -> tuple[str, bool]:
     model, effort = _profile(config)
     frozen = state.event_input_snapshot(event["event_id"], event["issuer_id"])
     issuer = state.db.execute("SELECT * FROM issuers WHERE issuer_id=?", (event["issuer_id"],)).fetchone()
@@ -178,9 +182,9 @@ def _enqueue_event(state: EarningsState, config: dict[str, Any], config_hash: st
     frozen.update({"event": dict(event), "issuer": frozen_issuer,
                    "configuration_hash": company_research_configuration_hash(config),
                    "configuration_basis": basis, "source_mode": source_mode})
-    # Reuse only an input whose complete semantic configuration can be proven equal.
-    # Legacy full-config hashes are intentionally not guessed compatible: a one-time
-    # research refresh is safer than silently hiding a source/model/method change.
+    comparable = {key: value for key, value in frozen.items()
+                  if key not in {"configuration_hash", "configuration_basis"}}
+    unresolved_legacy: list[str] = []
     for existing in state.db.execute("""SELECT task_id,state,error,model,effort,method_version FROM research_tasks WHERE task_type='company'
       AND subject_id=? AND period_start IS ? AND period_end IS ? AND source_mode=? ORDER BY rowid DESC""",
       (event["event_id"], event.get("reporting_start"), event.get("reporting_end"), source_mode)):
@@ -194,6 +198,21 @@ def _enqueue_event(state: EarningsState, config: dict[str, Any], config_hash: st
             continue
         if prior == frozen and prior.get("configuration_basis") == basis:
             return str(existing["task_id"]), False
+        prior_comparable = {key: value for key, value in prior.items()
+                            if key not in {"configuration_hash", "configuration_basis"}}
+        if prior_comparable != comparable or prior.get("configuration_basis") is not None:
+            continue
+        legacy_hash = prior.get("configuration_hash")
+        status = (legacy_company_configuration_status(root, legacy_hash, config)
+                  if root is not None and isinstance(legacy_hash, str) else "missing")
+        if status == "compatible":
+            return str(existing["task_id"]), False
+        if status == "missing":
+            unresolved_legacy.append(str(legacy_hash or "missing"))
+    if unresolved_legacy:
+        raise LegacyConfigurationMigrationRequired(
+            "legacy company task requires an explicitly registered raw config snapshot: "
+            + ",".join(sorted(set(unresolved_legacy))))
     input_hash = sha256_bytes(canonical_json(frozen))
     task_id, created = state.enqueue_task(
         task_type="company", subject_id=event["event_id"], period_start=event.get("reporting_start"),
@@ -240,7 +259,7 @@ def collect_offline(root: Path, state: EarningsState, config: dict[str, Any], co
                             "reporting_start": item.get("reporting_start"), "reporting_end": period_end}
     for event in events.values():
         event["input_hash"] = state.refresh_event(event["event_id"], event["issuer_id"], event["event_kind"], event.get("reporting_start"), event.get("reporting_end"))
-        _, created = _enqueue_event(state, config, config_hash, event, "fixture")
+        _, created = _enqueue_event(state, config, config_hash, event, "fixture", root=root)
         queued += int(created)
     state.set_watermark("fixture", str(input_path), cutoff.isoformat(), "success", f"documents={registered};duplicates={duplicate}")
     return {"registered_documents": registered, "revisions": revised, "duplicates": duplicate, "events": len(events), "queued_tasks": queued, "failures": []}
@@ -405,8 +424,12 @@ def collect_live(root: Path, state: EarningsState, config: dict[str, Any], confi
                     "event_kind": existing["event_kind"], "reporting_start": existing["reporting_start"], "reporting_end": existing["reporting_end"]})
             for event in issuer_events.values():
                 event["input_hash"] = state.refresh_event(event["event_id"], event["issuer_id"], event["event_kind"], event.get("reporting_start"), event.get("reporting_end"))
-                _, created = _enqueue_event(state, config, config_hash, event, "live")
-                queued += int(created)
+                try:
+                    _, created = _enqueue_event(state, config, config_hash, event, "live", root=root)
+                    queued += int(created)
+                except LegacyConfigurationMigrationRequired as exc:
+                    failures.append({"source": "configuration_migration", "scope": symbol,
+                                     "item": event["event_id"], "error": str(exc), "retryable": False})
             prior_checkpoint = previous_watermark.get("watermark") if previous_watermark else None
             # The checkpoint is the fully discovered scan boundary, not the latest filing date;
             # successful empty scans must advance too.
@@ -477,7 +500,7 @@ def collect_live(root: Path, state: EarningsState, config: dict[str, Any], confi
                 event = {"event_id": event_id, "event_kind": normalized_kind,
                          "reporting_start": item.get("reporting_start"), "reporting_end": reporting_end, "input_hash": input_hash}
                 event["issuer_id"] = issuer_id
-                _, created = _enqueue_event(state, config, config_hash, event, "live")
+                _, created = _enqueue_event(state, config, config_hash, event, "live", root=root)
                 queued += int(created)
             except (SourceError, KeyError, ValueError) as exc:
                 retryable = getattr(exc, "retryable", False)

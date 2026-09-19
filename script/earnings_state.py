@@ -270,18 +270,27 @@ class EarningsState:
                 return
             db.execute("INSERT INTO task_attempt_manifests VALUES(?,?,?,?,?)", (task_id, attempt, path, digest, utc_now()))
 
-    def defer_attempt(self, task_id: str, attempt: int, reason: str, *, superseded: bool = False) -> None:
+    def defer_attempt(self, task_id: str, attempt: int, lease_owner: str, manifest_path: str,
+                      manifest_sha256: str, reason: str, *, superseded: bool = False) -> bool:
         """Release a pre-model attempt without spending retry or model budget."""
         with self.immediate() as db:
-            row = db.execute("SELECT state,attempts FROM research_tasks WHERE task_id=?", (task_id,)).fetchone()
-            if not row or row["state"] != "running" or int(row["attempts"]) != attempt:
-                return
-            db.execute("DELETE FROM task_attempt_manifests WHERE task_id=? AND attempt=?", (task_id, attempt))
-            db.execute(
+            row = db.execute("SELECT state,attempts,lease_owner FROM research_tasks WHERE task_id=?", (task_id,)).fetchone()
+            if (not row or row["state"] != "running" or int(row["attempts"]) != attempt
+                    or row["lease_owner"] != lease_owner):
+                return False
+            removed = db.execute("""DELETE FROM task_attempt_manifests WHERE task_id=? AND attempt=?
+              AND path=? AND sha256=?""", (task_id, attempt, manifest_path, manifest_sha256)).rowcount
+            if removed != 1:
+                return False
+            changed = db.execute(
                 """UPDATE research_tasks SET state=?,attempts=attempts-1,lease_owner=NULL,lease_expires_at=NULL,
-                error=?,next_attempt_at=NULL,updated_at=? WHERE task_id=? AND state='running' AND attempts=?""",
-                ("terminal_failed" if superseded else "queued", reason, utc_now(), task_id, attempt),
-            )
+                error=?,next_attempt_at=NULL,updated_at=? WHERE task_id=? AND state='running' AND attempts=?
+                AND lease_owner=?""",
+                ("terminal_failed" if superseded else "queued", reason, utc_now(), task_id, attempt, lease_owner),
+            ).rowcount
+            if changed != 1:
+                raise RuntimeError("attempt lease changed during preflight deferral")
+            return True
 
     def discover_source_item(self, source: str, scope: str, item_key: str, payload: dict[str, Any]) -> bool:
         encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))

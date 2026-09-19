@@ -10,7 +10,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from earnings_common import (ROOT, atomic_write_json, canonical_json, company_research_configuration_hash, confined_path, configuration_path, emit, envelope, ensure_inside, load_config,
+from earnings_common import (ROOT, atomic_write_json, canonical_json, company_research_configuration_hash, confined_path, configuration_path, emit, envelope, ensure_inside, legacy_company_configuration_compatible, load_config,
                              parse_time, read_json, relative_to_root, resolve_path, sha256_bytes,
                              sha256_file, safe_segment, shanghai_date, stable_id, utc_now)
 from earnings_financials import derive_standalone_facts, extract_sec_company_facts
@@ -18,6 +18,10 @@ from earnings_state import EarningsState
 
 
 class NotYetPublic(RuntimeError):
+    pass
+
+
+class LegacyConfigurationPending(RuntimeError):
     pass
 
 
@@ -72,14 +76,23 @@ def _retry_feedback(root: Path, state: EarningsState, task: dict[str, Any]) -> d
 
 
 def _manifest_for_task(root: Path, state: EarningsState, task: dict[str, Any], cutoff: datetime,
-                       config_hash: str, universe_path: Path, run_id: str) -> dict[str, Any]:
+                       config_hash: str, universe_path: Path, run_id: str, config: dict[str, Any]) -> dict[str, Any]:
     frozen = state.task_input(task["task_id"])
     frozen_config_hash = frozen.get("configuration_hash")
     if not isinstance(frozen_config_hash, str) or not frozen_config_hash:
         raise ValueError("frozen task configuration hash is missing")
     frozen_basis = frozen.get("configuration_basis")
-    if not isinstance(frozen_basis, dict) or sha256_bytes(canonical_json(frozen_basis)) != frozen_config_hash:
-        raise ValueError("frozen task semantic configuration is missing or hash-mismatched")
+    if isinstance(frozen_basis, dict):
+        if sha256_bytes(canonical_json(frozen_basis)) != frozen_config_hash:
+            raise ValueError("frozen task semantic configuration hash mismatch")
+    else:
+        profile = (config.get("profiles") or {}).get("daily") or {}
+        legacy_profile_matches = (task.get("model"), task.get("effort"), task.get("method_version")) == (
+            profile.get("model"), profile.get("reasoning_effort"), "earnings-method-v1")
+        if (not legacy_profile_matches
+                or not legacy_company_configuration_compatible(root, frozen_config_hash, config)):
+            raise LegacyConfigurationPending(
+                "legacy task configuration/profile is not backed by a compatible registered raw snapshot")
     # Running tasks retain the configuration hash captured when they were created.
     # Current delivery/publication tuning cannot invalidate their evidence input.
     config_hash = frozen_config_hash
@@ -256,7 +269,7 @@ def main() -> None:
                                   company_tier=args.company_tier, priority_symbols=key_symbols)
         for task in tasks:
             try:
-                manifest = _manifest_for_task(root, state, task, cutoff, config_hash, universe, run_id)
+                manifest = _manifest_for_task(root, state, task, cutoff, config_hash, universe, run_id, config)
                 path = confined_path(root, resolve_path(root, manifest["permitted_outputs"]["completion"]).parent / "input-manifest.json", "runtime/earnings/runs")
                 encoded_hash = sha256_bytes(json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True).encode("utf-8") + b"\n")
                 if path.exists():
@@ -269,6 +282,10 @@ def main() -> None:
             except NotYetPublic as exc:
                 state.release_task(task["task_id"], str(exc))
                 failures.append({"task_id": task["task_id"], "error": str(exc), "pending_publication": True})
+            except LegacyConfigurationPending as exc:
+                state.release_task(task["task_id"], str(exc))
+                failures.append({"task_id": task["task_id"], "error": str(exc),
+                                 "pending_publication": False, "pending_configuration_migration": True})
             except Exception as exc:
                 state.fail_task(task["task_id"], str(exc), retryable=False)
                 failures.append({"task_id": task["task_id"], "error": str(exc), "pending_publication": False})
@@ -280,6 +297,9 @@ def main() -> None:
             payload.update(status="skipped", skipped=True, reason="no eligible changed company task; model must not be invoked")
         elif not manifests and failures and all(row.get("pending_publication") for row in failures):
             payload.update(status="skipped", skipped=True, reason="all frozen inputs are after cutoff; model must not be invoked")
+        elif not manifests and failures and all(row.get("pending_configuration_migration") for row in failures):
+            payload.update(status="skipped", skipped=True,
+                           reason="legacy configuration snapshot registration is required; model must not be invoked")
         elif not manifests and failures:
             payload.update(status="failed", reason="all claimed tasks had invalid or unprovable frozen inputs; model must not be invoked")
             emit(payload, 1)

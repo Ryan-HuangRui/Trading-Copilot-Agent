@@ -9,9 +9,10 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "script"))
 
-from earnings_collect import (_enqueue_event, _event_identity, _qualifying_exhibits, _sec_acceptance,
+from earnings_collect import (LegacyConfigurationMigrationRequired, _enqueue_event, _event_identity, _qualifying_exhibits, _sec_acceptance,
                               _select_initial_periods, collect_live, collect_offline)
-from earnings_common import canonical_json, sha256_bytes
+from earnings_common import atomic_write_json, canonical_json, sha256_bytes, sha256_file
+from earnings_config_migration import register_snapshot
 from earnings_sources import SecClient, SourceError, sec_recent_filings
 from earnings_state import EarningsState
 
@@ -139,9 +140,46 @@ class EarningsSourcesTests(unittest.TestCase):
             self.assertEqual(state.status()["queue"], {"queued": 1, "terminal_failed": 1})
             state.close()
 
-    def test_scoped_config_hash_does_not_guess_legacy_full_hash_compatible(self):
+    def test_legacy_raw_config_snapshot_reuses_queued_and_completed_tasks_without_mutation(self):
+        for terminal_state in ("queued", "completed"):
+            with self.subTest(state=terminal_state), TemporaryDirectory() as temp:
+                root = Path(temp); state = EarningsState(root / "runtime/earnings/state.sqlite")
+                old_config = self.config(); old_config["delivery"] = {"enabled": False}
+                current_config = self.config(); current_config["delivery"] = {"enabled": True}
+                snapshot = root / "runtime/earnings/pre-deployment-p4-config.json"
+                atomic_write_json(snapshot, old_config); raw_hash = sha256_file(snapshot)
+                self.assertNotEqual(raw_hash, sha256_bytes(canonical_json(old_config)))
+                register_snapshot(root, snapshot, execute=True)
+                state.upsert_issuer(issuer_id="issuer", cik=None, symbol="X", name="X", identity_status="resolved")
+                event = {"event_id": "event", "issuer_id": "issuer", "event_kind": "earnings",
+                         "reporting_start": None, "reporting_end": "2026-06-30"}
+                event["input_hash"] = state.refresh_event("event", "issuer", "earnings", None, "2026-06-30")
+                frozen = state.event_input_snapshot("event", "issuer")
+                frozen.update(event=event, issuer={"issuer_id": "issuer", "cik": None, "symbol": "X", "name": "X",
+                                                   "identity_status": "resolved"},
+                              configuration_hash=raw_hash, source_mode="live")
+                legacy_hash = sha256_bytes(canonical_json(frozen))
+                legacy, _ = state.enqueue_task(task_type="company", subject_id="event", period_start=None,
+                    period_end="2026-06-30", input_hash=legacy_hash, method_version="earnings-method-v1",
+                    source_mode="live", profile="daily", model="gpt-5.6-sol", effort="medium")
+                state.freeze_task_input(legacy, frozen, legacy_hash)
+                if terminal_state == "completed":
+                    state.claim_task(legacy, owner="legacy", lease_seconds=60)
+                    state.complete_task(legacy, "legacy-completion.json")
+                else:
+                    state.db.execute("UPDATE research_tasks SET attempts=1 WHERE task_id=?", (legacy,))
+                before = dict(state.db.execute("SELECT * FROM research_tasks WHERE task_id=?", (legacy,)).fetchone())
+                current, created = _enqueue_event(state, current_config, "new-raw-hash", event, "live", root=root)
+                after = dict(state.db.execute("SELECT * FROM research_tasks WHERE task_id=?", (legacy,)).fetchone())
+                self.assertEqual((current, created), (legacy, False))
+                self.assertEqual(after["attempts"], before["attempts"])
+                self.assertEqual(state.task_input(legacy), frozen)
+                self.assertEqual(state.db.execute("SELECT COUNT(*) FROM research_tasks").fetchone()[0], 1)
+                state.close()
+
+    def test_unknown_legacy_raw_config_is_blocked_pending_registration(self):
         with TemporaryDirectory() as temp:
-            state = EarningsState(Path(temp) / "state.sqlite")
+            root = Path(temp); state = EarningsState(root / "runtime/earnings/state.sqlite")
             state.upsert_issuer(issuer_id="issuer", cik=None, symbol="X", name="X", identity_status="resolved")
             event = {"event_id": "event", "issuer_id": "issuer", "event_kind": "earnings",
                      "reporting_start": None, "reporting_end": "2026-06-30"}
@@ -149,16 +187,41 @@ class EarningsSourcesTests(unittest.TestCase):
             frozen = state.event_input_snapshot("event", "issuer")
             frozen.update(event=event, issuer={"issuer_id": "issuer", "cik": None, "symbol": "X", "name": "X",
                                                "identity_status": "resolved"},
-                          configuration_hash="legacy-full-config-hash", source_mode="live")
-            legacy_hash = sha256_bytes(canonical_json(frozen))
+                          configuration_hash="unknown-raw-hash", source_mode="live")
+            digest = sha256_bytes(canonical_json(frozen))
             legacy, _ = state.enqueue_task(task_type="company", subject_id="event", period_start=None,
-                period_end="2026-06-30", input_hash=legacy_hash, method_version="earnings-method-v1",
+                period_end="2026-06-30", input_hash=digest, method_version="earnings-method-v1",
                 source_mode="live", profile="daily", model="gpt-5.6-sol", effort="medium")
-            state.freeze_task_input(legacy, frozen, legacy_hash)
-            current, created = _enqueue_event(state, self.config(), "unrelated-new-full-hash", event, "live")
-            self.assertTrue(created)
-            self.assertNotEqual(current, legacy)
-            self.assertEqual(state.db.execute("SELECT COUNT(*) FROM research_tasks").fetchone()[0], 2)
+            state.freeze_task_input(legacy, frozen, digest)
+            with self.assertRaises(LegacyConfigurationMigrationRequired):
+                _enqueue_event(state, self.config(), "new", event, "live", root=root)
+            self.assertEqual(state.db.execute("SELECT COUNT(*) FROM research_tasks").fetchone()[0], 1)
+            state.close()
+
+    def test_registered_legacy_snapshot_semantic_change_creates_new_task(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp); state = EarningsState(root / "runtime/earnings/state.sqlite")
+            old_config = self.config(); old_config["sources"] = {"primary": ["sec"]}
+            changed_config = self.config(); changed_config["sources"] = {"primary": ["sec", "issuer_ir"]}
+            snapshot = root / "runtime/earnings/old-config.json"; atomic_write_json(snapshot, old_config)
+            raw_hash = sha256_file(snapshot); register_snapshot(root, snapshot, execute=True)
+            state.upsert_issuer(issuer_id="issuer", cik=None, symbol="X", name="X", identity_status="resolved")
+            event = {"event_id": "event", "issuer_id": "issuer", "event_kind": "earnings",
+                     "reporting_start": None, "reporting_end": "2026-06-30"}
+            event["input_hash"] = state.refresh_event("event", "issuer", "earnings", None, "2026-06-30")
+            frozen = state.event_input_snapshot("event", "issuer")
+            frozen.update(event=event, issuer={"issuer_id": "issuer", "cik": None, "symbol": "X", "name": "X",
+                                               "identity_status": "resolved"},
+                          configuration_hash=raw_hash, source_mode="live")
+            digest = sha256_bytes(canonical_json(frozen))
+            legacy, _ = state.enqueue_task(task_type="company", subject_id="event", period_start=None,
+                period_end="2026-06-30", input_hash=digest, method_version="earnings-method-v1",
+                source_mode="live", profile="daily", model="gpt-5.6-sol", effort="medium")
+            state.freeze_task_input(legacy, frozen, digest)
+            current, created = _enqueue_event(state, changed_config, "new", event, "live", root=root)
+            self.assertTrue(created); self.assertNotEqual(current, legacy)
+            self.assertEqual(state.db.execute("SELECT state FROM research_tasks WHERE task_id=?", (legacy,)).fetchone()[0],
+                             "terminal_failed")
             state.close()
 
     def test_bounded_fetch_keeps_discovered_backlog_and_initialization_reaches_eight_periods(self):

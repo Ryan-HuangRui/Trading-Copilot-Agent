@@ -52,7 +52,9 @@ class EarningsStateTests(unittest.TestCase):
 
     def test_quota_and_capacity_are_distinct_and_timeout_is_neither(self):
         self.assertEqual(classify_model_failure("Codex usage limit has been reached"), "quota_exhausted")
+        self.assertEqual(classify_model_failure("model_quota_exhausted: backend stopped"), "quota_exhausted")
         self.assertEqual(classify_model_failure("server capacity temporarily unavailable"), "capacity_unavailable")
+        self.assertEqual(classify_model_failure("model_capacity_unavailable: retry"), "capacity_unavailable")
         self.assertIsNone(classify_model_failure("process timed out after 300 seconds"))
 
     def test_dependency_blocks_until_completed(self):

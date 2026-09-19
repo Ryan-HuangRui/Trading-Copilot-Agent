@@ -25,11 +25,11 @@ def classify_model_failure(*values: object) -> str | None:
     text = "\n".join(str(value) for value in values if value).lower()
     quota_markers = (
         "usage limit", "rate limit exceeded", "quota exceeded", "insufficient_quota",
-        "no weighted tokens left", "limit has been reached",
+        "no weighted tokens left", "limit has been reached", "model_quota_exhausted",
     )
     capacity_markers = (
         "server is overloaded", "overloaded", "capacity", "temporarily unavailable",
-        "service unavailable", "try again later",
+        "service unavailable", "try again later", "model_capacity_unavailable",
     )
     if any(marker in text for marker in quota_markers):
         return "quota_exhausted"
@@ -81,6 +81,35 @@ def company_research_configuration_basis(config: dict[str, Any]) -> dict[str, An
 def company_research_configuration_hash(config: dict[str, Any]) -> str:
     """Hash company-research inputs, excluding publication/delivery operations."""
     return sha256_bytes(canonical_json(company_research_configuration_basis(config)))
+
+
+def legacy_company_configuration_status(root: Path, legacy_hash: str,
+                                        current_config: dict[str, Any]) -> str:
+    """Verify a legacy raw config hash against an explicitly registered immutable snapshot."""
+    registry = root / "runtime" / "earnings" / "config-migrations" / "company-research.json"
+    if not registry.is_file():
+        return "missing"
+    payload = read_json(registry)
+    current_basis = company_research_configuration_basis(current_config)
+    current_hash = company_research_configuration_hash(current_config)
+    for row in payload.get("snapshots", []):
+        if row.get("raw_configuration_sha256") != legacy_hash:
+            continue
+        snapshot = ensure_inside(resolve_path(root, row.get("snapshot_path", "")),
+                                 [root / "runtime" / "earnings" / "config-migrations" / "snapshots"])
+        if (not snapshot.is_file() or sha256_file(snapshot) != legacy_hash
+                or row.get("snapshot_sha256") != legacy_hash):
+            return "missing"
+        legacy_config = read_json(snapshot)
+        legacy_basis = company_research_configuration_basis(legacy_config)
+        return ("compatible" if row.get("semantic_basis") == legacy_basis == current_basis
+                and row.get("semantic_hash") == current_hash else "incompatible")
+    return "missing"
+
+
+def legacy_company_configuration_compatible(root: Path, legacy_hash: str,
+                                            current_config: dict[str, Any]) -> bool:
+    return legacy_company_configuration_status(root, legacy_hash, current_config) == "compatible"
 
 
 def sha256_file(path: Path) -> str:

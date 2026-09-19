@@ -111,13 +111,14 @@ def industry_work(root: Path, state: EarningsState, universe: dict, ledger: Dail
 def fail_owned_attempt(state: EarningsState, manifest: dict, error: str) -> None:
     """An outer failure must never revert a committed report or another owner's lease."""
     lease = manifest["lease"]
+    if _quota_exhausted(error):
+        registered = state.db.execute("""SELECT path,sha256 FROM task_attempt_manifests
+          WHERE task_id=? AND attempt=?""", (manifest["task_id"], lease["attempt"])).fetchone()
+        if registered:
+            state.defer_attempt(manifest["task_id"], int(lease["attempt"]), str(lease["owner"]),
+                                registered["path"], registered["sha256"], error)
+        return
     with state.immediate() as db:
-        if _quota_exhausted(error):
-            db.execute("""UPDATE research_tasks SET state='queued',attempts=attempts-1,error=?,next_attempt_at=NULL,
-              lease_owner=NULL,lease_expires_at=NULL,updated_at=? WHERE task_id=? AND state='running'
-              AND lease_owner=? AND attempts=?""",
-              (error, utc_now(), manifest["task_id"], lease["owner"], lease["attempt"]))
-            return
         next_attempt = ((datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat(timespec="seconds")
                         if "model_capacity_unavailable" in error.lower() else None)
         db.execute("""UPDATE research_tasks SET state=CASE WHEN attempts<max_attempts
@@ -391,6 +392,7 @@ def run_quarterly_step(root: Path, config: dict, universe: dict, state: Earnings
                     "--run-id", f"{run_id}-quarterly-{uuid.uuid4().hex[:8]}",
                     "--lease-seconds", str(int(config["budgets"]["task_timeout_seconds"]) + 180)]
             for path in predecessors: args.extend(["--predecessor-report", path])
+            manifest = None
             try:
                 context = command(root, "earnings_industry_context.py", args, logs, 120)
                 if context.get("model_execution_required"):
@@ -408,11 +410,14 @@ def run_quarterly_step(root: Path, config: dict, universe: dict, state: Earnings
                 else:
                     outcomes.append(context)
             except Exception as exc:
+                if manifest is not None:
+                    fail_owned_attempt(state, manifest, str(exc))
                 qledger.set_stage(scope["scope_id"], role, "failed", error=str(exc))
                 outcomes.append({"status": "failed", "scope_id": scope["scope_id"], "stage": role, "reason": str(exc)})
                 if "preflight rejected before model invocation" in str(exc):
                     ledger.release(day, f"{scope['scope_id']}:{role}", "quarterly")
                 if _quota_exhausted(exc):
+                    ledger.release(day, f"{scope['scope_id']}:{role}", "quarterly")
                     quota_open = True
                     break
                 continue
@@ -459,7 +464,14 @@ def run_quarterly_step(root: Path, config: dict, universe: dict, state: Earnings
                             market_result = run_role(root, root / context["artifacts"][0], binary=deployed["codex_bin"],
                                 timeout=min(int(config["budgets"]["task_timeout_seconds"]), max(1, int(deadline-time.monotonic()))))
                         except Exception as exc:
+                            try:
+                                market_manifest = read_json(root / context["artifacts"][0])
+                                fail_owned_attempt(state, market_manifest, str(exc))
+                            except (OSError, KeyError, json.JSONDecodeError, ValueError):
+                                pass
                             if "preflight rejected before model invocation" in str(exc):
+                                ledger.release(day, market_key, "quarterly")
+                            if _quota_exhausted(exc):
                                 ledger.release(day, market_key, "quarterly")
                             raise
                         outcomes.append(market_result)
@@ -640,6 +652,17 @@ def run_publication_work(root: Path, config: dict, state: EarningsState, ledger:
                         qledger.set_stage(qscope[0], "checker", "completed", artifact_path=result["manifest_path"])
                 finally: qledger.close()
         except Exception as exc:
+            if _quota_exhausted(exc):
+                for suffix, role_name in ((":writer", "publication_writer"), (":checker", "publication_checker"),
+                                          (":repair", "publication_repair"), (":backfill", "publication_backfill")):
+                    ledger.release(day, job["job_id"] + suffix, role_name)
+                next_state = "checker_pending" if (manifest_path.parent / "writer-stage.json").exists() else "retryable_failed"
+                state.db.execute("UPDATE publication_jobs SET state=?,error=?,updated_at=? WHERE job_id=?",
+                                 (next_state, str(exc), utc_now(), job["job_id"]))
+                attempt_path = manifest_path.parent / "attempt-state.json"
+                attempt = read_json(attempt_path) if attempt_path.exists() else None
+                outcomes.append({"status": "failed", "job_id": job["job_id"], "reason": str(exc), "attempt": attempt})
+                break
             exhausted = int(job.get("attempts", 0)) + 1 >= int(config["budgets"].get("max_task_attempts", 2))
             next_state = "terminal_failed" if exhausted else ("checker_pending" if (manifest_path.parent / "writer-stage.json").exists() else "retryable_failed")
             state.db.execute("UPDATE publication_jobs SET state=?,error=?,attempts=attempts+1,updated_at=? WHERE job_id=?",
@@ -647,8 +670,6 @@ def run_publication_work(root: Path, config: dict, state: EarningsState, ledger:
             attempt_path = manifest_path.parent / "attempt-state.json"
             attempt = read_json(attempt_path) if attempt_path.exists() else None
             outcomes.append({"status": "failed", "job_id": job["job_id"], "reason": str(exc), "attempt": attempt})
-            if _quota_exhausted(exc):
-                break
             if "model_capacity_unavailable" in str(exc).lower():
                 break
 
@@ -1026,6 +1047,9 @@ def run(args: argparse.Namespace) -> dict:
                 except Exception as exc:
                     quarterly = [{"status": "failed", "reason": str(exc)}]
                     errors.append(f"quarterly:{exc}")
+                    if _quota_exhausted(exc):
+                        model_circuit_open = True
+                        errors.append("model-circuit:quota exhausted in quarterly work; publication deferred")
                 if config.get("publication", {}).get("enabled") is True and not model_circuit_open:
                     try:
                         new_publications = run_publication_work(root, config, state, ledger, deployed, day, deadline,

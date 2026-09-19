@@ -73,3 +73,5 @@ adapter 的参数形状按官方 lark-cli 文档：它把 cwd 固定到准备目
 ### runtime 配置增量迁移
 
 NAS 的 `runtime/earnings/p4-config.json` 应从新 tracked 配置合并下列预算键，保留现有 activation flags、路径和身份配置，不整文件覆盖：`company_history_limit=2`、`publication_repairs_per_day=1`、`publication_full_start_threshold_seconds=900`、`publication_checker_start_threshold_seconds=480`、`publication_stage_timeout_seconds=900`、`phase_reserve_seconds=1200`。`company_history_limit` 是每日公司总预算内的历史回补硬上限，其余容量优先当前期和关键公司缺口；已有 `daily_company_limit`/`strong_season_company_limit` 不扩大。部署前先用 `earnings-recovery` preview 精确列出待恢复 job；备份后只恢复所选任务。
+
+升级 scoped company configuration hash 前，先把部署前 `p4-config.json` 的**原始字节**复制到 `runtime/earnings/`，不要格式化或重写；随后运行 `python3 script/earnings_config_migration.py --snapshot runtime/earnings/<原始副本>.json` 预览 raw SHA-256 与 semantic basis。核对该 raw hash 与旧任务的 `configuration_hash` 分布后，再加 `--execute` 注册。工具在日批次共享锁内按原始字节归档到 `runtime/earnings/config-migrations/snapshots/` 并写审计 registry。只有 raw hash、快照文件 hash、semantic basis、model/effort/method 和其余冻结证据全部一致时才复用旧 task/report；未知旧 hash 保持待迁移并报人工核对，不自动全量重研。该注册不修改 immutable `task_inputs`、任务 attempts 或已完成报告。

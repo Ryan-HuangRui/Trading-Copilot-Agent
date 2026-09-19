@@ -114,6 +114,11 @@ def _start_attempt_call(state_path: Path, role: str, profile: dict[str, Any], *,
                        failure_class="ambiguous", finished_at=utc_now(), recovered_legacy_started=True)
             recovered = True
     prior = [row for row in calls if row.get("role") == role]
+    for index, row in enumerate(prior):
+        if not row.get("attempt"):
+            row["attempt"] = index + 1
+            row["recovered_legacy_attempt_number"] = True
+            recovered = True
     if any(row.get("status") == "completed" for row in prior):
         raise ValueError(f"{role} model call already completed")
     charged = [row for row in prior if row.get("failure_class") != "quota_exhausted"]
@@ -121,10 +126,16 @@ def _start_attempt_call(state_path: Path, role: str, profile: dict[str, Any], *,
         if recovered:
             atomic_write_json(state_path, state)
         raise ValueError(f"{role} model call was already attempted; bounded attempt limit reached")
-    attempt = max([int(row.get("attempt") or 0) for row in prior] or [0]) + 1
+    numbered = [int(row["attempt"]) for row in prior]
+    attempt = max(numbered or [0]) + 1
+    parts = state_path.resolve().parts
+    try:
+        call_scope = "/".join(parts[parts.index("runtime"): -1])
+    except ValueError:
+        call_scope = state_path.parent.as_posix()
     calls.append({"role": role, "model": profile["model"], "effort": profile["reasoning_effort"],
                   "attempt": attempt, "status": "started", "usage": None, "failure": None,
-                  "failure_class": None, "call_id": f"publication:{state_path.parent.name}:{role}:{attempt}",
+                  "failure_class": None, "call_id": f"publication:{call_scope}:{role}:{attempt}",
                   "started_at": utc_now()})
     state["model_calls_started"] = len(calls)
     atomic_write_json(state_path, state)
