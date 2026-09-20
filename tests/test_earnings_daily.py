@@ -455,6 +455,17 @@ print(json.dumps({'ok':True,'identity':'user','data':data}))
             heads = _latest_company_publication_heads(root, state)
             self.assertFalse(_publication_matches_current_head({'publication_type': 'company', 'scope_id': 'TEST',
                 'sources': [{'sha256': 'not-the-head'}]}, heads))
+            state.refresh_event('event-newest', 'issuer', 'earnings', None, '2026-09-30')
+            newest, _ = state.enqueue_task(task_type='company', subject_id='event-newest', period_start=None,
+                period_end='2026-09-30', input_hash='newest', method_version='v1', source_mode='live',
+                profile='daily', model='gpt-5.6-sol', effort='medium')
+            heads = _latest_company_publication_heads(root, state)
+            self.assertEqual(heads[('company', 'TEST')]['task_id'], newest)
+            self.assertIsNone(heads[('company', 'TEST')]['sha256'])
+            self.assertFalse(_publication_matches_current_head({'publication_type': 'company', 'scope_id': 'TEST',
+                'sources': [{'sha256': digest}]}, heads))
+            state.db.execute("UPDATE research_tasks SET state='terminal_failed' WHERE task_id=?", (newest,)); state.db.commit()
+            self.assertIsNone(_latest_company_publication_heads(root, state)[('company', 'TEST')]['sha256'])
             state.close(); ledger.db.close()
 
     def test_cached_failed_publication_schedules_repair_without_new_budget_or_cloud(self):

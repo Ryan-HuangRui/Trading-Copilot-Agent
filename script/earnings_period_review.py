@@ -191,6 +191,18 @@ class QuarterlyReviewLedger:
             self.db.execute("ALTER TABLE quarterly_scopes ADD COLUMN revision INTEGER NOT NULL DEFAULT 1")
         if "input_fingerprint" not in columns:
             self.db.execute("ALTER TABLE quarterly_scopes ADD COLUMN input_fingerprint TEXT")
+        for column, definition in (
+            ("active_round_id", "TEXT"), ("pending_fingerprint", "TEXT"),
+            ("accepted_reports_json", "TEXT NOT NULL DEFAULT '[]'"),
+            ("pending_reports_json", "TEXT"),
+        ):
+            if column not in columns:
+                self.db.execute(f"ALTER TABLE quarterly_scopes ADD COLUMN {column} {definition}")
+        self.db.execute("""CREATE TABLE IF NOT EXISTS quarterly_input_boundaries(
+          scope_id TEXT NOT NULL, round_id TEXT NOT NULL, revision INTEGER NOT NULL,
+          cutoff TEXT NOT NULL, accepted_fingerprint TEXT NOT NULL, accepted_reports_json TEXT NOT NULL,
+          pending_fingerprint TEXT, pending_reports_json TEXT, decision TEXT NOT NULL,
+          created_at TEXT NOT NULL, PRIMARY KEY(scope_id,round_id,accepted_fingerprint,decision))""")
         for scope in self.db.execute("SELECT scope_id FROM quarterly_scopes").fetchall():
             for stage in self.STAGES:
                 self.db.execute("INSERT OR IGNORE INTO quarterly_stages(scope_id,stage,state,updated_at) VALUES(?,?,?,?)",
@@ -247,13 +259,56 @@ class QuarterlyReviewLedger:
     def close(self) -> None:
         self.db.close()
 
-    def begin_revision(self, scope_id: str, input_fingerprint: str, cutoff: str) -> bool:
+    def _write_accepted_input(self, row: sqlite3.Row | dict[str, Any]) -> str:
+        payload = dict(row)
+        path = self.path.parent / "quarterly-scopes" / payload["scope_id"] / "revisions" / f"v{payload['revision']}" / "accepted-company-input.json"
+        atomic_write_json(path, {"schema_version": 1, "scope_id": payload["scope_id"],
+            "revision": payload["revision"], "round_id": payload.get("active_round_id"),
+            "cutoff": payload["cutoff"], "input_fingerprint": payload.get("input_fingerprint"),
+            "reports": json.loads(payload.get("accepted_reports_json") or "[]")})
+        return str(path)
+
+    def begin_revision(self, scope_id: str, input_fingerprint: str, cutoff: str, *,
+                       round_id: str | None = None, accepted_reports: list[dict[str, Any]] | None = None) -> bool:
         row = self.db.execute("SELECT * FROM quarterly_scopes WHERE scope_id=?", (scope_id,)).fetchone()
         if not row: raise ValueError("quarterly scope missing")
+        round_key = round_id or f"cutoff:{cutoff}"
+        reports_json = json.dumps(accepted_reports or [], ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         if not row["input_fingerprint"]:
-            self.db.execute("UPDATE quarterly_scopes SET input_fingerprint=?,updated_at=? WHERE scope_id=?",
-                            (input_fingerprint, utc_now(), scope_id)); self.db.commit(); return False
-        if row["input_fingerprint"] == input_fingerprint: return False
+            self.db.execute("""UPDATE quarterly_scopes SET input_fingerprint=?,active_round_id=?,
+              accepted_reports_json=?,updated_at=? WHERE scope_id=?""",
+              (input_fingerprint, round_key, reports_json, utc_now(), scope_id))
+            self.db.execute("INSERT OR REPLACE INTO quarterly_input_boundaries VALUES(?,?,?,?,?,?,?,?,?,?)",
+              (scope_id, round_key, row["revision"], cutoff, input_fingerprint, reports_json,
+               None, None, "accepted_initial", utc_now()))
+            self.db.commit(); self._write_accepted_input(self.db.execute(
+                "SELECT * FROM quarterly_scopes WHERE scope_id=?", (scope_id,)).fetchone()); return False
+        if row["active_round_id"] == round_key:
+            if row["input_fingerprint"] == input_fingerprint:
+                return False
+            started = self.db.execute("""SELECT 1 FROM quarterly_stages WHERE scope_id=?
+              AND stage IN ('gap_review','industry','challenge','synthesis') AND state!='pending' LIMIT 1""",
+              (scope_id,)).fetchone()
+            if started:
+                self.db.execute("""UPDATE quarterly_scopes SET pending_fingerprint=?,pending_reports_json=?,updated_at=?
+                  WHERE scope_id=?""", (input_fingerprint, reports_json, utc_now(), scope_id))
+                self.db.execute("INSERT OR REPLACE INTO quarterly_input_boundaries VALUES(?,?,?,?,?,?,?,?,?,?)",
+                  (scope_id, round_key, row["revision"], row["cutoff"], row["input_fingerprint"],
+                   row["accepted_reports_json"] or "[]", input_fingerprint, reports_json,
+                   "deferred_after_dag_start", utc_now()))
+                self.db.commit(); return False
+            self.db.execute("""UPDATE quarterly_scopes SET input_fingerprint=?,accepted_reports_json=?,
+              pending_fingerprint=NULL,pending_reports_json=NULL,updated_at=? WHERE scope_id=?""",
+              (input_fingerprint, reports_json, utc_now(), scope_id))
+            self.db.execute("INSERT OR REPLACE INTO quarterly_input_boundaries VALUES(?,?,?,?,?,?,?,?,?,?)",
+              (scope_id, round_key, row["revision"], row["cutoff"], input_fingerprint, reports_json,
+               None, None, "expanded_before_dag_start", utc_now()))
+            self.db.commit(); self._write_accepted_input(self.db.execute(
+                "SELECT * FROM quarterly_scopes WHERE scope_id=?", (scope_id,)).fetchone()); return False
+        if row["input_fingerprint"] == input_fingerprint:
+            self.db.execute("""UPDATE quarterly_scopes SET active_round_id=?,pending_fingerprint=NULL,
+              pending_reports_json=NULL,updated_at=? WHERE scope_id=?""", (round_key, utc_now(), scope_id))
+            self.db.commit(); return False
         # New accepted company evidence supersedes an incomplete stage edition too. An
         # industry revision cannot wait for the cross-industry market stage, which is
         # allowed to depend on other scopes. Single-process execution prevents overlap.
@@ -262,8 +317,9 @@ class QuarterlyReviewLedger:
             SELECT scope_id,?,stage,state,input_hash,artifact_path,artifact_sha256,attempts,error,updated_at
             FROM quarterly_stages WHERE scope_id=?""", (revision, scope_id))
         new_revision = revision + 1
-        self.db.execute("UPDATE quarterly_scopes SET revision=?,input_fingerprint=?,cutoff=?,edition='revision',updated_at=? WHERE scope_id=?",
-                        (new_revision, input_fingerprint, cutoff, utc_now(), scope_id))
+        self.db.execute("""UPDATE quarterly_scopes SET revision=?,input_fingerprint=?,cutoff=?,edition='revision',
+          active_round_id=?,accepted_reports_json=?,pending_fingerprint=NULL,pending_reports_json=NULL,updated_at=?
+          WHERE scope_id=?""", (new_revision, input_fingerprint, cutoff, round_key, reports_json, utc_now(), scope_id))
         self.db.execute("""UPDATE quarterly_stages SET state='pending',input_hash=NULL,artifact_path=NULL,
             artifact_sha256=NULL,attempts=0,error=NULL,updated_at=? WHERE scope_id=?""", (utc_now(), scope_id))
         revision_path = self.path.parent / "quarterly-scopes" / scope_id / "revisions" / f"v{new_revision}" / "frozen-scope.json"
@@ -271,7 +327,11 @@ class QuarterlyReviewLedger:
             "quarter_id": row["quarter_id"], "period_start": row["period_start"], "period_end": row["period_end"],
             "cutoff": cutoff, "frozen_universe_hash": row["frozen_universe_hash"],
             "industry": json.loads(row["frozen_universe_json"])})
-        self.db.commit(); return True
+        self.db.execute("INSERT OR REPLACE INTO quarterly_input_boundaries VALUES(?,?,?,?,?,?,?,?,?,?)",
+          (scope_id, round_key, new_revision, cutoff, input_fingerprint, reports_json,
+           None, None, "accepted_new_revision", utc_now()))
+        self.db.commit(); self._write_accepted_input(self.db.execute(
+            "SELECT * FROM quarterly_scopes WHERE scope_id=?", (scope_id,)).fetchone()); return True
 
 
 def record_gap_review(root: Path, scope_id: str, result_path: Path) -> dict[str, Any]:
@@ -331,7 +391,8 @@ def _period_members(state: EarningsState, issuer_ids: list[str], quarter_id: str
 
 
 def _period_member_audit(state: EarningsState, issuer_ids: list[str], quarter_id: str,
-                         cutoff: str | None = None) -> tuple[set[str], set[str], set[str], dict[str, list[str]]]:
+                         cutoff: str | None = None,
+                         accepted_report_hashes: set[str] | None = None) -> tuple[set[str], set[str], set[str], dict[str, list[str]]]:
     cutoff_dt = parse_time(cutoff or utc_now())
     root = state.path.resolve().parents[2]
     disclosed: set[str] = set(); fetched: set[str] = set(); researched: set[str] = set()
@@ -354,6 +415,8 @@ def _period_member_audit(state: EarningsState, issuer_ids: list[str], quarter_id
             ORDER BY a.rowid DESC""", event_ids).fetchall()
         for raw in reports:
             row = dict(raw); report_path = root / row["path"]
+            if accepted_report_hashes is not None and row["sha256"] not in accepted_report_hashes:
+                continue
             if not report_path.is_file() or sha256_file(report_path) != row["sha256"]:
                 reasons[issuer_id].append(f"research file/hash invalid: {row['report_id']}"); continue
             report = read_json(report_path); report_cutoff = parse_time(report.get("cutoff"))
@@ -396,10 +459,10 @@ def _period_member_audit(state: EarningsState, issuer_ids: list[str], quarter_id
     return disclosed, fetched, researched, reasons
 
 
-def _scope_input_fingerprint(state: EarningsState, root: Path, scope: sqlite3.Row, cutoff: str) -> str:
+def _scope_input_snapshot(state: EarningsState, root: Path, scope: sqlite3.Row, cutoff: str) -> tuple[str, list[dict[str, Any]]]:
     industry = json.loads(scope["frozen_universe_json"])
     symbol_to_id = {row["symbol"]: row["issuer_id"] for row in state.db.execute("SELECT symbol,issuer_id FROM issuers")}
-    versions = []
+    versions = []; accepted = []
     for issuer in industry.get("issuers", []):
         issuer_id = symbol_to_id.get(issuer["symbol"])
         if not issuer_id:
@@ -415,12 +478,15 @@ def _scope_input_fingerprint(state: EarningsState, root: Path, scope: sqlite3.Ro
             try: period = resolve_report_period(report)
             except ValueError: continue
             if period["research_quarter"] == scope["quarter_id"]:
+                accepted.append({"issuer_id": issuer_id, "report_id": row["report_id"], "task_id": row["task_id"],
+                                 "path": row["path"], "sha256": row["sha256"]})
                 versions.append((issuer_id, row["report_id"], row["sha256"])); break
-    return sha256_bytes(canonical_json({"membership": scope["frozen_universe_hash"], "reports": versions}))
+    accepted.sort(key=lambda row: (row["issuer_id"], row["report_id"]))
+    return sha256_bytes(canonical_json({"membership": scope["frozen_universe_hash"], "reports": versions})), accepted
 
 
 def inspect_due(root: Path, *, day: str, cutoff: str, config_path: str, universe_path: str,
-                manual_quarter: str | None = None) -> dict[str, Any]:
+                manual_quarter: str | None = None, round_id: str | None = None) -> dict[str, Any]:
     config, _ = load_config(root, config_path); universe = read_json(root / universe_path)
     selected = review_quarter_for_day(date.fromisoformat(day), config.get("seasons"))
     if manual_quarter:
@@ -445,11 +511,13 @@ def inspect_due(root: Path, *, day: str, cutoff: str, config_path: str, universe
             existing = ledger.db.execute("SELECT * FROM quarterly_scopes WHERE quarter_id=? ORDER BY created_at,industry_id",
                                          (selected["quarter_id"],)).fetchall()
         for registered in ledger.db.execute("SELECT * FROM quarterly_scopes ORDER BY period_end,industry_id").fetchall():
-            fingerprint = _scope_input_fingerprint(state, root, registered, cutoff)
-            ledger.begin_revision(registered["scope_id"], fingerprint, cutoff)
+            fingerprint, accepted = _scope_input_snapshot(state, root, registered, cutoff)
+            ledger.begin_revision(registered["scope_id"], fingerprint, cutoff,
+                                  round_id=round_id, accepted_reports=accepted)
         # Incomplete scopes remain due after their nominal window and across quarter rollovers.
         due = ledger.db.execute("""SELECT DISTINCT q.* FROM quarterly_scopes q JOIN quarterly_stages s ON s.scope_id=q.scope_id
-            WHERE s.state!='completed' ORDER BY q.period_end,q.created_at,q.industry_id""").fetchall()
+            WHERE s.stage IN ('coverage','gap_review','industry','challenge','synthesis')
+              AND s.state!='completed' ORDER BY q.period_end,q.created_at,q.industry_id""").fetchall()
         scopes = []
         gap_artifacts = []
         for raw_scope in due:
@@ -459,16 +527,19 @@ def inspect_due(root: Path, *, day: str, cutoff: str, config_path: str, universe
             expected = [symbol_to_id.get(row["symbol"], f"unresolved:{row['symbol']}") for row in frozen_industry["issuers"]]
             keys = [symbol_to_id.get(symbol, f"unresolved:{symbol}") for symbol in frozen_industry.get("key_symbols", [])]
             resolved = [issuer_id for issuer_id in expected if not issuer_id.startswith("unresolved:")]
+            accepted_reports = json.loads(scope.get("accepted_reports_json") or "[]")
+            accepted_hashes = {row["sha256"] for row in accepted_reports}
             disclosed, fetched, researched, member_reasons = _period_member_audit(
-                state, resolved, scope["quarter_id"], cutoff=scope["cutoff"])
+                state, resolved, scope["quarter_id"], cutoff=scope["cutoff"], accepted_report_hashes=accepted_hashes)
             for issuer_id in expected:
                 if issuer_id.startswith("unresolved:"):
                     member_reasons[issuer_id] = ["issuer identity unresolved"]
             report_summaries = []
-            for issuer_id in sorted(researched):
-                rows = state.db.execute("""SELECT a.* FROM report_artifacts a JOIN research_tasks t ON t.task_id=a.task_id
-                    WHERE a.report_type='company' AND a.source_mode='live' AND t.state='completed' AND a.subject_id IN
-                    (SELECT event_id FROM earnings_events WHERE issuer_id=?) ORDER BY a.rowid DESC""", (issuer_id,)).fetchall()
+            for accepted_row in accepted_reports:
+                issuer_id = accepted_row["issuer_id"]
+                if issuer_id not in researched: continue
+                rows = state.db.execute("SELECT * FROM report_artifacts WHERE report_id=? AND sha256=?",
+                                        (accepted_row["report_id"], accepted_row["sha256"])).fetchall()
                 for row in rows:
                     report_path = root / row["path"]
                     if not report_path.is_file() or sha256_file(report_path) != row["sha256"]: continue
@@ -517,6 +588,8 @@ def inspect_due(root: Path, *, day: str, cutoff: str, config_path: str, universe
                            "quarter_id": scope["quarter_id"], "revision": scope["revision"], "period_start": scope["period_start"],
                            "period_end": scope["period_end"], "cutoff": scope["cutoff"],
                            "input_fingerprint": scope["input_fingerprint"],
+                           "accepted_company_input_path": str((ledger.path.parent / "quarterly-scopes" / scope["scope_id"] / "revisions" / f"v{scope['revision']}" / "accepted-company-input.json").relative_to(root)),
+                           "pending_input_fingerprint": scope.get("pending_fingerprint"),
                            "frozen_universe_hash": scope["frozen_universe_hash"], "frozen_industry": frozen_industry,
                            "frozen_scope_path": str(frozen_path.relative_to(root)),
                            "gap_review_input_path": str(current_input.relative_to(root)),
@@ -557,6 +630,7 @@ def main() -> None:
     parser.add_argument("--universe", default="config/earnings_universe.json"); parser.add_argument("--date")
     parser.add_argument("--cutoff", default=None)
     parser.add_argument("--manual-quarter")
+    parser.add_argument("--round-id")
     parser.add_argument("--record-gap-review"); parser.add_argument("--scope-id")
     args = parser.parse_args()
     cutoff = args.cutoff or datetime.now(timezone.utc).isoformat()
@@ -568,7 +642,7 @@ def main() -> None:
         else:
             if not args.date: raise ValueError("--date is required")
             result = inspect_due(Path(args.repo_root).resolve(), day=args.date, cutoff=cutoff, config_path=args.config,
-                                 universe_path=args.universe, manual_quarter=args.manual_quarter)
+                                 universe_path=args.universe, manual_quarter=args.manual_quarter, round_id=args.round_id)
     except (ValueError, OSError, KeyError, sqlite3.Error) as exc:
         result = {"schema_version": 1, "workflow": "earnings-review-context", "status": "failed", "date": args.date,
                   "reason": str(exc)}

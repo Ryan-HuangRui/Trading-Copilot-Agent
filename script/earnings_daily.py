@@ -160,27 +160,27 @@ def notification_material(report: dict, prior: dict | None) -> bool:
 
 def _latest_company_publication_heads(root: Path, state: EarningsState,
                                       cutoff: str | None = None) -> dict[tuple[str, str], dict]:
-    """Return the newest accepted company/IPO report for each reader-publication scope."""
+    """Return the latest legal disclosure task, even when its report is not accepted yet."""
     heads: dict[tuple[str, str], dict] = {}
-    rows = state.db.execute("""SELECT a.*,e.event_kind FROM report_artifacts a
-      LEFT JOIN earnings_events e ON e.event_id=a.subject_id
-      WHERE a.source_mode='live' AND a.report_type='company'
-      ORDER BY a.period_end DESC,a.rowid DESC""").fetchall()
+    params: tuple = (cutoff,) if cutoff else ()
+    legal = """AND EXISTS(SELECT 1 FROM documents d WHERE d.event_id=t.subject_id
+      AND COALESCE(d.accepted_at,d.published_at) IS NOT NULL
+      AND datetime(COALESCE(d.accepted_at,d.published_at))<=datetime(?))""" if cutoff else ""
+    rows = state.db.execute(f"""SELECT t.*,e.event_kind,e.issuer_id,i.symbol FROM research_tasks t
+      JOIN earnings_events e ON e.event_id=t.subject_id JOIN issuers i ON i.issuer_id=e.issuer_id
+      WHERE t.source_mode='live' AND t.task_type='company' {legal}
+      ORDER BY t.period_end DESC,t.rowid DESC""", params).fetchall()
     for row in rows:
-        try:
-            report = read_json(root / row["path"]); scope = report.get("scope") or {}
-        except Exception:
-            continue
-        if cutoff and (not parse_time(report.get("cutoff")) or parse_time(report["cutoff"]) > parse_time(cutoff)):
-            continue
-        publication_type = "ipo" if scope.get("event_kind") == "ipo" or row["event_kind"] == "ipo" else "company"
-        scope_id = scope.get("symbol") or scope.get("issuer_id")
-        if not scope_id:
-            continue
+        publication_type = "ipo" if row["event_kind"] == "ipo" else "company"
+        scope_id = row["symbol"] or row["issuer_id"]
         key = (publication_type, str(scope_id))
         if key not in heads:
-            heads[key] = {"sha256": row["sha256"], "path": row["path"],
-                          "reporting_end": scope.get("reporting_end") or row["period_end"]}
+            artifact = state.db.execute("SELECT * FROM report_artifacts WHERE task_id=? ORDER BY rowid DESC LIMIT 1",
+                                        (row["task_id"],)).fetchone()
+            heads[key] = {"task_id": row["task_id"], "state": row["state"],
+                          "sha256": artifact["sha256"] if artifact else None,
+                          "path": artifact["path"] if artifact else None,
+                          "reporting_end": row["period_end"]}
     return heads
 
 
@@ -381,12 +381,13 @@ def run_gap_review_step(root: Path, config: dict, ledger: DailyLedger, qledger: 
 
 def run_quarterly_step(root: Path, config: dict, universe: dict, state: EarningsState, ledger: DailyLedger,
                        deployed: dict, day: str, cutoff: str, run_id: str, logs: Path, deadline: float,
-                       config_path: str = "config/earnings_research.json", manual_quarter: str | None = None) -> list[dict]:
+                       config_path: str = "config/earnings_research.json", manual_quarter: str | None = None,
+                       round_id: str | None = None) -> list[dict]:
     """Advance at most the configured number of durable quarterly model stages."""
     if config["quarterly"].get("automatic_trigger_enabled") is not True and not manual_quarter:
         return [{"status": "disabled", "reason": "quarterly.automatic_trigger_enabled is false"}]
     review = inspect_due(root, day=day, cutoff=cutoff, config_path=config_path,
-                         universe_path=config["paths"]["universe"], manual_quarter=manual_quarter)
+                         universe_path=config["paths"]["universe"], manual_quarter=manual_quarter, round_id=round_id)
     qledger = QuarterlyReviewLedger(root / "runtime/earnings/quarterly.sqlite")
     outcomes = []
     quota_open = False
@@ -409,7 +410,8 @@ def run_quarterly_step(root: Path, config: dict, universe: dict, state: Earnings
                     break
                 if gap["status"] == "success":
                     refreshed = inspect_due(root, day=day, cutoff=cutoff, config_path=config_path,
-                                            universe_path=config["paths"]["universe"], manual_quarter=manual_quarter)
+                                            universe_path=config["paths"]["universe"], manual_quarter=manual_quarter,
+                                            round_id=round_id)
                     scope = next(row for row in refreshed["scopes"] if row["scope_id"] == scope["scope_id"])
                 elif gap["status"] not in {"completed"}:
                     continue
@@ -444,6 +446,7 @@ def run_quarterly_step(root: Path, config: dict, universe: dict, state: Earnings
                     "--period-start", scope["period_start"], "--period-end", scope["period_end"],
                     "--critical-gap-status", scope["maturity"]["critical_gap_status"],
                     "--frozen-scope", scope["frozen_scope_path"],
+                    "--accepted-company-input", scope["accepted_company_input_path"],
                     "--run-id", f"{run_id}-quarterly-{uuid.uuid4().hex[:8]}",
                     "--lease-seconds", str(int(config["budgets"]["task_timeout_seconds"]) + 180)]
             for path in predecessors: args.extend(["--predecessor-report", path])
@@ -707,8 +710,10 @@ def run_publication_work(root: Path, config: dict, state: EarningsState, ledger:
             if job["publication_type"] == "industry":
                 qledger = QuarterlyReviewLedger(root / "runtime/earnings/quarterly.sqlite")
                 try:
-                    qscope = qledger.db.execute("SELECT scope_id FROM quarterly_scopes WHERE industry_id=? AND quarter_id=?",
-                                                (job["scope_id"], job["quarter_id"])).fetchone()
+                    qscope = qledger.db.execute("""SELECT q.scope_id FROM quarterly_scopes q
+                        JOIN quarterly_stages s ON s.scope_id=q.scope_id AND s.stage='synthesis'
+                        WHERE q.industry_id=? AND q.quarter_id=? AND s.artifact_sha256=?""",
+                        (job["scope_id"], job["quarter_id"], job["source_sha256"])).fetchone()
                     if qscope:
                         qledger.set_stage(qscope[0], "publication", "completed", artifact_path=result["manifest_path"])
                         qledger.set_stage(qscope[0], "checker", "completed", artifact_path=result["manifest_path"])
@@ -753,8 +758,10 @@ def run_publication_work(root: Path, config: dict, state: EarningsState, ledger:
             if job["publication_type"] == "industry":
                 qledger = QuarterlyReviewLedger(root / "runtime/earnings/quarterly.sqlite")
                 try:
-                    qscope = qledger.db.execute("SELECT scope_id FROM quarterly_scopes WHERE industry_id=? AND quarter_id=?",
-                                                (job["scope_id"], job["quarter_id"])).fetchone()
+                    qscope = qledger.db.execute("""SELECT q.scope_id FROM quarterly_scopes q
+                        JOIN quarterly_stages s ON s.scope_id=q.scope_id AND s.stage='synthesis'
+                        WHERE q.industry_id=? AND q.quarter_id=? AND s.artifact_sha256=?""",
+                        (job["scope_id"], job["quarter_id"], job["source_sha256"])).fetchone()
                     if qscope: qledger.set_stage(qscope[0], "cloud", "completed")
                 finally: qledger.close()
             continue
@@ -771,8 +778,10 @@ def run_publication_work(root: Path, config: dict, state: EarningsState, ledger:
             if final_state == "complete" and job["publication_type"] == "industry":
                 qledger = QuarterlyReviewLedger(root / "runtime/earnings/quarterly.sqlite")
                 try:
-                    qscope = qledger.db.execute("SELECT scope_id FROM quarterly_scopes WHERE industry_id=? AND quarter_id=?",
-                                                (job["scope_id"], job["quarter_id"])).fetchone()
+                    qscope = qledger.db.execute("""SELECT q.scope_id FROM quarterly_scopes q
+                        JOIN quarterly_stages s ON s.scope_id=q.scope_id AND s.stage='synthesis'
+                        WHERE q.industry_id=? AND q.quarter_id=? AND s.artifact_sha256=?""",
+                        (job["scope_id"], job["quarter_id"], job["source_sha256"])).fetchone()
                     if qscope: qledger.set_stage(qscope[0], "cloud", "completed")
                 finally: qledger.close()
             outcomes.append({"status": "success" if final_state == "complete" else "failed", "job_id": job["job_id"], "cloud": cloud})
@@ -798,7 +807,7 @@ def operational_issue_summary(errors: list[str]) -> str:
 
 
 def summarize_batch_usage(root: Path, day: str, reports: list[dict], publications: list[dict],
-                          *, since: datetime | None = None) -> dict:
+                          *, since: datetime | None = None, until: datetime | None = None) -> dict:
     """Count durable model call identities once, including failed and gap-review calls."""
     calls: dict[str, dict] = {}
     zone = ZoneInfo("Asia/Shanghai")
@@ -810,13 +819,32 @@ def summarize_batch_usage(root: Path, day: str, reports: list[dict], publication
         except (OSError, json.JSONDecodeError):
             continue
         at = parse_time(result.get("completed_at") or result.get("failed_at"))
-        if not at or at.astimezone(zone).date().isoformat() != day:
+        if not at:
             continue
-        if since and at < since:
+        if since and at < since or until and at >= until:
+            continue
+        if since is None and at.astimezone(zone).date().isoformat() != day:
             continue
         call_id = result.get("call_id") or f"legacy-result:{result_path.relative_to(root)}"
-        calls[call_id] = {"role": result.get("model"), "usage": result.get("usage"),
-                          "status": result.get("status")}
+        calls[call_id] = {"call_id": call_id, "role": result.get("model"), "usage": result.get("usage"),
+                          "status": result.get("status"), "at": at.isoformat()}
+    request_paths = list((root / "runtime/earnings/runs").glob("**/runner-request.json"))
+    request_paths += list((root / "runtime/earnings/quarterly-scopes").glob("**/runner-request.json"))
+    for request_path in request_paths:
+        if request_path.with_name("runner-result.json").exists():
+            continue
+        try:
+            request = read_json(request_path)
+        except (OSError, json.JSONDecodeError):
+            continue
+        at = parse_time(request.get("started_at") or request.get("created_at"))
+        if not at or (since and at < since) or (until and at >= until):
+            continue
+        if since is None and at.astimezone(zone).date().isoformat() != day:
+            continue
+        call_id = request.get("call_id") or f"unreconciled-request:{request_path.relative_to(root)}"
+        calls.setdefault(call_id, {"call_id": call_id, "role": request.get("model"), "usage": None,
+                                   "status": "unknown", "at": at.isoformat()})
     for state_path in (root / "runtime/earnings/publications/runs").glob("**/attempt-state.json"):
         try:
             state = read_json(state_path)
@@ -824,12 +852,12 @@ def summarize_batch_usage(root: Path, day: str, reports: list[dict], publication
             continue
         for call in state.get("calls", []):
             started = parse_time(call.get("started_at"))
-            if started and started.astimezone(zone).date().isoformat() == day:
-                if since and started < since:
+            if started and (since is not None or started.astimezone(zone).date().isoformat() == day):
+                if since and started < since or until and started >= until:
                     continue
                 call_id = call.get("call_id") or f"legacy-publication:{state_path.relative_to(root)}:{call.get('role')}:{call.get('attempt')}"
-                calls[call_id] = {"role": call.get("role"), "usage": call.get("usage"),
-                                  "status": call.get("status")}
+                calls[call_id] = {"call_id": call_id, "role": call.get("role"), "usage": call.get("usage"),
+                                  "status": call.get("status"), "at": started.isoformat()}
     totals = {key: 0 for key in ("input_tokens", "cached_input_tokens", "output_tokens", "reasoning_output_tokens")}
     missing = 0
     for call in calls.values():
@@ -843,7 +871,7 @@ def summarize_batch_usage(root: Path, day: str, reports: list[dict], publication
                 totals[key] += value
     totals["non_cached_input_tokens"] = max(0, totals["input_tokens"] - totals["cached_input_tokens"])
     cached_jobs = {str(row.get("job_id") or row.get("publication_id")) for row in publications if row.get("cached")}
-    return {"actual_model_calls": len(calls), "calls_with_usage_null": missing,
+    return {"actual_model_calls": len(calls), "calls_with_usage_null": missing, "calls": list(calls.values()),
             "cached_results_reused": len(cached_jobs), **totals}
 
 
@@ -912,7 +940,8 @@ def round_progress(root: Path, state: EarningsState, config: dict, cutoff: str |
         try:
             quarterly_pending = qdb.execute("""SELECT COUNT(DISTINCT q.scope_id)
               FROM quarterly_scopes q JOIN quarterly_stages s ON s.scope_id=q.scope_id
-              WHERE s.state!='completed'""").fetchone()[0]
+              WHERE s.stage IN ('coverage','gap_review','industry','challenge','synthesis')
+                AND s.state IN ('pending','failed','running')""").fetchone()[0]
             quarterly_progress = [tuple(row) for row in qdb.execute("""SELECT scope_id,stage,state,
               COALESCE(input_hash,''),COALESCE(artifact_sha256,''),attempts FROM quarterly_stages
               ORDER BY scope_id,stage""").fetchall()]
@@ -1072,6 +1101,7 @@ def run(args: argparse.Namespace) -> dict:
     if parse_time(cutoff) is None:
         raise ValueError("cutoff must be an ISO-8601 timestamp with timezone")
     run_id = f"daily-{day}-{uuid.uuid4().hex[:12]}"
+    execution_focus = getattr(args, "execution_focus", "all")
     logs = runtime_path(root, f"runtime/earnings/runs/{run_id}")
     logs.mkdir(parents=True)
     with exclusive_lock(runtime_path(root, "runtime/earnings/daily.lock")):
@@ -1093,12 +1123,16 @@ def run(args: argparse.Namespace) -> dict:
         collection_complete = bool(args.resume_only)
         try:
             if getattr(args, "finalize_only", False):
+                summary = read_json(Path(args.round_summary)) if getattr(args, "round_summary", None) else {}
+                summary_reports = summary.get("reports") or []
+                summary_errors = summary.get("errors") or []
                 progress = round_progress(root, state, config, cutoff=cutoff, ledger=ledger)
-                delivery = finalize(root, deployed, deployed_path, day, [], [], state, send=args.send, cutoff=cutoff)
+                delivery = finalize(root, deployed, deployed_path, day, summary_reports, summary_errors,
+                                    state, send=args.send, cutoff=cutoff)
                 result = {"schema_version": 1, "workflow": "earnings-daily", "status": "success",
                     "run_id": run_id, "round_id": getattr(args, "round_id", None),
                     "execution_window_id": quota_scope, "date": day, "cutoff": cutoff,
-                    "reports": [], "errors": [], "publications": [], "quarterly": [],
+                    "reports": summary_reports, "errors": summary_errors, "publications": [], "quarterly": [],
                     "delivery": delivery, "completed_at": utc_now(), "progress": progress,
                     "usage_summary": summarize_batch_usage(root, day, [], [], since=window_started_at), "finalize_only": True}
                 atomic_write_json(logs / "daily-result.json", result)
@@ -1135,7 +1169,7 @@ def run(args: argparse.Namespace) -> dict:
                             break
             if not args.collect_only:
                 publications = []
-                if config.get("publication", {}).get("enabled") is True:
+                if execution_focus != "company" and config.get("publication", {}).get("enabled") is True:
                     try:
                         # Drain recoverable checker/cloud work before new research can consume the batch clock.
                         recovery_deadline = min(deadline, time.monotonic() + max(1, phase_reserve))
@@ -1153,7 +1187,7 @@ def run(args: argparse.Namespace) -> dict:
                 current_limit = max(0, limit - history_limit)
                 current_exhausted = current_limit == 0
                 current_used = history_used = 0
-                while (not model_circuit_open and ledger.used(quota_scope, "company") < limit
+                while (execution_focus != "downstream" and not model_circuit_open and ledger.used(quota_scope, "company") < limit
                        and research_window_available(config, early_deadline, prepare_context=True)
                        and context_attempts < limit * 2):
                     context_attempts += 1
@@ -1197,7 +1231,7 @@ def run(args: argparse.Namespace) -> dict:
                                 break
                     if tier == "current" and current_used >= current_limit:
                         current_exhausted = True
-                if config.get("publication", {}).get("enabled") is True and not model_circuit_open:
+                if execution_focus != "company" and config.get("publication", {}).get("enabled") is True and not model_circuit_open:
                     try:
                         # Publish accepted current-company research before downstream work can consume
                         # the remaining batch clock. The final pass discovers later formal reports.
@@ -1210,7 +1244,7 @@ def run(args: argparse.Namespace) -> dict:
                     except Exception as exc:
                         publications.append({"status": "failed", "reason": str(exc)})
                         errors.append(f"publication-current:{exc}")
-                for work in ([] if model_circuit_open else industry_work(root, state, universe, ledger, cutoff=cutoff)):
+                for work in ([] if model_circuit_open or execution_focus == "company" else industry_work(root, state, universe, ledger, cutoff=cutoff)):
                     cap = int(config["budgets"]["daily_industry_limit"])
                     if (ledger.used(quota_scope, "industry") >= cap
                             or not research_window_available(config, early_deadline, prepare_context=True)):
@@ -1248,11 +1282,14 @@ def run(args: argparse.Namespace) -> dict:
                             errors.append("model-circuit:quota exhausted; remaining model work deferred")
                             break
                 try:
-                    if model_circuit_open:
+                    if execution_focus == "company":
+                        quarterly = [{"status": "deferred", "reason": "company-focused continuation window"}]
+                    elif model_circuit_open:
                         quarterly = [{"status": "queued", "reason": "model quota circuit open; deferred"}]
                     else:
                         quarterly = run_quarterly_step(root, config, universe, state, ledger, deployed, day, cutoff,
-                                                       run_id, logs, deadline, args.config, getattr(args, "manual_quarter", None))
+                                                       run_id, logs, deadline, args.config, getattr(args, "manual_quarter", None),
+                                                       getattr(args, "round_id", None))
                     reports.extend(row for row in quarterly if row.get("report_path"))
                     if any(_quota_exhausted(row.get("reason")) for row in quarterly):
                         model_circuit_open = True
@@ -1265,7 +1302,7 @@ def run(args: argparse.Namespace) -> dict:
                     if _quota_exhausted(exc):
                         model_circuit_open = True
                         errors.append("model-circuit:quota exhausted in quarterly work; publication deferred")
-                if config.get("publication", {}).get("enabled") is True and not model_circuit_open:
+                if execution_focus != "company" and config.get("publication", {}).get("enabled") is True and not model_circuit_open:
                     try:
                         new_publications = run_publication_work(root, config, state, ledger, deployed, day, deadline,
                                                                config_path=args.config, cutoff=cutoff)
@@ -1335,8 +1372,10 @@ def main() -> None:
     parser.add_argument("--round-id", help="Persistent continuation round identifier")
     parser.add_argument("--execution-window-id", help="Soft-quota scope for one bounded execution window")
     parser.add_argument("--batch-timeout-seconds", type=int, help="Override one bounded execution-window timeout")
+    parser.add_argument("--execution-focus", choices=["all", "company", "downstream"], default="all")
     parser.add_argument("--defer-finalize", action="store_true", help="Checkpoint without notification; outer runner finalizes once")
     parser.add_argument("--finalize-only", action="store_true", help="Perform no collection/model work; finalize persisted artifacts only")
+    parser.add_argument("--round-summary", help="Persisted aggregate used by the outer finalizer")
     args = parser.parse_args()
     def interrupted(signum, frame):
         raise InterruptedError(f"batch interrupted by signal {signum}")

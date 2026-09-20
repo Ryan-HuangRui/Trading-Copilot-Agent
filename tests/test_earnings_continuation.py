@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 import sys
+import time
 from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
@@ -11,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "script"))
 
 from earnings_common import atomic_write_json
-from earnings_continuation import ContinuationLedger, worker
+from earnings_continuation import ContinuationLedger, _run_daily, worker
 from earnings_daily import DailyLedger, _publication_job_within_cutoff, industry_work
 from earnings_state import EarningsState
 
@@ -27,6 +28,38 @@ def deployment(root: Path, **overrides) -> None:
 
 
 class EarningsContinuationTests(unittest.TestCase):
+    def test_outer_timeout_kills_daily_process_group(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); (root / "script").mkdir()
+            marker = root / "late-grandchild.txt"
+            (root / "script/earnings_daily.py").write_text(
+                "import subprocess,sys,time\n"
+                f"subprocess.Popen([sys.executable,'-c',\"import time,pathlib;time.sleep(.7);pathlib.Path(r'{marker}').write_text('late')\"])\n"
+                "time.sleep(10)\n")
+            args = argparse.Namespace(config="c", deployment="d", send=False, process_timeout_seconds=.2)
+            with self.assertRaisesRegex(RuntimeError, "process group"):
+                _run_daily(root, args, {"batch_date": "2026-09-20", "cutoff": "2026-09-20T00:00:00Z",
+                    "round_id": "r"}, "w", 60, resume_only=False)
+            time.sleep(1)
+            self.assertFalse(marker.exists())
+
+    def test_worker_routes_a_window_to_downstream_despite_company_backlog(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); _round, args = self.prepare(root)
+            before = {"fingerprint": "a", "actionable_count": 2, "blocker_count": 0,
+                      "pending": {"current_company": 5, "quarterly_scopes": 1}, "blockers": {}}
+            after = {**before, "fingerprint": "b", "actionable_count": 0,
+                     "pending": {"current_company": 0, "quarterly_scopes": 0}}
+            work = {"status": "success", "errors": [], "progress": after,
+                    "collection_complete": True, "usage_summary": {"actual_model_calls": 0, "calls": []}}
+            final = {"status": "success", "errors": [], "progress": after,
+                     "delivery": {"delivery": {"state": "suppressed"}},
+                     "usage_summary": {"actual_model_calls": 0, "calls": []}}
+            with patch("earnings_continuation.round_progress", return_value=before), \
+                 patch("earnings_continuation._run_daily", side_effect=[work, final]) as run_daily:
+                worker(root, args)
+            self.assertEqual(run_daily.call_args_list[0].kwargs["execution_focus"], "downstream")
+
     def prepare(self, root: Path) -> tuple[dict, argparse.Namespace]:
         (root / "config").mkdir(parents=True)
         config = json.loads((ROOT / "config/earnings_research.json").read_text())
@@ -168,6 +201,29 @@ class EarningsContinuationTests(unittest.TestCase):
                 result = worker(root, args)
             self.assertEqual(result["state"], "complete")
             self.assertEqual(run_daily.call_count, 2); spawn.assert_not_called()
+
+    def test_delivery_failure_persists_and_next_run_retries_only_finalization(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); _round, args = self.prepare(root)
+            empty = {"fingerprint": "empty", "actionable_count": 0, "blocker_count": 0,
+                     "pending": {}, "blockers": {}}
+            work = {"status": "success", "errors": [], "progress": empty,
+                    "collection_complete": True, "usage_summary": {"actual_model_calls": 0, "calls": []}}
+            failed_delivery = {"status": "failed", "errors": ["delivery"], "progress": empty,
+                "delivery": {"delivery": {"state": "retryable_failed"}},
+                "usage_summary": {"actual_model_calls": 0, "calls": []}}
+            with patch("earnings_continuation.round_progress", return_value=empty), \
+                 patch("earnings_continuation._run_daily", side_effect=[work, failed_delivery]):
+                first = worker(root, args)
+            self.assertEqual(first["state"], "delivery_pending")
+            recovered = {"status": "success", "errors": [], "progress": empty,
+                "delivery": {"delivery": {"state": "sent"}},
+                "usage_summary": {"actual_model_calls": 0, "calls": []}}
+            with patch("earnings_continuation._run_daily", return_value=recovered) as run_daily:
+                second = worker(root, args)
+            self.assertEqual(second["state"], "complete")
+            self.assertEqual(run_daily.call_count, 1)
+            self.assertTrue(run_daily.call_args.kwargs["finalize_only"])
 
     def test_cutoff_claim_ignores_late_disclosure_and_keeps_attempts(self):
         with TemporaryDirectory() as temp:

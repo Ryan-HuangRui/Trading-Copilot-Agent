@@ -40,7 +40,8 @@ def _registered_report(state: EarningsState, root: Path, path_text: str) -> tupl
 
 
 def _company_inputs(state: EarningsState, root: Path, issuer_ids: list[str], period_start: str, period_end: str,
-                    cutoff: str, research_quarter: str | None = None) -> tuple[list[dict[str, Any]], list[str]]:
+                    cutoff: str, research_quarter: str | None = None,
+                    accepted_reports: list[dict[str, Any]] | None = None) -> tuple[list[dict[str, Any]], list[str]]:
     artifacts: list[dict[str, Any]] = []
     researched: list[str] = []
     for issuer_id in issuer_ids:
@@ -54,6 +55,10 @@ def _company_inputs(state: EarningsState, root: Path, issuer_ids: list[str], per
         if rows:
             eligible = []
             for candidate in rows:
+                if accepted_reports is not None and not any(
+                        row.get("path") == candidate["path"] and row.get("sha256") == candidate["sha256"]
+                        for row in accepted_reports):
+                    continue
                 candidate_path = ensure_inside(resolve_path(root, candidate["path"]), [root / "report" / "earnings"])
                 candidate_report = read_json(candidate_path)
                 if parse_time(candidate_report.get("cutoff")) > parse_time(cutoff): continue
@@ -131,6 +136,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--predecessor-report", action="append", default=[])
     parser.add_argument("--critical-gap-status", choices=["resolved", "disclosed", "unresolved"], default="unresolved")
     parser.add_argument("--frozen-scope")
+    parser.add_argument("--accepted-company-input")
     parser.add_argument("--run-id")
     parser.add_argument("--owner")
     parser.add_argument("--lease-seconds", type=int)
@@ -168,7 +174,14 @@ def main() -> None:
         issuer_ids = [issuer_by_symbol[symbol] for symbol in expected_symbols if symbol in issuer_by_symbol]
         unresolved_symbols = [symbol for symbol in expected_symbols if symbol not in issuer_by_symbol]
         end = date.fromisoformat(args.period_end); research_quarter = f"{end.year}-Q{(end.month - 1)//3 + 1}" if args.mode == "quarterly" else None
-        company_artifacts, researched_ids = _company_inputs(state, root, issuer_ids, args.period_start, args.period_end, cutoff.isoformat(), research_quarter)
+        accepted_reports = None
+        if args.accepted_company_input:
+            accepted_path = ensure_inside(resolve_path(root, args.accepted_company_input),
+                                          [root / "runtime" / "earnings" / "quarterly-scopes"])
+            accepted_payload = read_json(accepted_path)
+            accepted_reports = accepted_payload.get("reports") or []
+        company_artifacts, researched_ids = _company_inputs(state, root, issuer_ids, args.period_start,
+            args.period_end, cutoff.isoformat(), research_quarter, accepted_reports)
         predecessor_reports: list[dict[str, Any]] = []
         predecessor_rows: list[dict[str, Any]] = []
         for path in args.predecessor_report:
@@ -205,7 +218,8 @@ def main() -> None:
         if research_quarter and source_mode == "live":
             from earnings_period_review import _period_member_audit
             disclosed_ids, fetched_ids, researched_ids_audit, _ = _period_member_audit(
-                state, issuer_ids, research_quarter, cutoff=cutoff.isoformat())
+                state, issuer_ids, research_quarter, cutoff=cutoff.isoformat(),
+                accepted_report_hashes={row["sha256"] for row in (accepted_reports or company_artifacts)})
         else:
             if research_quarter:
                 from earnings_period_review import map_fiscal_period

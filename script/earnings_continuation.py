@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 import json
 import fcntl
 import os
+import signal
 from pathlib import Path
 import sqlite3
 import subprocess
@@ -23,11 +24,22 @@ from earnings_state import EarningsState
 
 
 @contextmanager
-def _worker_lock(path: Path):
+def _worker_lock(path: Path, timeout: float = 30.0):
     """Serialize worker generations; a successor may wait briefly for its parent handoff."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a") as handle:
-        fcntl.flock(handle, fcntl.LOCK_EX)
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            deadline = time.monotonic() + timeout
+            while True:
+                try:
+                    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError("continuation worker lock remained busy")
+                    time.sleep(0.1)
         try:
             yield
         finally:
@@ -59,11 +71,14 @@ class ContinuationLedger:
         window_columns = {row[1] for row in self.db.execute("PRAGMA table_info(windows)")}
         if "usage_json" not in window_columns:
             self.db.execute("ALTER TABLE windows ADD COLUMN usage_json TEXT")
+        round_columns = {row[1] for row in self.db.execute("PRAGMA table_info(rounds)")}
+        if "owner_generation" not in round_columns:
+            self.db.execute("ALTER TABLE rounds ADD COLUMN owner_generation INTEGER")
         self.db.commit()
 
     def active_round(self) -> dict | None:
         row = self.db.execute("""SELECT * FROM rounds WHERE state IN
-          ('active','yielded','paused_quota','paused_capacity') ORDER BY revision DESC LIMIT 1""").fetchone()
+          ('active','yielded','paused_quota','paused_capacity','delivery_pending') ORDER BY revision DESC LIMIT 1""").fetchone()
         return dict(row) if row else None
 
     def create_round(self, now: datetime) -> dict:
@@ -72,7 +87,9 @@ class ContinuationLedger:
         cutoff = now.astimezone(timezone.utc).isoformat()
         round_id = f"earnings-round-{revision}-{uuid.uuid4().hex[:12]}"
         stamp = utc_now()
-        self.db.execute("INSERT INTO rounds VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+        self.db.execute("""INSERT INTO rounds(round_id,revision,batch_date,cutoff,state,stop_reason,
+                        last_fingerprint,no_progress_windows,created_at,updated_at,completed_at)
+                        VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
                         (round_id, revision, batch_date, cutoff, "active", None, None, 0,
                          stamp, stamp, None))
         self.db.commit()
@@ -126,6 +143,10 @@ def _start_locked(root: Path, args: argparse.Namespace) -> dict:
             return {"status": "success", "workflow": "earnings-continuation-start",
                     "state": "already_running", "round_id": active_worker["round_id"],
                     "pid": active_worker["pid"]}
+        if active_worker and _pid_alive(int(active_worker["pid"])):
+            return {"status": "failed", "workflow": "earnings-continuation-start",
+                    "state": "stale_running", "round_id": active_worker["round_id"],
+                    "pid": active_worker["pid"], "reason": "live worker exceeded age bound; operator review required"}
         if active_worker:
             ledger.db.execute("UPDATE workers SET state='orphaned',completed_at=?,reason=? WHERE worker_id=?",
                               (utc_now(), "pid missing or worker heartbeat age exceeded", active_worker["worker_id"]))
@@ -138,6 +159,7 @@ def _start_locked(root: Path, args: argparse.Namespace) -> dict:
                           (worker_id, round_row["round_id"], generation, pid, "running", utc_now(), None, None, None))
         ledger.db.execute("UPDATE rounds SET state='active',stop_reason=NULL,updated_at=? WHERE round_id=?",
                           (utc_now(), round_row["round_id"]))
+        ledger.db.execute("UPDATE rounds SET owner_generation=? WHERE round_id=?", (generation, round_row["round_id"]))
         ledger.db.commit()
         return {"status": "success", "workflow": "earnings-continuation-start", "state": "started",
                 "round_id": round_row["round_id"], "revision": round_row["revision"], "pid": pid,
@@ -152,22 +174,37 @@ def start(root: Path, args: argparse.Namespace) -> dict:
 
 
 def _run_daily(root: Path, args: argparse.Namespace, round_row: dict, window_id: str,
-               window_seconds: int, *, resume_only: bool, finalize_only: bool = False) -> dict:
+               window_seconds: int, *, resume_only: bool, finalize_only: bool = False,
+               execution_focus: str = "all", round_summary: Path | None = None) -> dict:
     command = [sys.executable, str(root / "script/earnings_daily.py"), "--repo-root", str(root),
         "--config", args.config, "--deployment", args.deployment,
         "--batch-date", round_row["batch_date"], "--cutoff", round_row["cutoff"],
         "--round-id", round_row["round_id"], "--execution-window-id", window_id,
-        "--batch-timeout-seconds", str(max(60, window_seconds))]
+        "--batch-timeout-seconds", str(max(60, window_seconds)), "--execution-focus", execution_focus]
     if finalize_only:
         command.append("--finalize-only")
         if args.send:
             command.append("--send")
+        if round_summary:
+            command.extend(["--round-summary", str(round_summary)])
     else:
         command.append("--defer-finalize")
         if resume_only:
             command.append("--resume-only")
-    completed = subprocess.run(command, cwd=root, capture_output=True, text=True,
-                               timeout=max(90, window_seconds + 45), check=False)
+    process = subprocess.Popen(command, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               text=True, start_new_session=True)
+    try:
+        process_timeout = getattr(args, "process_timeout_seconds", None) or max(90, window_seconds + 45)
+        stdout, stderr = process.communicate(timeout=process_timeout)
+    except subprocess.TimeoutExpired:
+        os.killpg(process.pid, signal.SIGTERM)
+        try:
+            stdout, stderr = process.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            os.killpg(process.pid, signal.SIGKILL)
+            stdout, stderr = process.communicate()
+        raise RuntimeError(f"earnings daily window timed out; process group {process.pid} terminated")
+    completed = subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
     lines = [line for line in completed.stdout.splitlines() if line.strip()]
     if not lines:
         raise RuntimeError(f"earnings daily window returned no JSON (exit {completed.returncode})")
@@ -217,6 +254,14 @@ def worker(root: Path, args: argparse.Namespace) -> dict:
             if not round_row_raw:
                 raise ValueError("continuation round does not exist")
             round_row = dict(round_row_raw)
+            if round_row.get("owner_generation") is not None and int(round_row["owner_generation"]) != args.generation:
+                return {"status": "skipped", "workflow": "earnings-continuation-worker",
+                        "round_id": args.round_id, "generation": args.generation,
+                        "state": "superseded", "reason": "newer worker generation owns this round"}
+            if round_row["state"] in {"complete", "blocked"}:
+                return {"status": "skipped", "workflow": "earnings-continuation-worker",
+                        "round_id": args.round_id, "generation": args.generation,
+                        "state": round_row["state"], "reason": "round is already terminal"}
             deadline = time.monotonic() + session_seconds
             collection_complete = False
             for row in ledger.db.execute("SELECT result_path FROM windows WHERE round_id=? AND state='completed' ORDER BY window_index",
@@ -228,8 +273,10 @@ def worker(root: Path, args: argparse.Namespace) -> dict:
                     continue
             no_progress = int(round_row["no_progress_windows"])
             last_result: dict = {}
-            stop_state = stop_reason = None
-            while deadline - time.monotonic() >= final_reserve + 60:
+            delivery_only = round_row["state"] == "delivery_pending"
+            stop_state = "delivery_pending" if delivery_only else None
+            stop_reason = "retrying durable delivery only" if delivery_only else None
+            while stop_state is None and deadline - time.monotonic() >= final_reserve + 60:
                 index = ledger.db.execute("SELECT COALESCE(MAX(window_index),0)+1 FROM windows WHERE round_id=?",
                                           (args.round_id,)).fetchone()[0]
                 window_id = f"{args.round_id}-g{args.generation}-w{index}"
@@ -242,12 +289,21 @@ def worker(root: Path, args: argparse.Namespace) -> dict:
                                   (window_id, args.round_id, args.generation, index, "running", utc_now(), before["fingerprint"]))
                 ledger.db.commit()
                 available = min(window_seconds, max(60, int(deadline - time.monotonic() - final_reserve)))
+                downstream = sum(int(before["pending"].get(key, 0)) for key in
+                                 ("daily_industry", "quarterly_scopes", "publications"))
+                company = int(before["pending"].get("current_company", 0))
+                previous_focus = last_result.get("execution_focus")
+                focus = ("downstream" if downstream and (not company or previous_focus != "downstream")
+                         else "company" if company else "downstream")
                 try:
                     result = _run_daily(root, args, round_row, window_id, available,
-                                        resume_only=collection_complete)
+                                        resume_only=collection_complete, execution_focus=focus)
+                    result["execution_focus"] = focus
                 except Exception as exc:
                     result = {"status": "failed", "errors": [f"continuation-window:{type(exc).__name__}: {exc}"],
-                              "progress": before, "usage_summary": {"actual_model_calls": 0}}
+                              "progress": before, "execution_focus": focus,
+                              "usage_summary": {"actual_model_calls": 1, "calls_with_usage_null": 1,
+                                                "calls": [{"call_id": f"{window_id}:unreconciled", "status": "unknown", "usage": None}]}}
                 checkpoint = _checkpoint_path(root, args.round_id, window_id)
                 atomic_write_json(checkpoint, result)
                 after = result.get("progress") or before
@@ -287,6 +343,8 @@ def worker(root: Path, args: argparse.Namespace) -> dict:
             if stop_state is None:
                 # The worker itself is bounded. Continued progress hands off immediately to
                 # another bounded generation, so the cron timeout is not a completion cap.
+                ledger.db.execute("UPDATE rounds SET owner_generation=?,updated_at=? WHERE round_id=?",
+                                  (args.generation + 1, utc_now(), args.round_id)); ledger.db.commit()
                 successor_pid = spawn_worker(root, args, args.round_id, args.generation + 1)
                 successor_id = f"{args.round_id}:g{args.generation + 1}:{successor_pid}"
                 ledger.db.execute("INSERT OR IGNORE INTO workers VALUES(?,?,?,?,?,?,?,?,?)",
@@ -294,14 +352,50 @@ def worker(root: Path, args: argparse.Namespace) -> dict:
                                    "running", utc_now(), None, None, None))
                 stop_state, stop_reason = "active", "bounded worker handed off to successor"
             else:
+                summary_reports = {}; summary_errors = []; summary_calls = {}
+                for saved in ledger.db.execute("SELECT result_path FROM windows WHERE round_id=? AND result_path IS NOT NULL ORDER BY window_index",
+                                               (args.round_id,)):
+                    payload = read_json(root / saved["result_path"])
+                    for report in payload.get("reports", []):
+                        key = report.get("report_sha256") or report.get("task_id") or json.dumps(report, sort_keys=True)
+                        summary_reports[key] = report
+                    summary_errors.extend(payload.get("errors", []))
+                    for call in (payload.get("usage_summary") or {}).get("calls", []):
+                        summary_calls[call["call_id"]] = call
+                current_state = EarningsState(root / config["paths"]["state"])
+                try:
+                    unresolved_errors = []
+                    for error in dict.fromkeys(summary_errors):
+                        parts = str(error).split(":")
+                        if parts[0] == "role" and len(parts) > 1:
+                            task = current_state.db.execute("SELECT state FROM research_tasks WHERE task_id=?", (parts[1],)).fetchone()
+                            if task and task[0] == "completed": continue
+                        if parts[0].startswith("publication") and len(parts) > 1:
+                            job = current_state.db.execute("SELECT state FROM publication_jobs WHERE job_id=?", (parts[1],)).fetchone()
+                            if job and job[0] in {"archived", "complete"}: continue
+                        unresolved_errors.append(error)
+                finally:
+                    current_state.close()
+                summary_path = runtime_path(root, f"runtime/earnings/continuation/{args.round_id}/round-summary.json")
+                atomic_write_json(summary_path, {"schema_version": 1, "round_id": args.round_id,
+                    "reports": list(summary_reports.values()), "errors": unresolved_errors,
+                    "calls": list(summary_calls.values()), "created_at": utc_now()})
                 final_id = f"{args.round_id}-finalize-g{args.generation}"
                 try:
                     final_result = _run_daily(root, args, round_row, final_id, 60,
-                                              resume_only=True, finalize_only=True)
+                                              resume_only=True, finalize_only=True, round_summary=summary_path)
                     atomic_write_json(_checkpoint_path(root, args.round_id, final_id), final_result)
+                    delivery_state = ((final_result.get("delivery") or {}).get("delivery") or {}).get("state")
+                    if final_result.get("status") == "failed" or delivery_state in {"retryable_failed", "failed"}:
+                        stop_state = "delivery_pending"; stop_reason += "; delivery pending retry"
+                    elif delivery_state == "unknown":
+                        stop_state = "delivery_unknown"; stop_reason += "; automatic retry suppressed"
+                    elif delivery_only:
+                        stop_state = "complete"; stop_reason = "durable delivery retry completed"
                 except Exception as exc:
-                    stop_reason += f"; finalization failed: {type(exc).__name__}: {exc}"
-            completed_at = utc_now() if stop_state in {"complete", "blocked"} else None
+                    stop_state = "delivery_pending"
+                    stop_reason += f"; finalization failed and remains pending: {type(exc).__name__}: {exc}"
+            completed_at = utc_now() if stop_state in {"complete", "blocked", "delivery_unknown"} else None
             ledger.db.execute("UPDATE rounds SET state=?,stop_reason=?,updated_at=?,completed_at=? WHERE round_id=?",
                               (stop_state, stop_reason, utc_now(), completed_at, args.round_id))
             ledger.db.execute("UPDATE workers SET state='completed',completed_at=?,successor_pid=?,reason=? WHERE worker_id=?",

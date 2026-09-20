@@ -16,7 +16,7 @@
 1. 新轮次冻结 cutoff，并只在第一个窗口采集；后续窗口使用相同 cutoff 和 `--resume-only`。
 2. 每个窗口有独立 `execution_window_id`，旧的日配额按窗口计数；任务 attempts、租约、季度 revision、publication/cloud 幂等状态仍由原 SQLite 持久化并跨日保留。
 3. 中间窗口 `--defer-finalize`，安全完成当前子进程后 checkpoint。每代 worker 自身有界；期限到而仍有真实进展和待办时，先登记再启动下一代 worker，随后退出。这样可跨过 150 分钟 cron 外层 timeout 在同日自动续接，又不形成一个无界前台进程。
-4. 只有完成、quota/capacity、永久失败或无进展等停止条件才使用 `--finalize-only` 做一次汇总/去重交付；代际 handoff 不发送中间通知。
+4. 只有完成、quota/capacity、永久失败或无进展等停止条件才使用 `--finalize-only` 做一次汇总/去重交付；汇总来自所有窗口的持久化结果。可重试交付失败进入 `delivery_pending`，后续只重试 outbox 交付；`unknown` 进入人工确认状态，不自动重复发送。代际 handoff 不发送中间通知。
 5. 无待办、连续无进展、quota 熔断或永久失败只剩人工任务时停止。quota/capacity 不伪装为完成；暂停轮次可由下次 cron 继续同一 cutoff。完成后才关闭轮次，下一次 cron 冻结新 cutoff/revision。
 
 该 runner 不空轮询、不保持无限前台进程，也不猜测 cc-connect 参数。wrapper 仍由现有 muted cron 调用；仅把内部 `earnings_daily.py` 替换为 continuation starter。单窗口、单模型调用 timeout 和有限 retry 保持不变。
@@ -24,9 +24,11 @@
 ## 完成、失败与公平性
 
 - 轮次完成要求 cutoff 内 current company 队列、当前行业/季度可执行阶段、当前 publication writer/checker/cloud 均无可执行待办。terminal failure、unknown cloud、auth/conflict 和可操作期间缺口属于阻塞/人工状态，不得计为目标完成。
-- 公司 current 队列可在多个窗口持续推进；不预留历史名额。行业和 publication 使用独立软配额及现有 phase reserve，历史工作不能消耗它们。
+- 公司 current 队列可在多个窗口持续推进；不预留历史名额。worker 在 company 与 downstream 窗口间轮转，只要 downstream 有积压就先给它完整窗口，不再依赖不足以启动季度/checker 的尾部 reserve。历史工作不能消耗当前工作配额。
 - 季度 scope 的 cutoff 在同 revision 内固定。只有下一轮合法新证据才触发新 revision，因此 challenge/synthesis 不会被同轮新时钟或逐公司到达反复饿死。
+- 季度 revision 持久化精确的 accepted company input 清单；DAG 启动后的同轮迟到报告登记为 deferred input，由下一轮 revision 接收。等待跨行业 market 或 publication/cloud 镜像不再被计作可运行研究 DAG。
 - 通知只在 outer finalizer 汇总。相同 publication/version/destination 沿用现有 outbox 去重；迟到完成可在后续轮次补充，同版本不重复。
+- 外层窗口以独立进程组运行；超时先 TERM、再 KILL 整个组，避免遗留 Codex 孙进程。worker 锁有等待上限，轮次记录 owner generation，旧代在交接后不能继续执行。
 
 ## 迁移、部署与回滚
 
