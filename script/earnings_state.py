@@ -350,7 +350,8 @@ class EarningsState:
         return superseded + terminal + retryable
 
     def claim_tasks(self, *, owner: str, limit: int, lease_seconds: int, task_type: str | None = None,
-                    company_tier: str | None = None, priority_symbols: Sequence[str] = ()) -> list[dict[str, Any]]:
+                    company_tier: str | None = None, priority_symbols: Sequence[str] = (),
+                    cutoff: str | None = None) -> list[dict[str, Any]]:
         self.reap_expired_tasks()
         now = datetime.now(timezone.utc)
         now_text = now.isoformat(timespec="seconds")
@@ -360,10 +361,18 @@ class EarningsState:
         if task_type:
             filters.append("t.task_type=?")
             params.append(task_type)
+        if task_type == "company" and cutoff:
+            filters.append("""EXISTS(SELECT 1 FROM documents ad WHERE ad.event_id=t.subject_id
+              AND COALESCE(ad.accepted_at,ad.published_at) IS NOT NULL
+              AND datetime(COALESCE(ad.accepted_at,ad.published_at))<=datetime(?))""")
+            params.append(cutoff)
         current_expr = """t.period_end IS (SELECT MAX(x.period_end) FROM research_tasks x
           JOIN earnings_events xe ON xe.event_id=x.subject_id JOIN earnings_events te ON te.event_id=t.subject_id
           WHERE x.task_type='company' AND xe.issuer_id=te.issuer_id AND x.source_mode=t.source_mode
-          AND x.state IN ('queued','running','completed','retryable_failed') AND NOT EXISTS(
+          AND EXISTS(SELECT 1 FROM documents xd WHERE xd.event_id=x.subject_id
+            AND COALESCE(xd.accepted_at,xd.published_at) IS NOT NULL
+            AND datetime(COALESCE(xd.accepted_at,xd.published_at))<=datetime(?))
+          AND x.state IN ('queued','running','completed','retryable_failed','terminal_failed') AND NOT EXISTS(
             SELECT 1 FROM research_tasks xn WHERE xn.rowid>x.rowid AND xn.task_type=x.task_type
             AND xn.subject_id=x.subject_id AND xn.period_start IS x.period_start AND xn.period_end IS x.period_end
             AND xn.source_mode=x.source_mode))"""
@@ -379,6 +388,7 @@ class EarningsState:
             raise ValueError("company_tier must be current or history")
         if task_type == "company" and company_tier:
             filters.append(current_expr if company_tier == "current" else f"NOT ({current_expr})")
+            params.append(cutoff or now_text)
         priority = list(dict.fromkeys(str(symbol) for symbol in priority_symbols))
         with self.immediate() as db:
             rows = db.execute(

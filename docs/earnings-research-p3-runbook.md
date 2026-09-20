@@ -4,7 +4,7 @@
 
 ## 执行路径
 
-`ops/cc-connect/tca-earnings-wrapper.sh` 将 stdout/stderr 全部重定向到 NAS 本地日志，解析本地 SEC 联系配置，然后调用 `script/earnings_daily.py --send`。外层 Python 持有独占批次锁，执行采集、公司角色、受影响行业角色和最终交付。全流程不使用交易日跳过，也不调用交易工作流。
+`ops/cc-connect/tca-earnings-wrapper.sh` 将 stdout/stderr 全部重定向到 NAS 本地日志，解析本地 SEC 联系配置，然后调用 `script/earnings_continuation.py --send`。starter 只启动或确认一个后台 worker 后返回；worker 以冻结 cutoff、持久轮次和有界执行窗口运行 `earnings_daily.py`。每代 worker 到期但仍有进展时自动 handoff，同日可跨过 cron timeout 续接；完成或真实阻塞时才统一 finalization。全流程不使用交易日跳过，也不调用交易工作流。
 
 日批次固定为 Asia/Shanghai 10:00，一天一次。当前真实时刻作为 UTC 资料截止；报告中的财务期间单独保留。初始化每天最多处理 5 家，采集限额与公司模型调用限额分开；普通日最多 10 次公司角色，强财报季 20 次，行业最多 5 次。实际调用前预留预算，进程失败和同日重启均不会重置预算。配置中的 token/currency 硬预算暂不支持：如非 null，runner 显式拒绝运行，不能声称订阅登录提供硬金额限额。
 

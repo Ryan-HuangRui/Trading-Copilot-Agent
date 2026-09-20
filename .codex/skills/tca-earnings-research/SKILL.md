@@ -33,3 +33,10 @@ Use `references/output-contract.md` to select the output. Validate numeric/citat
 Scheduled roles write only assigned run artifacts and a structured completion manifest. Preserve actual provider, model, effort, input hashes and limitations; unavailable usage is null, not zero. Models/efforts come from the explicitly selected runner profile.
 
 Never call `cc-connect send` or lark-cli from a research/writer/checker role. The trusted outer publication adapter may use configured lark-cli only for document create/update/fetch with an explicit profile and `--as user`; it never sends messages or changes authentication/permissions. The daily NAS wrapper is silent (`mute=true`); only its final delivery step may send through this repository's verified cc-connect project/session when `should_send=true`. Ordinary progress, successful commands, skipped runs and role final replies stay local.
+
+Scheduled execution freezes one public cutoff and revision before research. Treat configured company,
+industry and publication counts as per-window soft quotas: continue the same durable round through
+bounded worker generations while progress is being made. Do not admit disclosures after the frozen
+cutoff, rebuild an in-flight industry revision from a newer global head, or declare quota, capacity,
+terminal failure or cloud `unknown` as completion. Current company/industry work and checked reader
+delivery precede historical standalone backfill, which is normally paused.

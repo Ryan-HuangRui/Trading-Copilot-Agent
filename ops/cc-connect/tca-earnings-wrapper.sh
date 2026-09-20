@@ -18,5 +18,6 @@ if contact.exists():
     user_agent = data.get('sec_user_agent', '')
     if user_agent:
         os.environ['TCA_SEC_USER_AGENT'] = user_agent
-os.execv(sys.executable, [sys.executable, str(root / 'script/earnings_daily.py'), '--repo-root', str(root), '--send', *sys.argv[2:]])
+os.execv(sys.executable, [sys.executable, str(root / 'script/earnings_continuation.py'),
+                         '--repo-root', str(root), '--send', *sys.argv[2:]])
 PY

@@ -116,6 +116,15 @@ Before a role claim, every dependency must still be the current accepted version
 
 Daily trigger is 10:00 Asia/Shanghai, seven days/week. Keep actual public cutoff in UTC and original timezone metadata. No trading-day skip for earnings work. No-work requires checking new inputs, queue, retries and due reviews; then skip model use.
 
+The trigger starts or wakes one persistent research round with a frozen batch date, public cutoff
+and revision. Disclosures after that cutoff belong to the next round. Company claims, daily industry
+heads, quarterly fingerprints, publication discovery and final delivery must all remain cutoff-bound;
+they cannot reread a newer global head during continuation. Configured role counts are bounded
+per-execution-window soft quotas, not an all-day completion limit. A bounded background worker may
+handoff to another bounded generation while durable progress continues, so the scheduler timeout is
+not a research-completion deadline. It stops on completion or an explicit durable reason such as
+quota, capacity, terminal/manual blocker or repeated no progress; these states are not completion.
+
 Season windows are resource-policy defaults from configuration. Quarterly mature trigger requires >= 0.9 disclosed coverage of the frozen applicable core sample, key issuer disclosures, completed necessary research and explicit resolution/disclosure of critical supply-chain gaps. A quarter is mapped from actual operating periods, not only filing months. Foreign issuer obligations and Q4 annual reporting differ.
 
 At configured tail cutoff, produce a partial/insufficient stage report if maturity fails. Material subsequent evidence creates a versioned revision. Manual P2 quarterly runs use the same completeness rules without requiring P4 scheduling. Cross-industry synthesis discloses unavailable industry reports and incomparable metrics.

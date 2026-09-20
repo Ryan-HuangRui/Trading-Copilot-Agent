@@ -62,7 +62,7 @@
 - `earnings_state.py`: SQLite research queue, task dependencies, independent source watermarks and recoverable leases.
 - `earnings_context.py`, `earnings_industry_context.py`: immutable company and manual industry/challenge/synthesis role inputs; they do not call an LLM.
 - `validate_earnings_research.py`, `earnings_research_record.py`: evidence/provenance/cutoff validation and atomic role completion registration.
-- `earnings_daily.py`, `earnings_role_runner.py`, `earnings_delivery.py`: bounded daily orchestration, independent read-only Codex roles and outer-only verified cc-connect delivery; runtime activation is explicit.
+- `earnings_continuation.py`, `earnings_daily.py`, `earnings_role_runner.py`, `earnings_delivery.py`: persistent cutoff-bound rounds, bounded execution-window continuation, independent read-only Codex roles and outer-only verified cc-connect delivery; runtime activation is explicit.
 - `earnings_recovery.py`: exact-target, preview-first, backed-up recovery for one expired research lease or stuck publication checker/repair; it never calls a model, cloud API or notification sender.
 - `report_delivery_guard.py`: idempotent delivery-state helper.
 - `trading_copilot.py`: unified agent-facing workflow wrapper that returns `status/date/artifacts/skipped/reason`.

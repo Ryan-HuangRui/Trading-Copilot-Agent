@@ -21,6 +21,7 @@ python3 script/trading_copilot.py earnings-review-context --date 2026-09-16 --cu
 python3 script/trading_copilot.py earnings-review-context --date 2026-09-16 --cutoff 2026-09-16T02:00:00Z --manual-quarter 2026-Q2
 python3 script/trading_copilot.py earnings-review-context --cutoff 2026-09-16T02:00:00Z --scope-id <scope_id> --record-gap-review runtime/earnings/<review-result>.json
 python3 script/trading_copilot.py earnings-daily --resume-only --manual-quarter 2026-Q2
+python3 script/earnings_continuation.py --status
 python3 script/trading_copilot.py earnings-publication-runner --type company --scope NVDA --quarter 2026-Q2 --source-report report/earnings/<accepted>.json
 python3 script/trading_copilot.py earnings-lark-document --publication-manifest report/earnings/publications/<manifest> --execute
 ```
@@ -74,7 +75,22 @@ adapter 的参数形状按官方 lark-cli 文档：它把 cwd 固定到准备目
 
 ### runtime 配置增量迁移
 
-NAS 的 `runtime/earnings/p4-config.json` 应从新 tracked 配置合并下列预算键，保留现有 activation flags、路径和身份配置，不整文件覆盖：`company_history_limit=2`、`publication_repairs_per_day=1`、`publication_full_start_threshold_seconds=900`、`publication_checker_start_threshold_seconds=480`、`publication_stage_timeout_seconds=900`、`phase_reserve_seconds=1200`。`company_history_limit` 是每日公司总预算内的历史回补硬上限，其余容量优先当前期和关键公司缺口；已有 `daily_company_limit`/`strong_season_company_limit` 不扩大。部署前先用 `earnings-recovery` preview 精确列出待恢复 job；备份后只恢复所选任务。
+NAS 的 `runtime/earnings/p4-config.json` 应从新 tracked 配置按键合并，保留现有 activation flags、路径和身份配置，不整文件覆盖：`company_history_limit=0`、`publication_backfill_limit=0`、`publication_repairs_per_day=1`、`publication_full_start_threshold_seconds=900`、`publication_checker_start_threshold_seconds=480`、`publication_stage_timeout_seconds=900`、`phase_reserve_seconds=1200`。前两项暂停历史独立补稿，但历史证据仍可进入当前分析；`daily_company_limit`/`strong_season_company_limit` 是每个 continuation window 的软配额，不扩大单次调用。部署文件可设置 `continuation_worker_seconds`（建议 8400）、`continuation_window_seconds`（建议 1800）、`continuation_finalize_reserve_seconds`（建议 120）和 `continuation_no_progress_windows`（建议 2）。部署前先用 `earnings-recovery` preview 精确列出待恢复 job；备份后只恢复所选任务。
+
+现有 150 分钟 muted cron 不删除 timeout，也不新增高频 cron。部署后 wrapper 启动后台 continuation worker 并立即返回；检查 `continuation.sqlite`、worker 日志和 PID 留存。若 NAS/cc-connect 会清理 detached 子进程，使用 NAS 已有服务管理器运行同一 `earnings_continuation.py --worker` 命令，并以 starter 负责唤醒；禁止假设不存在的 cc-connect 参数。回滚时恢复旧 wrapper 即可，不能删除 continuation/research SQLite 或重置 attempts。
+
+母会话部署时按以下顺序执行（本实现任务不在线操作）：
+
+```bash
+cp runtime/earnings/daily.sqlite runtime/earnings/daily.sqlite.pre-continuation
+cp runtime/earnings/state.sqlite runtime/earnings/state.sqlite.pre-continuation
+cp runtime/earnings/quarterly.sqlite runtime/earnings/quarterly.sqlite.pre-continuation
+python3 -m py_compile script/earnings_continuation.py script/earnings_daily.py script/earnings_state.py
+bash -n ops/cc-connect/tca-earnings-wrapper.sh
+python3 script/earnings_continuation.py --status
+```
+
+将上述 runtime 配置键按键合并并保留原身份/activation 后，仍由既有 cc-connect cron 执行 `ops/cc-connect/tca-earnings-wrapper.sh`。首次触发返回的 JSON 含 worker PID；cron 调用返回后用 `ps -p <PID>` 和 `python3 script/earnings_continuation.py --status` 确认 detached worker 仍存活、cutoff 固定且窗口递增。若 PID 被宿主回收，立即恢复旧 wrapper，随后把 worker 命令接入 NAS 已验证的服务管理器再启用；不要用新的高频 cron 或未知 cc-connect 参数兜底。
 
 升级 scoped company configuration hash 前，先把部署前 `p4-config.json` 的**原始字节**复制到 `runtime/earnings/`，不要格式化或重写；随后运行 `python3 script/earnings_config_migration.py --snapshot runtime/earnings/<原始副本>.json` 预览 raw SHA-256 与 semantic basis。核对该 raw hash 与旧任务的 `configuration_hash` 分布后，再加 `--execute` 注册。工具在日批次共享锁内按原始字节归档到 `runtime/earnings/config-migrations/snapshots/` 并写审计 registry。只有 raw hash、快照文件 hash、semantic basis、model/effort/method 和其余冻结证据全部一致时才复用旧 task/report；未知旧 hash 保持待迁移并报人工核对，不自动全量重研。该注册不修改 immutable `task_inputs`、任务 attempts 或已完成报告。
 

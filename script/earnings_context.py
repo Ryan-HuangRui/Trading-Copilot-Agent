@@ -266,7 +266,8 @@ def main() -> None:
         key_symbols = [symbol for industry in universe_payload.get("industries", [])
                        for symbol in industry.get("key_symbols", [])]
         tasks = state.claim_tasks(owner=owner, limit=limit, lease_seconds=lease, task_type="company",
-                                  company_tier=args.company_tier, priority_symbols=key_symbols)
+                                  company_tier=args.company_tier, priority_symbols=key_symbols,
+                                  cutoff=cutoff.isoformat())
         for task in tasks:
             try:
                 manifest = _manifest_for_task(root, state, task, cutoff, config_hash, universe, run_id, config)
