@@ -46,11 +46,18 @@ _UNIT = {
 
 _NUMBER_PATTERN = r"[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?"
 _FINANCIAL_UNIT_PATTERN = (r"USD\s+(?:million|billion)|CNY\s+(?:million|billion)|million\s+USD|billion\s+USD|"
-                           r"percentage\s+points|百万美元|亿美元|百万元|亿元|个百分点|个基点|美元|元|%|％|bps|years?|年")
+                           r"percentage\s+points|百万美元|亿美元|百万元|亿元|个百分点|个基点|美元|元|%|％|bps|years?|年|days?|天")
 
 
 def _unit(value: str) -> tuple[str, Decimal] | None:
     return _UNIT.get(re.sub(r"\s+", " ", (value or "").strip()))
+
+
+def _quantity_unit(value: str) -> tuple[str, Decimal] | None:
+    # Reader aliases must not change frozen catalog facts, IDs or currencies.
+    if (value or "").strip() in {"day", "days", "天"}:
+        return "duration_day", Decimal("1")
+    return _unit(value)
 
 
 def _decimal_text(value: Decimal) -> str:
@@ -311,7 +318,7 @@ def _claims(markdown: str) -> list[dict[str, Any]]:
         for column, cell in enumerate(cells):
             if re.fullmatch(_NUMBER_PATTERN, cell):
                 heading = header[column] if column < len(header) else ""
-                found = next((name for name in sorted(_UNIT, key=len, reverse=True) if name in heading), None)
+                found = next((name for name in sorted(set(_UNIT) | {"day", "days", "天"}, key=len, reverse=True) if name in heading), None)
                 value = cell.replace(",", "")
                 cell_start = line.find(cell)
                 period = _explicit_period(line, cell_start, cell_start + len(cell))
@@ -381,18 +388,18 @@ def validate_reader_markdown(markdown: str, reports: list[dict[str, Any]], *, pu
     for claim in numeric_claims:
         explicit = next((row for row in (explicit_fact_bindings or [])
                          if row.get("occurrence") == claim.get("occurrence") and row.get("display") == claim.get("display")), None)
-        claim_unit = _unit(claim.get("unit") or "")
+        claim_unit = _quantity_unit(claim.get("unit") or "")
         if claim_unit is None:
             errors.append(f"unmapped table quantity without unit: {claim['display']}")
             continue
         def quantity_matches(row: dict[str, Any]) -> bool:
-            row_unit = _unit(str(row.get("unit") or ""))
+            row_unit = _quantity_unit(str(row.get("unit") or ""))
             if not row_unit or row_unit[0] != claim_unit[0]:
                 return False
             if explicit_fact_bindings is not None:
                 actual = Decimal(str(claim["value"])) * claim_unit[1]
-                return any(_unit(candidate["unit"])
-                    and Decimal(candidate["value"]) * _unit(candidate["unit"])[1] == actual
+                return any(_quantity_unit(candidate["unit"])
+                    and Decimal(candidate["value"]) * _quantity_unit(candidate["unit"])[1] == actual
                     for candidate in row.get("display_candidates", []))
             expected = Decimal(str(row["value"])) * row_unit[1]
             actual = Decimal(str(claim["value"])) * claim_unit[1]
@@ -440,7 +447,7 @@ def validate_reader_markdown(markdown: str, reports: list[dict[str, Any]], *, pu
                 derived = candidate
         else:
             for fact in facts:
-                fact_unit = _unit(str(fact.get("unit") or ""))
+                fact_unit = _quantity_unit(str(fact.get("unit") or ""))
                 if not fact_unit or fact_unit[0] != claim_unit[0]: continue
                 fact_basis = str(fact.get("accounting_basis") or "").lower()
                 claim_basis = str(claim.get("accounting_basis") or "").lower()
@@ -468,7 +475,8 @@ def validate_reader_markdown(markdown: str, reports: list[dict[str, Any]], *, pu
             fact = matches[0]; mappings.append({"display": claim["display"], "occurrence": claim.get("occurrence"),
                 "fact_id": fact["fact_id"], "input_fact_ids": [], "evidence_id": fact.get("evidence_id"), "metric": fact.get("metric"),
                 "period": fact.get("period"), "accounting_basis": fact.get("accounting_basis"),
-                "currency": fact.get("currency") or claim_unit[0], "source_unit": fact.get("source_unit") or fact.get("unit"),
+                "currency": (fact.get("currency") if claim_unit[0] == "duration_day" else fact.get("currency") or claim_unit[0]),
+                "source_unit": fact.get("source_unit") or fact.get("unit"),
                 "source_locator": fact.get("source_locator"), "source_evidence_ids": fact.get("source_evidence_ids", [])})
     source_urls = {e.get("source_url") for report in reports for e in report.get("evidence", []) if e.get("source_url")}
     for url in _markdown_urls(markdown):

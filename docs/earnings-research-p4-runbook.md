@@ -4,6 +4,8 @@ P4 已实现但自动开关默认关闭。它复用每日 10:00 Asia/Shanghai �
 
 ## 状态和预算
 
+研究角色启动前要求阶段剩余时间至少为 `research_start_threshold_seconds`（默认 600 秒）；若还需准备 context，另预留其 120 秒上限。公司、日更行业、季度行业/市场和缺口复核统一检查，时间不足时留待下一批，不领取任务或消耗模型名额。该阈值不保证模型必定完成，不扩大总批次时限；实际超时仍记录并按原上限恢复。
+
 - `runtime/earnings/state.sqlite` 增量增加 publication 索引和云交付状态；P3 表保持兼容。
 - `runtime/earnings/quarterly.sqlite` 冻结 industry-quarter 成员和方法，并逐 revision 保存统一 cutoff、阶段状态与历史；新的已验收公司输入可触发修订，无需等待前一阶段版或跨行业报告完成。没有任何公司研究证据的行业只记录待补资料，不启动模型。
 - `runtime/earnings/daily.sqlite` 持久化 company、quarterly、writer、checker、cloud 的每日实际尝试次数；跨日重新获得额度，未完成任务保留。恢复队列先获得有界时间片，新研究和季度阶段也保留时间片。
@@ -75,3 +77,5 @@ adapter 的参数形状按官方 lark-cli 文档：它把 cwd 固定到准备目
 NAS 的 `runtime/earnings/p4-config.json` 应从新 tracked 配置合并下列预算键，保留现有 activation flags、路径和身份配置，不整文件覆盖：`company_history_limit=2`、`publication_repairs_per_day=1`、`publication_full_start_threshold_seconds=900`、`publication_checker_start_threshold_seconds=480`、`publication_stage_timeout_seconds=900`、`phase_reserve_seconds=1200`。`company_history_limit` 是每日公司总预算内的历史回补硬上限，其余容量优先当前期和关键公司缺口；已有 `daily_company_limit`/`strong_season_company_limit` 不扩大。部署前先用 `earnings-recovery` preview 精确列出待恢复 job；备份后只恢复所选任务。
 
 升级 scoped company configuration hash 前，先把部署前 `p4-config.json` 的**原始字节**复制到 `runtime/earnings/`，不要格式化或重写；随后运行 `python3 script/earnings_config_migration.py --snapshot runtime/earnings/<原始副本>.json` 预览 raw SHA-256 与 semantic basis。核对该 raw hash 与旧任务的 `configuration_hash` 分布后，再加 `--execute` 注册。工具在日批次共享锁内按原始字节归档到 `runtime/earnings/config-migrations/snapshots/` 并写审计 registry。只有 raw hash、快照文件 hash、semantic basis、model/effort/method 和其余冻结证据全部一致时才复用旧 task/report；未知旧 hash 保持待迁移并报人工核对，不自动全量重研。该注册不修改 immutable `task_inputs`、任务 attempts 或已完成报告。
+
+读者数字位置清单支持周转天数的 `days`/`day`/`天`，以同一维度核对数值；该展示别名兼容不修改已冻结事实目录、事实 ID 或币种，也不能将天数绑定成年数。

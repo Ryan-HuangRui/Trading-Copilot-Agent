@@ -19,6 +19,63 @@ from earnings_role_runner import run_role
 
 
 class EarningsDailyTests(unittest.TestCase):
+    def test_short_daily_window_defers_company_and_industry_before_claiming(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); (root / 'config').mkdir()
+            config = json.loads((ROOT / 'config/earnings_research.json').read_text())
+            config['publication']['enabled'] = False
+            config['quarterly']['automatic_trigger_enabled'] = False
+            atomic_write_json(root / 'config/earnings_research.json', config)
+            atomic_write_json(root / 'config/earnings_universe.json', {'industries': []})
+            atomic_write_json(root / 'runtime/earnings/deployment.json', {'schema_version': 1,
+                'verified_repo': str(root), 'project': 'test', 'session': 'test', 'verified_at': 'test',
+                'verified_from_cron_id': 'test', 'cc_connect_bin': '/bin/false', 'codex_bin': '/bin/false',
+                'delivery_enabled': False, 'batch_timeout_seconds': 300})
+            args = argparse.Namespace(repo_root=str(root), config='config/earnings_research.json',
+                deployment='runtime/earnings/deployment.json', resume_only=True, collect_only=False,
+                send=False, manual_quarter=None)
+            with patch('earnings_daily.industry_work', return_value=[{'industry': 'consumer-retail'}]), \
+                 patch('earnings_daily.command') as context, patch('earnings_daily.run_role') as role:
+                result = run(args)
+            context.assert_not_called(); role.assert_not_called()
+            self.assertEqual(result['status'], 'success')
+            ledger = DailyLedger(root)
+            self.assertEqual(ledger.used(result['date'], 'company'), 0)
+            self.assertEqual(ledger.used(result['date'], 'industry'), 0)
+            ledger.db.close()
+
+    def test_gap_review_with_158_seconds_remaining_does_not_reserve_attempt(self):
+        import time
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); ledger = DailyLedger(root)
+            qledger = QuarterlyReviewLedger(root / 'runtime/earnings/quarterly.sqlite')
+            config = json.loads((ROOT / 'config/earnings_research.json').read_text())
+            input_path = root / 'runtime/earnings/gap-input.json'
+            atomic_write_json(input_path, {'input_hash': 'unchanged'})
+            scope = {'scope_id': 'scope', 'gap_review_input_path': str(input_path.relative_to(root))}
+            with patch('earnings_daily.run_gap_review') as model:
+                result = run_gap_review_step(root, config, ledger, qledger, {}, '2026-09-20',
+                                             scope, time.monotonic() + 158)
+            model.assert_not_called(); self.assertEqual(result['status'], 'queued')
+            self.assertEqual(ledger.used('2026-09-20', 'review'), 0)
+            self.assertEqual(qledger.db.execute('SELECT count(*) FROM quarterly_gap_attempts').fetchone()[0], 0)
+            qledger.close(); ledger.db.close()
+
+    def test_short_quarterly_window_does_not_claim_industry_or_market(self):
+        import time
+        from earnings_daily import run_quarterly_step
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); state = EarningsState(root / 'runtime/earnings/state.sqlite')
+            ledger = DailyLedger(root); config = json.loads((ROOT / 'config/earnings_research.json').read_text())
+            config['quarterly']['automatic_trigger_enabled'] = True
+            with patch('earnings_daily.inspect_due', return_value={'scopes': [{}], 'quarter': '2026-Q2'}), \
+                 patch('earnings_daily.command') as context, patch('earnings_daily.run_gap_review_step') as gap:
+                run_quarterly_step(root, config, {}, state, ledger, {}, '2026-09-20',
+                    '2026-09-20T02:00:00Z', 'short-window', root / 'runtime/earnings/logs', time.monotonic() + 158)
+            context.assert_not_called(); gap.assert_not_called()
+            self.assertEqual(ledger.used('2026-09-20', 'quarterly'), 0)
+            state.close(); ledger.db.close()
+
     def test_gap_quota_stops_later_quarterly_scopes_and_market_work(self):
         import time
         from earnings_daily import run_quarterly_step
@@ -42,7 +99,7 @@ class EarningsDailyTests(unittest.TestCase):
                  patch('earnings_daily.command') as command, patch('earnings_daily.run_role') as role:
                 outcomes = run_quarterly_step(root, config, {'industries': []}, state, ledger,
                     {'codex_bin': '/bin/false'}, '2026-09-16', '2026-09-15T00:00:00Z', 'quota-run',
-                    root / 'runtime/earnings/logs', time.monotonic() + 5)
+                    root / 'runtime/earnings/logs', time.monotonic() + 1800)
             self.assertEqual(outcomes, [quota]); gap.assert_called_once(); command.assert_not_called(); role.assert_not_called()
             self.assertEqual(ledger.used('2026-09-16', 'quarterly'), 0)
             state.close(); ledger.db.close()
@@ -85,7 +142,7 @@ class EarningsDailyTests(unittest.TestCase):
             with patch('earnings_daily.run_gap_review') as gap, patch('earnings_daily.command') as command:
                 result = run_quarterly_step(root, config, universe, state, ledger, {'codex_bin': '/bin/false'},
                     '2026-09-16', '2026-09-15T19:00:00Z', 'empty-cohort', root / 'runtime/earnings/logs',
-                    time.monotonic() + 5)
+                    time.monotonic() + 1800)
             gap.assert_not_called(); command.assert_not_called()
             self.assertIn('waiting for accepted company evidence', result[0]['reason'])
             self.assertEqual(ledger.used('2026-09-16', 'review'), 0)
@@ -111,11 +168,11 @@ class EarningsDailyTests(unittest.TestCase):
             failing = root / 'runtime/earnings/failing-codex'; failing.write_text('#!/bin/sh\nexit 7\n'); failing.chmod(0o700)
             scope = {'scope_id': frozen['scope_id'], 'gap_review_input_path': str(input_path.relative_to(root))}
             first = run_gap_review_step(root, config, ledger, qledger, {'codex_bin': str(failing)}, '2026-09-16',
-                                        scope, time.monotonic() + 5)
+                                        scope, time.monotonic() + 1800)
             second = run_gap_review_step(root, config, ledger, qledger, {'codex_bin': str(failing)}, '2026-09-17',
-                                         scope, time.monotonic() + 5)
+                                         scope, time.monotonic() + 1800)
             third = run_gap_review_step(root, config, ledger, qledger, {'codex_bin': str(failing)}, '2026-09-18',
-                                        scope, time.monotonic() + 5)
+                                        scope, time.monotonic() + 1800)
             self.assertEqual((first['status'], first['attempts']), ('retryable_failed', 1))
             self.assertEqual((second['status'], second['attempts']), ('terminal_failed', 2))
             self.assertEqual((third['status'], third['attempts']), ('terminal_failed', 2))
@@ -144,7 +201,7 @@ print(json.dumps({'type':'turn.completed','usage':{'input_tokens':1,'output_toke
 """); fake.chmod(0o700)
             atomic_write_json(root / 'runtime/earnings/deployment.json', {'schema_version': 1, 'verified_repo': str(root),
                 'project': 'test', 'session': 'test', 'verified_at': 'test', 'verified_from_cron_id': 'test',
-                'cc_connect_bin': '/bin/false', 'codex_bin': str(fake), 'delivery_enabled': False, 'batch_timeout_seconds': 60})
+                'cc_connect_bin': '/bin/false', 'codex_bin': str(fake), 'delivery_enabled': False, 'batch_timeout_seconds': 1800})
             state = EarningsState(root / 'runtime/earnings/state.sqlite')
             state.upsert_issuer(issuer_id='issuer', cik='1', symbol='TEST', name='Test', identity_status='resolved')
             state.refresh_event('event', 'issuer', 'earnings', None, '2026-07-26')

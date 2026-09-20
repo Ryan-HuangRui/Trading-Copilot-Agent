@@ -102,6 +102,7 @@
     "publication_stage_timeout_seconds": 900,
     "escalations_per_day": 1,
     "task_timeout_seconds": 1800,
+    "research_start_threshold_seconds": 600,
     "max_task_attempts": 2,
     "phase_reserve_seconds": 1200,
     "initialization_company_limit": 5,

@@ -218,6 +218,14 @@ def _quota_exhausted(value: object) -> bool:
     return "model_quota_exhausted" in str(value).lower()
 
 
+def research_window_available(config: dict, deadline: float, *, prepare_context: bool = False) -> bool:
+    """Leave enough execution time before claiming a role or reserving a model call."""
+    required = int(config["budgets"].get("research_start_threshold_seconds", 600))
+    # Context subprocesses have a 120-second timeout. Reserve it before claiming,
+    # so preparing inputs cannot eat the minimum window promised to the model.
+    return deadline - time.monotonic() >= required + (120 if prepare_context else 0)
+
+
 def unresolved_terminal_count(state: EarningsState) -> int:
     """Keep exhausted current work visible; superseded attempts are historical."""
     return state.db.execute("""SELECT COUNT(*) FROM research_tasks t
@@ -281,7 +289,7 @@ def run_gap_review_step(root: Path, config: dict, ledger: DailyLedger, qledger: 
         return {"status": "terminal_failed", "scope_id": scope["scope_id"], "stage": "gap_review",
                 "attempts": attempts, "reason": "maximum gap-review attempts exhausted"}
     task_key = f"{scope['scope_id']}:gap-review:{input_hash}:attempt-{attempts + 1}"
-    if time.monotonic() >= deadline or not ledger.reserve(day, task_key, "review", cap):
+    if not research_window_available(config, deadline) or not ledger.reserve(day, task_key, "review", cap):
         return {"status": "queued", "scope_id": scope["scope_id"], "stage": "gap_review",
                 "attempts": attempts, "reason": "review budget or batch deadline exhausted"}
     attempt = attempts + 1
@@ -338,7 +346,7 @@ def run_quarterly_step(root: Path, config: dict, universe: dict, state: Earnings
     cap = int(config["budgets"]["quarterly_tasks_per_day"])
     try:
         for scope in review["scopes"]:
-            if time.monotonic() >= deadline:
+            if not research_window_available(config, deadline, prepare_context=True):
                 break
             if not scope["maturity"]["counts"]["researched_issuers"]:
                 outcomes.append({"status": "skipped", "scope_id": scope["scope_id"],
@@ -392,6 +400,8 @@ def run_quarterly_step(root: Path, config: dict, universe: dict, state: Earnings
                     "--run-id", f"{run_id}-quarterly-{uuid.uuid4().hex[:8]}",
                     "--lease-seconds", str(int(config["budgets"]["task_timeout_seconds"]) + 180)]
             for path in predecessors: args.extend(["--predecessor-report", path])
+            if not research_window_available(config, deadline, prepare_context=True):
+                break
             manifest = None
             try:
                 context = command(root, "earnings_industry_context.py", args, logs, 120)
@@ -422,7 +432,8 @@ def run_quarterly_step(root: Path, config: dict, universe: dict, state: Earnings
                     break
                 continue
         # Formal market synthesis waits for every frozen industry synthesis in the same quarter.
-        if not quota_open and ledger.used(day, "quarterly") < cap and review["scopes"]:
+        if (not quota_open and ledger.used(day, "quarterly") < cap and review["scopes"]
+                and research_window_available(config, deadline, prepare_context=True)):
             first = review["scopes"][0]; reports = []
             quarter_scopes = [{"scope_id": row["scope_id"], "industry_id": row["industry_id"],
                 "quarter_id": row["quarter_id"], "revision": row["revision"],
@@ -941,7 +952,8 @@ def run(args: argparse.Namespace) -> dict:
                 current_exhausted = current_limit == 0
                 current_used = history_used = 0
                 while (not model_circuit_open and ledger.used(day, "company") < limit
-                       and time.monotonic() < early_deadline and context_attempts < limit * 2):
+                       and research_window_available(config, early_deadline, prepare_context=True)
+                       and context_attempts < limit * 2):
                     context_attempts += 1
                     tier = "history" if current_exhausted else "current"
                     if tier == "history" and history_used >= history_limit:
@@ -998,7 +1010,8 @@ def run(args: argparse.Namespace) -> dict:
                         errors.append(f"publication-current:{exc}")
                 for work in ([] if model_circuit_open else industry_work(root, state, universe, ledger)):
                     cap = int(config["budgets"]["daily_industry_limit"])
-                    if ledger.used(day, "industry") >= cap or time.monotonic() >= early_deadline:
+                    if (ledger.used(day, "industry") >= cap
+                            or not research_window_available(config, early_deadline, prepare_context=True)):
                         break
                     try:
                         request = ledger.db.execute("SELECT fingerprint,cutoff FROM industry_requests WHERE scope=?", (work["scope"],)).fetchone()

@@ -194,6 +194,25 @@ class EarningsPublicationTests(unittest.TestCase):
         self.assertEqual([(row["display"], row["occurrence"]) for row in table],
                          [("962.21", {"line": 4, "column": 2}), ("962.21", {"line": 5, "column": 2})])
 
+    def test_days_quantity_binds_without_changing_frozen_catalog_or_accepting_wrong_values(self):
+        source = json.loads(json.dumps(SOURCE))
+        source['evidence'][0]['numeric_facts'].append({'metric': 'days_sales_outstanding', 'value': '77',
+            'unit': 'days', 'period': {'kind': 'instant', 'start': None, 'end': '2026-06-30'}})
+        catalog = financial_fact_catalog([source])
+        fact = next(row for row in catalog['facts'] if row['metric'] == 'days_sales_outstanding')
+        self.assertIsNone(fact['currency'])
+        self.assertEqual(fact['display_candidates'], [{'value': '77', 'unit': 'days'}])
+        body = markdown() + '\n应收周转为77天。\n'
+        claims = claim_occurrence_inventory(body)['claims']
+        bindings = []
+        for claim in claims:
+            matched = fact if claim['display'] == '77天' else next(row for row in catalog['facts'] if row['metric'] == 'revenue')
+            bindings.append({**matched, 'display': claim['display'], 'occurrence': claim['occurrence']})
+        self.assertEqual(validate_reader_markdown(body, [source], explicit_fact_bindings=bindings)['status'], 'passed')
+        self.assertEqual(validate_reader_markdown(body.replace('77天', '78天'), [source])['status'], 'failed')
+        self.assertEqual(validate_reader_markdown(body.replace('77天', '77年'), [source])['status'], 'failed')
+        self.assertEqual(financial_fact_catalog([source]), catalog)
+
     def test_occurrence_inventory_binds_year_duration_without_treating_calendar_year_as_quantity(self):
         body = "2026年第二季度，合同加权平均剩余期限为6.4年；对比样本为5 years。"
         claims = claim_occurrence_inventory(body)["claims"]
