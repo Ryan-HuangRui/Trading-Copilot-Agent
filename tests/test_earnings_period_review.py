@@ -2,6 +2,7 @@ import sys
 from datetime import date
 from pathlib import Path
 import json
+import sqlite3
 from tempfile import TemporaryDirectory
 import unittest
 
@@ -22,6 +23,49 @@ from earnings_state import EarningsState
 
 
 class EarningsPeriodReviewTests(unittest.TestCase):
+    def test_legacy_fingerprint_migration_binds_reports_without_resetting_stage(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); path = root / "runtime/earnings/quarterly.sqlite"; path.parent.mkdir(parents=True)
+            legacy = sqlite3.connect(path)
+            legacy.executescript("""CREATE TABLE quarterly_scopes(scope_id TEXT PRIMARY KEY,quarter_id TEXT NOT NULL,
+              industry_id TEXT NOT NULL,period_start TEXT NOT NULL,period_end TEXT NOT NULL,
+              frozen_universe_json TEXT NOT NULL,frozen_universe_hash TEXT NOT NULL,cutoff TEXT NOT NULL,
+              edition TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,revision INTEGER NOT NULL DEFAULT 1,
+              input_fingerprint TEXT,UNIQUE(quarter_id,industry_id,edition));
+              CREATE TABLE quarterly_stages(scope_id TEXT NOT NULL,stage TEXT NOT NULL,state TEXT NOT NULL,input_hash TEXT,
+              artifact_path TEXT,artifact_sha256 TEXT,attempts INTEGER NOT NULL DEFAULT 0,error TEXT,updated_at TEXT NOT NULL,
+              PRIMARY KEY(scope_id,stage));""")
+            frozen = json.dumps({"industry_id": "a", "issuers": [], "key_symbols": []})
+            legacy.execute("INSERT INTO quarterly_scopes VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                ("legacy-scope", "2026-Q2", "a", "2026-04-01", "2026-06-30", frozen, "universe-sha",
+                 "2026-09-20T02:00:00Z", "full", "created", "updated", 1, "same"))
+            legacy.execute("INSERT INTO quarterly_stages VALUES(?,?,?,?,?,?,?,?,?)",
+                ("legacy-scope", "industry", "completed", "same", "old.json", "old-sha", 1, None, "updated"))
+            legacy.commit(); legacy.close()
+            old_frozen = root / "runtime/earnings/quarterly-scopes/legacy-scope/revisions/v1/frozen-scope.json"
+            atomic_write_json(old_frozen, {"scope_id": "legacy-scope", "revision": 1,
+                              "cutoff": "2026-09-20T02:00:00Z", "frozen_universe_hash": "universe-sha"})
+            ledger = QuarterlyReviewLedger(path); scope = {"scope_id": "legacy-scope"}
+            before = dict(ledger.db.execute("SELECT * FROM quarterly_stages WHERE scope_id=? AND stage='industry'",
+                                            (scope["scope_id"],)).fetchone())
+            reports = [{"issuer_id": "issuer", "report_id": "report", "task_id": "task",
+                        "path": "report/earnings/company.json", "sha256": "digest"}]
+            revised = ledger.begin_revision(scope["scope_id"], "same", "2026-09-21T02:00:00Z",
+                                            round_id="round-2", accepted_reports=reports)
+            after = dict(ledger.db.execute("SELECT * FROM quarterly_stages WHERE scope_id=? AND stage='industry'",
+                                           (scope["scope_id"],)).fetchone())
+            row = dict(ledger.db.execute("SELECT * FROM quarterly_scopes WHERE scope_id=?", (scope["scope_id"],)).fetchone())
+            accepted_path = root / row["active_input_path"]
+            self.assertFalse(revised)
+            self.assertEqual((after["state"], after["attempts"], after["artifact_sha256"]),
+                             (before["state"], before["attempts"], before["artifact_sha256"]))
+            self.assertEqual(json.loads(row["accepted_reports_json"]), reports)
+            self.assertEqual(json.loads(accepted_path.read_text())["round_id"], "round-2")
+            self.assertEqual(json.loads(accepted_path.read_text())["cutoff"], "2026-09-21T02:00:00Z")
+            frozen = root / "runtime/earnings/quarterly-scopes" / scope["scope_id"] / "revisions/v1/frozen-scope.json"
+            self.assertEqual(json.loads(frozen.read_text())["cutoff"], "2026-09-20T02:00:00Z")
+            ledger.close()
+
     def test_fiscal_quarter_maps_by_overlap_and_preserves_actual_period(self):
         mapped = map_fiscal_period("2026-04-27", "2026-07-26", form="10-Q")
         self.assertEqual(mapped["research_quarter"], "2026-Q2")

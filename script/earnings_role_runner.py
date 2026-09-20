@@ -102,6 +102,9 @@ def run_role(root: Path, manifest_path: Path, *, binary: str, timeout: int) -> d
         with events_path.open("w") as events, stderr_path.open("w") as stderr:
             proc = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=events, stderr=stderr,
                                     env=env, text=True, start_new_session=True)
+            request = read_json(request_path)
+            request.update(status="running", pid=proc.pid, process_group=proc.pid)
+            atomic_write_json(request_path, request)
             proc.communicate(prompt, timeout=timeout)
         for line in events_path.read_text().splitlines():
             try:

@@ -18,7 +18,7 @@ import uuid
 from zoneinfo import ZoneInfo
 
 from earnings_common import ROOT, atomic_write_json, load_config, parse_time, read_json, utc_now
-from earnings_daily import round_progress
+from earnings_daily import round_progress, summarize_batch_usage
 from earnings_delivery import destination, exclusive_lock, runtime_path
 from earnings_state import EarningsState
 
@@ -74,6 +74,17 @@ class ContinuationLedger:
         round_columns = {row[1] for row in self.db.execute("PRAGMA table_info(rounds)")}
         if "owner_generation" not in round_columns:
             self.db.execute("ALTER TABLE rounds ADD COLUMN owner_generation INTEGER")
+        if "research_outcome" not in round_columns:
+            self.db.execute("ALTER TABLE rounds ADD COLUMN research_outcome TEXT")
+        self.db.execute("""UPDATE rounds SET research_outcome=CASE
+          WHEN stop_reason LIKE 'frozen cutoff target completed%' THEN 'complete'
+          WHEN stop_reason LIKE 'only terminal/manual blockers remain%' THEN 'blocked'
+          WHEN stop_reason LIKE 'model quota exhausted%' THEN 'paused_quota'
+          WHEN stop_reason LIKE 'model capacity unavailable%' THEN 'paused_capacity'
+          WHEN stop_reason LIKE 'frozen cutoff has no executable evidence%' THEN 'waiting'
+          WHEN stop_reason LIKE 'no durable progress%' OR stop_reason LIKE 'window errors remain%' THEN 'yielded'
+          ELSE 'blocked' END
+          WHERE research_outcome IS NULL AND state IN ('delivery_pending','delivery_unknown')""")
         self.db.commit()
 
     def active_round(self) -> dict | None:
@@ -105,6 +116,53 @@ def _pid_alive(pid: int) -> bool:
     except (ProcessLookupError, PermissionError):
         return False
     return True
+
+
+def _terminate_owned_model_groups(root: Path, *, started_after: datetime | None = None) -> list[dict]:
+    """Terminate detached model sessions proven by durable runner ownership records."""
+    records: list[tuple[Path, dict, dict | None]] = []
+    for path in list((root / "runtime/earnings/runs").glob("**/runner-request.json")) + \
+                list((root / "runtime/earnings/quarterly-scopes").glob("**/runner-request.json")):
+        try:
+            payload = read_json(path)
+        except (OSError, json.JSONDecodeError):
+            continue
+        records.append((path, payload, None))
+    for path in (root / "runtime/earnings/publications/runs").glob("**/attempt-state.json"):
+        try:
+            payload = read_json(path)
+        except (OSError, json.JSONDecodeError):
+            continue
+        for call in payload.get("calls", []):
+            records.append((path, call, payload))
+    killed = []
+    for path, call, container in records:
+        started = parse_time(call.get("started_at"))
+        if started_after and (not started or started < started_after):
+            continue
+        pid = call.get("process_group") or call.get("pid")
+        if not isinstance(pid, int) or call.get("status") not in {"running", "reserved", "started"}:
+            continue
+        try:
+            os.killpg(pid, signal.SIGTERM)
+            deadline = time.monotonic() + 2
+            while _pid_alive(pid) and time.monotonic() < deadline:
+                time.sleep(0.05)
+            if _pid_alive(pid):
+                try:
+                    os.killpg(pid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
+        except (ProcessLookupError, PermissionError):
+            pass
+        call.update(status="unknown", usage=None, terminated_at=utc_now(),
+                    failure="outer execution window terminated owned model session")
+        if container is None:
+            atomic_write_json(path, call)
+        else:
+            atomic_write_json(path, container)
+        killed.append({"call_id": call.get("call_id"), "pid": pid, "path": str(path.relative_to(root))})
+    return killed
 
 
 def _worker_argv(root: Path, args: argparse.Namespace, round_id: str, generation: int) -> list[str]:
@@ -157,8 +215,11 @@ def _start_locked(root: Path, args: argparse.Namespace) -> dict:
         worker_id = f"{round_row['round_id']}:g{generation}:{pid}"
         ledger.db.execute("INSERT OR IGNORE INTO workers VALUES(?,?,?,?,?,?,?,?,?)",
                           (worker_id, round_row["round_id"], generation, pid, "running", utc_now(), None, None, None))
-        ledger.db.execute("UPDATE rounds SET state='active',stop_reason=NULL,updated_at=? WHERE round_id=?",
-                          (utc_now(), round_row["round_id"]))
+        # Preserve delivery_pending and its independent research outcome. The spawned
+        # worker decides whether this is a research or delivery-only generation.
+        if round_row["state"] != "delivery_pending":
+            ledger.db.execute("UPDATE rounds SET state='active',stop_reason=NULL,updated_at=? WHERE round_id=?",
+                              (utc_now(), round_row["round_id"]))
         ledger.db.execute("UPDATE rounds SET owner_generation=? WHERE round_id=?", (generation, round_row["round_id"]))
         ledger.db.commit()
         return {"status": "success", "workflow": "earnings-continuation-start", "state": "started",
@@ -258,7 +319,7 @@ def worker(root: Path, args: argparse.Namespace) -> dict:
                 return {"status": "skipped", "workflow": "earnings-continuation-worker",
                         "round_id": args.round_id, "generation": args.generation,
                         "state": "superseded", "reason": "newer worker generation owns this round"}
-            if round_row["state"] in {"complete", "blocked"}:
+            if round_row["state"] in {"complete", "blocked", "waiting", "delivery_unknown"}:
                 return {"status": "skipped", "workflow": "earnings-continuation-worker",
                         "round_id": args.round_id, "generation": args.generation,
                         "state": round_row["state"], "reason": "round is already terminal"}
@@ -295,15 +356,28 @@ def worker(root: Path, args: argparse.Namespace) -> dict:
                 previous_focus = last_result.get("execution_focus")
                 focus = ("downstream" if downstream and (not company or previous_focus != "downstream")
                          else "company" if company else "downstream")
+                window_started = datetime.now(timezone.utc)
                 try:
                     result = _run_daily(root, args, round_row, window_id, available,
                                         resume_only=collection_complete, execution_focus=focus)
                     result["execution_focus"] = focus
                 except Exception as exc:
+                    terminated = _terminate_owned_model_groups(root, started_after=window_started)
+                    reconcile_state = EarningsState(root / config["paths"]["state"])
+                    try:
+                        reconciled_progress = round_progress(root, reconcile_state, config, cutoff=round_row["cutoff"])
+                        recovered_reports = [dict(row) for row in reconcile_state.db.execute(
+                            "SELECT task_id,path AS report_path,sha256 AS report_sha256,created_at FROM report_artifacts")
+                            if (parse_time(row["created_at"]) or datetime.min.replace(tzinfo=timezone.utc)) >= window_started]
+                    finally:
+                        reconcile_state.close()
+                    usage = summarize_batch_usage(root, round_row["batch_date"], recovered_reports, [], since=window_started)
+                    usage["model_call_count_known"] = bool(usage.get("actual_model_calls") or terminated)
+                    usage["unobserved_model_calls_possible"] = not usage["model_call_count_known"]
                     result = {"status": "failed", "errors": [f"continuation-window:{type(exc).__name__}: {exc}"],
-                              "progress": before, "execution_focus": focus,
-                              "usage_summary": {"actual_model_calls": 1, "calls_with_usage_null": 1,
-                                                "calls": [{"call_id": f"{window_id}:unreconciled", "status": "unknown", "usage": None}]}}
+                              "progress": reconciled_progress, "execution_focus": focus,
+                              "reports": recovered_reports, "terminated_model_sessions": terminated,
+                              "usage_summary": usage}
                 checkpoint = _checkpoint_path(root, args.round_id, window_id)
                 atomic_write_json(checkpoint, result)
                 after = result.get("progress") or before
@@ -324,6 +398,9 @@ def worker(root: Path, args: argparse.Namespace) -> dict:
                 if stop_state:
                     break
                 if int(after.get("actionable_count", 0)) == 0:
+                    if int(after.get("waiting_count", 0)):
+                        stop_state, stop_reason = "waiting", "frozen cutoff has no executable evidence; next trigger may admit new disclosures"
+                        break
                     if not collection_complete:
                         if no_progress >= no_progress_limit:
                             stop_state, stop_reason = "yielded", "frozen-cutoff collection remains incomplete"
@@ -352,6 +429,7 @@ def worker(root: Path, args: argparse.Namespace) -> dict:
                                    "running", utc_now(), None, None, None))
                 stop_state, stop_reason = "active", "bounded worker handed off to successor"
             else:
+                research_outcome = round_row.get("research_outcome") if delivery_only else stop_state
                 summary_reports = {}; summary_errors = []; summary_calls = {}
                 for saved in ledger.db.execute("SELECT result_path FROM windows WHERE round_id=? AND result_path IS NOT NULL ORDER BY window_index",
                                                (args.round_id,)):
@@ -391,13 +469,14 @@ def worker(root: Path, args: argparse.Namespace) -> dict:
                     elif delivery_state == "unknown":
                         stop_state = "delivery_unknown"; stop_reason += "; automatic retry suppressed"
                     elif delivery_only:
-                        stop_state = "complete"; stop_reason = "durable delivery retry completed"
+                        stop_state = research_outcome or "blocked"; stop_reason = "durable delivery retry completed"
                 except Exception as exc:
                     stop_state = "delivery_pending"
                     stop_reason += f"; finalization failed and remains pending: {type(exc).__name__}: {exc}"
-            completed_at = utc_now() if stop_state in {"complete", "blocked", "delivery_unknown"} else None
-            ledger.db.execute("UPDATE rounds SET state=?,stop_reason=?,updated_at=?,completed_at=? WHERE round_id=?",
-                              (stop_state, stop_reason, utc_now(), completed_at, args.round_id))
+            completed_at = utc_now() if stop_state in {"complete", "blocked", "waiting", "delivery_unknown"} else None
+            stored_outcome = research_outcome if 'research_outcome' in locals() else round_row.get("research_outcome")
+            ledger.db.execute("UPDATE rounds SET state=?,research_outcome=?,stop_reason=?,updated_at=?,completed_at=? WHERE round_id=?",
+                              (stop_state, stored_outcome, stop_reason, utc_now(), completed_at, args.round_id))
             ledger.db.execute("UPDATE workers SET state='completed',completed_at=?,successor_pid=?,reason=? WHERE worker_id=?",
                               (utc_now(), successor_pid, stop_reason, worker_id))
             ledger.db.commit()

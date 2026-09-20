@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import sys
 import time
+import subprocess
 from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
@@ -12,8 +13,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "script"))
 
 from earnings_common import atomic_write_json
-from earnings_continuation import ContinuationLedger, _run_daily, worker
-from earnings_daily import DailyLedger, _publication_job_within_cutoff, industry_work
+import earnings_continuation
+from earnings_continuation import ContinuationLedger, _run_daily, start, worker
+from earnings_daily import DailyLedger, _publication_job_within_cutoff, industry_work, round_progress
+from earnings_period_review import QuarterlyReviewLedger
 from earnings_state import EarningsState
 
 
@@ -28,6 +31,122 @@ def deployment(root: Path, **overrides) -> None:
 
 
 class EarningsContinuationTests(unittest.TestCase):
+    def test_start_preserves_delivery_pending_and_retries_only_finalizer(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); round_row, args = self.prepare(root)
+            ledger = ContinuationLedger(root)
+            ledger.db.execute("UPDATE rounds SET state='delivery_pending',research_outcome='blocked' WHERE round_id=?",
+                              (round_row["round_id"],))
+            ledger.db.execute("UPDATE workers SET state='completed'"); ledger.db.commit(); ledger.close()
+            with patch("earnings_continuation.spawn_worker", return_value=987654):
+                started = start(root, args)
+            ledger = ContinuationLedger(root)
+            persisted = dict(ledger.db.execute("SELECT * FROM rounds WHERE round_id=?", (round_row["round_id"],)).fetchone())
+            ledger.close()
+            self.assertEqual((started["state"], persisted["state"], persisted["research_outcome"]),
+                             ("started", "delivery_pending", "blocked"))
+            args.generation = started["generation"]
+            final = {"status": "success", "errors": [], "delivery": {"delivery": {"state": "sent"}},
+                     "usage_summary": {"actual_model_calls": 0, "calls": []}}
+            with patch("earnings_continuation._run_daily", return_value=final) as run_daily:
+                result = worker(root, args)
+            self.assertEqual(result["state"], "blocked")
+            self.assertEqual(run_daily.call_count, 1)
+            self.assertTrue(run_daily.call_args.kwargs["finalize_only"])
+
+    def test_delivery_unknown_is_terminal_and_not_restarted(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); round_row, args = self.prepare(root)
+            ledger = ContinuationLedger(root)
+            ledger.db.execute("UPDATE rounds SET state='delivery_unknown',research_outcome='complete' WHERE round_id=?",
+                              (round_row["round_id"],))
+            ledger.db.execute("UPDATE workers SET state='completed'"); ledger.db.commit(); ledger.close()
+            with patch("earnings_continuation.spawn_worker", return_value=7):
+                started = start(root, args)
+            self.assertNotEqual(started["round_id"], round_row["round_id"])
+
+    def test_delivery_retry_restores_complete_or_paused_research_outcome(self):
+        for outcome in ("complete", "paused_quota"):
+            with self.subTest(outcome=outcome), TemporaryDirectory() as temp:
+                root = Path(temp).resolve(); round_row, args = self.prepare(root)
+                ledger = ContinuationLedger(root)
+                ledger.db.execute("UPDATE rounds SET state='delivery_pending',research_outcome=? WHERE round_id=?",
+                                  (outcome, round_row["round_id"]))
+                ledger.db.execute("UPDATE workers SET state='completed'"); ledger.db.commit(); ledger.close()
+                with patch("earnings_continuation.spawn_worker", return_value=42):
+                    started = start(root, args)
+                args.generation = started["generation"]
+                final = {"status": "success", "errors": [], "delivery": {"delivery": {"state": "sent"}},
+                         "usage_summary": {"actual_model_calls": 0, "calls": []}}
+                with patch("earnings_continuation._run_daily", return_value=final) as run_daily:
+                    result = worker(root, args)
+                self.assertEqual(result["state"], outcome)
+                self.assertEqual(run_daily.call_count, 1)
+
+    def test_waiting_round_closes_and_next_start_freezes_new_cutoff(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); round_row, args = self.prepare(root)
+            config = json.loads((root / args.config).read_text()); config["quarterly"]["automatic_trigger_enabled"] = True
+            qledger = QuarterlyReviewLedger(root / "runtime/earnings/quarterly.sqlite")
+            qledger.freeze({"quarter_id": "2026-Q2", "period_start": "2026-04-01", "period_end": "2026-06-30"},
+                           {"industry_id": "waiting", "issuers": [{"symbol": "MISSING"}], "key_symbols": ["MISSING"]},
+                           round_row["cutoff"], edition="full"); qledger.close()
+            state = EarningsState(root / config["paths"]["state"])
+            waiting = round_progress(root, state, config, cutoff=round_row["cutoff"]); state.close()
+            self.assertEqual((waiting["actionable_count"], waiting["waiting_count"],
+                              waiting["pending"]["quarterly_waiting"]), (0, 1, 1))
+            daily = {"status": "success", "errors": [], "progress": waiting,
+                     "collection_complete": False, "usage_summary": {"actual_model_calls": 0, "calls": []}}
+            final = {"status": "success", "errors": [], "progress": waiting,
+                     "delivery": {"delivery": {"state": "suppressed"}},
+                     "usage_summary": {"actual_model_calls": 0, "calls": []}}
+            with patch("earnings_continuation.round_progress", return_value=waiting), \
+                 patch("earnings_continuation._run_daily", side_effect=[daily, final]):
+                result = worker(root, args)
+            self.assertEqual(result["state"], "waiting")
+            ledger = ContinuationLedger(root); ledger.db.execute("UPDATE workers SET state='completed'"); ledger.db.commit(); ledger.close()
+            with patch("earnings_continuation.spawn_worker", return_value=8):
+                next_round = start(root, args)
+            self.assertNotEqual(next_round["round_id"], round_row["round_id"])
+
+    def test_cleanup_kills_registered_detached_model_session(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); attempt = root / "runtime/earnings/runs/w/attempt"; attempt.mkdir(parents=True)
+            marker = root / "detached-marker"
+            proc = subprocess.Popen([sys.executable, "-c",
+                f"import time,pathlib;time.sleep(.8);pathlib.Path(r'{marker}').write_text('late')"],
+                start_new_session=True)
+            atomic_write_json(attempt / "runner-request.json", {"call_id": "real-call", "started_at": "2026-09-21T00:00:00Z",
+                "pid": proc.pid, "process_group": proc.pid, "status": "running", "usage": None})
+            killed = earnings_continuation._terminate_owned_model_groups(root)
+            self.assertEqual(killed[0]["call_id"], "real-call")
+            proc.wait(timeout=3); time.sleep(1)
+            self.assertFalse(marker.exists())
+
+    def test_aborted_window_reconciles_progress_without_synthetic_model_call(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); round_row, args = self.prepare(root)
+            before = {"fingerprint": "before", "actionable_count": 1, "waiting_count": 0,
+                      "blocker_count": 0, "pending": {"current_company": 1}, "blockers": {}}
+            after = {"fingerprint": "after", "actionable_count": 0, "waiting_count": 1,
+                     "blocker_count": 0, "pending": {"quarterly_waiting": 1}, "blockers": {}}
+            final = {"status": "success", "errors": [], "delivery": {"delivery": {"state": "suppressed"}},
+                     "usage_summary": {"actual_model_calls": 0, "calls": []}}
+            def daily(*_args, **kwargs):
+                if kwargs.get("finalize_only"):
+                    return final
+                raise RuntimeError("outer daily disappeared")
+            with patch("earnings_continuation.round_progress", side_effect=[before, after]), \
+                 patch("earnings_continuation._run_daily", side_effect=daily):
+                result = worker(root, args)
+            checkpoint = next((root / "runtime/earnings/continuation" / round_row["round_id"]).glob("*-w1.json"))
+            payload = json.loads(checkpoint.read_text())
+            self.assertEqual(result["state"], "waiting")
+            self.assertEqual(payload["progress"]["fingerprint"], "after")
+            self.assertEqual(payload["usage_summary"]["actual_model_calls"], 0)
+            self.assertFalse(payload["usage_summary"]["model_call_count_known"])
+            self.assertEqual(payload["usage_summary"]["calls"], [])
+
     def test_outer_timeout_kills_daily_process_group(self):
         with TemporaryDirectory() as temp:
             root = Path(temp).resolve(); (root / "script").mkdir()

@@ -481,10 +481,18 @@ def run_quarterly_step(root: Path, config: dict, universe: dict, state: Earnings
                     quota_open = True
                     break
                 continue
-        # Formal market synthesis waits for every frozen industry synthesis in the same quarter.
-        if (not quota_open and ledger.used(day, "quarterly") < cap and review["scopes"]
+        # Market readiness comes from the authoritative quarter registry, not the
+        # incomplete-industry due list (which is empty precisely when all syntheses finish).
+        ready_quarter = qledger.db.execute("""SELECT q.quarter_id,MIN(q.period_start) AS period_start,
+              MAX(q.period_end) AS period_end FROM quarterly_scopes q
+              JOIN quarterly_stages synthesis ON synthesis.scope_id=q.scope_id AND synthesis.stage='synthesis'
+              JOIN quarterly_stages market ON market.scope_id=q.scope_id AND market.stage='market'
+              WHERE q.edition!='monitor' GROUP BY q.quarter_id
+              HAVING SUM(synthesis.state='completed')=COUNT(*) AND SUM(market.state='completed')<COUNT(*)
+              ORDER BY MAX(q.period_end) LIMIT 1""").fetchone()
+        if (not quota_open and ledger.used(day, "quarterly") < cap and ready_quarter
                 and research_window_available(config, deadline, prepare_context=True)):
-            first = review["scopes"][0]; reports = []
+            first = dict(ready_quarter); reports = []
             quarter_scopes = [{"scope_id": row["scope_id"], "industry_id": row["industry_id"],
                 "quarter_id": row["quarter_id"], "revision": row["revision"],
                 "cutoff": row["cutoff"],
@@ -933,15 +941,27 @@ def round_progress(root: Path, state: EarningsState, config: dict, cutoff: str |
         "manual_cloud_resolution": manual_cloud_resolution,
     }
     quarterly_pending = 0
+    quarterly_waiting = 0
+    quarterly_blocked = 0
     quarterly_progress = []
     quarterly_path = root / "runtime/earnings/quarterly.sqlite"
     if config.get("quarterly", {}).get("automatic_trigger_enabled") is True and quarterly_path.exists():
         qdb = sqlite3.connect(quarterly_path)
         try:
-            quarterly_pending = qdb.execute("""SELECT COUNT(DISTINCT q.scope_id)
-              FROM quarterly_scopes q JOIN quarterly_stages s ON s.scope_id=q.scope_id
-              WHERE s.stage IN ('coverage','gap_review','industry','challenge','synthesis')
-                AND s.state IN ('pending','failed','running')""").fetchone()[0]
+            for scope in qdb.execute("SELECT scope_id,accepted_reports_json FROM quarterly_scopes WHERE edition!='monitor'"):
+                stages = qdb.execute("""SELECT stage,state,attempts FROM quarterly_stages WHERE scope_id=?
+                    AND stage IN ('coverage','gap_review','industry','challenge','synthesis')""", (scope[0],)).fetchall()
+                incomplete = [row for row in stages if row[1] != "completed"]
+                if not incomplete:
+                    continue
+                if any(row[1] in {"blocked", "unknown"} or
+                       (row[1] == "failed" and row[2] >= int(config["budgets"].get("max_task_attempts", 2)))
+                       for row in incomplete):
+                    quarterly_blocked += 1
+                elif not json.loads(scope[1] or "[]"):
+                    quarterly_waiting += 1
+                else:
+                    quarterly_pending += 1
             quarterly_progress = [tuple(row) for row in qdb.execute("""SELECT scope_id,stage,state,
               COALESCE(input_hash,''),COALESCE(artifact_sha256,''),attempts FROM quarterly_stages
               ORDER BY scope_id,stage""").fetchall()]
@@ -961,8 +981,10 @@ def round_progress(root: Path, state: EarningsState, config: dict, cutoff: str |
         if own_ledger and ledger is not None:
             ledger.db.close()
     blockers["progress_audit_error"] = progress_error
+    blockers["quarterly_blocked"] = quarterly_blocked
     pending = {"current_company": current_pending, "daily_industry": daily_industry_pending,
                "quarterly_scopes": quarterly_pending,
+               "quarterly_waiting": quarterly_waiting,
                "publications": publication_pending}
     basis = {"pending": pending, "blockers": blockers,
              "tasks": [tuple(row) for row in state.db.execute(
@@ -970,8 +992,10 @@ def round_progress(root: Path, state: EarningsState, config: dict, cutoff: str |
              "publications": [tuple(row) for row in state.db.execute(
                  "SELECT job_id,state,attempts,COALESCE(publication_manifest_path,'') FROM publication_jobs ORDER BY job_id")],
              "quarterly": quarterly_progress}
+    actionable = current_pending + daily_industry_pending + quarterly_pending + publication_pending
     return {"pending": pending, "blockers": blockers,
-            "actionable_count": sum(pending.values()), "blocker_count": sum(blockers.values()),
+            "actionable_count": actionable, "waiting_count": quarterly_waiting,
+            "blocker_count": sum(blockers.values()),
             "fingerprint": hashlib.sha256(json.dumps(basis, sort_keys=True).encode()).hexdigest()}
 
 

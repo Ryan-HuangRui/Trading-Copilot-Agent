@@ -127,6 +127,30 @@ class EarningsDailyTests(unittest.TestCase):
             self.assertEqual(publication.call_count, 2)  # resume + current; no post-quarterly pass
             self.assertTrue(any('quota exhausted in quarterly work' in error for error in result['errors']))
 
+    def test_market_completion_flows_through_final_verified_publication_pass(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); (root / 'config').mkdir()
+            config = json.loads((ROOT / 'config/earnings_research.json').read_text())
+            config['publication']['enabled'] = True; config['quarterly']['automatic_trigger_enabled'] = True
+            atomic_write_json(root / 'config/earnings_research.json', config)
+            atomic_write_json(root / 'config/earnings_universe.json', {'industries': []})
+            atomic_write_json(root / 'runtime/earnings/deployment.json', {'schema_version': 1,
+                'verified_repo': str(root), 'project': 'test', 'session': 'test', 'verified_at': 'test',
+                'verified_from_cron_id': 'test', 'cc_connect_bin': '/bin/false', 'codex_bin': '/bin/false',
+                'delivery_enabled': False, 'batch_timeout_seconds': 1800})
+            args = argparse.Namespace(repo_root=str(root), config='config/earnings_research.json',
+                deployment='runtime/earnings/deployment.json', resume_only=True, collect_only=False,
+                send=False, manual_quarter=None, execution_focus='downstream')
+            market = [{'status': 'completed', 'task_id': 'market-task',
+                       'report_path': 'report/earnings/market.json', 'report_sha256': 'market-sha'}]
+            verified = {'status': 'success', 'job_id': 'market-publication', 'cloud': {'state': 'verified'}}
+            with patch('earnings_daily.industry_work', return_value=[]), \
+                 patch('earnings_daily.run_quarterly_step', return_value=market), \
+                 patch('earnings_daily.run_publication_work', side_effect=[[], [], [verified]]) as publication:
+                result = run(args)
+            self.assertEqual(publication.call_count, 3)
+            self.assertIn(verified, result['publications'])
+
     def test_quarterly_empty_cohorts_do_not_consume_model_budget(self):
         from earnings_daily import run_quarterly_step
         import time
@@ -148,6 +172,57 @@ class EarningsDailyTests(unittest.TestCase):
             self.assertEqual(ledger.used('2026-09-16', 'review'), 0)
             self.assertEqual(ledger.used('2026-09-16', 'quarterly'), 0)
             state.close(); ledger.db.close()
+
+    def test_completed_industry_registry_still_runs_market_when_due_list_is_empty(self):
+        from earnings_daily import run_quarterly_step
+        import time
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); (root / 'config').mkdir()
+            config = json.loads((ROOT / 'config/earnings_research.json').read_text())
+            config['quarterly']['automatic_trigger_enabled'] = True
+            config['budgets']['quarterly_tasks_per_day'] = 5
+            state = EarningsState(root / 'runtime/earnings/state.sqlite'); ledger = DailyLedger(root)
+            state.db.execute('PRAGMA foreign_keys=OFF')
+            qledger = QuarterlyReviewLedger(root / 'runtime/earnings/quarterly.sqlite')
+            quarter = {'quarter_id': '2026-Q2', 'period_start': '2026-04-01', 'period_end': '2026-06-30'}
+            for industry in ('a', 'b'):
+                scope = qledger.freeze(quarter, {'industry_id': industry, 'issuers': [], 'key_symbols': []},
+                                       '2026-08-31T00:00:00Z', edition='full')
+                report = root / f'report/earnings/{industry}-synthesis.json'
+                atomic_write_json(report, {'report_id': f'{industry}-synthesis', 'report_type': 'synthesis',
+                    'task_id': f'{industry}-task', 'research_mode': 'quarterly', 'source_mode': 'live',
+                    'scope': {'industry_id': industry, 'reporting_start': quarter['period_start'],
+                              'reporting_end': quarter['period_end']}})
+                digest = sha256_file(report)
+                state.db.execute('INSERT INTO report_artifacts VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
+                    (f'{industry}-synthesis', f'{industry}-task', 'synthesis', industry, quarter['period_start'],
+                     quarter['period_end'], str(report.relative_to(root)), digest, 'manifest', 'live', 'full',
+                     '2026-08-31T00:00:00Z'))
+                for stage in ('coverage', 'gap_review', 'industry', 'challenge'):
+                    qledger.set_stage(scope['scope_id'], stage, 'completed')
+                qledger.set_stage(scope['scope_id'], 'synthesis', 'completed', artifact_path=str(report.relative_to(root)),
+                                  artifact_sha256=digest)
+            state.db.commit(); qledger.close()
+            review = {'quarter': {'quarter_id': '2026-Q2'}, 'scopes': []}
+            market_context = {'status': 'success', 'model_execution_required': True,
+                              'artifacts': ['runtime/earnings/market-input.json']}
+            atomic_write_json(root / market_context['artifacts'][0], {'task_id': 'market-task',
+                'lease': {'attempt': 1, 'owner': 'test'}})
+            market_result = {'status': 'completed', 'task_id': 'market-task',
+                             'report_path': 'report/earnings/market.json', 'report_sha256': 'market-sha'}
+            with patch('earnings_daily.inspect_due', return_value=review), \
+                 patch('earnings_daily.command', return_value=market_context) as command, \
+                 patch('earnings_daily.run_role', return_value=market_result) as role:
+                result = run_quarterly_step(root, config, {'industries': []}, state, ledger,
+                    {'codex_bin': '/bin/false'}, '2026-09-21', '2026-09-21T02:00:00Z', 'market-close',
+                    root / 'runtime/earnings/logs', time.monotonic() + 1800, round_id='round-2')
+            self.assertEqual(result[-1], market_result)
+            self.assertIn('earnings_market_context.py', command.call_args.args[1])
+            role.assert_called_once()
+            qledger = QuarterlyReviewLedger(root / 'runtime/earnings/quarterly.sqlite')
+            self.assertEqual({row[0] for row in qledger.db.execute("SELECT state FROM quarterly_stages WHERE stage='market'")},
+                             {'completed'})
+            qledger.close(); state.close(); ledger.db.close()
 
     def test_gap_review_failure_recovers_next_day_then_stops_at_attempt_limit(self):
         import hashlib, time

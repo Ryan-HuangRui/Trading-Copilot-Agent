@@ -195,6 +195,7 @@ class QuarterlyReviewLedger:
             ("active_round_id", "TEXT"), ("pending_fingerprint", "TEXT"),
             ("accepted_reports_json", "TEXT NOT NULL DEFAULT '[]'"),
             ("pending_reports_json", "TEXT"),
+            ("active_input_path", "TEXT"),
         ):
             if column not in columns:
                 self.db.execute(f"ALTER TABLE quarterly_scopes ADD COLUMN {column} {definition}")
@@ -259,14 +260,23 @@ class QuarterlyReviewLedger:
     def close(self) -> None:
         self.db.close()
 
-    def _write_accepted_input(self, row: sqlite3.Row | dict[str, Any]) -> str:
+    def _write_accepted_input(self, row: sqlite3.Row | dict[str, Any], *, round_boundary: bool = False) -> str:
         payload = dict(row)
-        path = self.path.parent / "quarterly-scopes" / payload["scope_id"] / "revisions" / f"v{payload['revision']}" / "accepted-company-input.json"
-        atomic_write_json(path, {"schema_version": 1, "scope_id": payload["scope_id"],
+        base = self.path.parent / "quarterly-scopes" / payload["scope_id"] / "revisions" / f"v{payload['revision']}"
+        if round_boundary:
+            safe_round = sha256_bytes(str(payload.get("active_round_id") or "legacy").encode())[:16]
+            path = base / "rounds" / safe_round / "accepted-company-input.json"
+        else:
+            path = base / "accepted-company-input.json"
+        if not path.exists():
+            atomic_write_json(path, {"schema_version": 1, "scope_id": payload["scope_id"],
             "revision": payload["revision"], "round_id": payload.get("active_round_id"),
             "cutoff": payload["cutoff"], "input_fingerprint": payload.get("input_fingerprint"),
             "reports": json.loads(payload.get("accepted_reports_json") or "[]")})
-        return str(path)
+        relative = str(path.relative_to(self.path.resolve().parents[2]))
+        self.db.execute("UPDATE quarterly_scopes SET active_input_path=? WHERE scope_id=?",
+                        (relative, payload["scope_id"])); self.db.commit()
+        return relative
 
     def begin_revision(self, scope_id: str, input_fingerprint: str, cutoff: str, *,
                        round_id: str | None = None, accepted_reports: list[dict[str, Any]] | None = None) -> bool:
@@ -285,6 +295,12 @@ class QuarterlyReviewLedger:
                 "SELECT * FROM quarterly_scopes WHERE scope_id=?", (scope_id,)).fetchone()); return False
         if row["active_round_id"] == round_key:
             if row["input_fingerprint"] == input_fingerprint:
+                if not json.loads(row["accepted_reports_json"] or "[]") and accepted_reports:
+                    self.db.execute("UPDATE quarterly_scopes SET accepted_reports_json=?,updated_at=? WHERE scope_id=?",
+                                    (reports_json, utc_now(), scope_id)); self.db.commit()
+                    current = dict(self.db.execute("SELECT * FROM quarterly_scopes WHERE scope_id=?", (scope_id,)).fetchone())
+                    current["cutoff"] = cutoff
+                    self._write_accepted_input(current)
                 return False
             started = self.db.execute("""SELECT 1 FROM quarterly_stages WHERE scope_id=?
               AND stage IN ('gap_review','industry','challenge','synthesis') AND state!='pending' LIMIT 1""",
@@ -306,9 +322,22 @@ class QuarterlyReviewLedger:
             self.db.commit(); self._write_accepted_input(self.db.execute(
                 "SELECT * FROM quarterly_scopes WHERE scope_id=?", (scope_id,)).fetchone()); return False
         if row["input_fingerprint"] == input_fingerprint:
+            legacy_unbound = not json.loads(row["accepted_reports_json"] or "[]") and bool(accepted_reports)
             self.db.execute("""UPDATE quarterly_scopes SET active_round_id=?,pending_fingerprint=NULL,
-              pending_reports_json=NULL,updated_at=? WHERE scope_id=?""", (round_key, utc_now(), scope_id))
-            self.db.commit(); return False
+              pending_reports_json=NULL,accepted_reports_json=CASE WHEN ? THEN ? ELSE accepted_reports_json END,
+              updated_at=? WHERE scope_id=?""", (round_key, int(legacy_unbound), reports_json, utc_now(), scope_id))
+            current = self.db.execute("SELECT * FROM quarterly_scopes WHERE scope_id=?", (scope_id,)).fetchone()
+            self.db.execute("INSERT OR REPLACE INTO quarterly_input_boundaries VALUES(?,?,?,?,?,?,?,?,?,?)",
+              (scope_id, round_key, current["revision"], cutoff, input_fingerprint,
+               current["accepted_reports_json"], None, None,
+               "bound_legacy_fingerprint" if legacy_unbound else "reused_unchanged_fingerprint", utc_now()))
+            self.db.commit()
+            # The legacy canonical file is created once. Later rounds get their own
+            # immutable boundary path so old accepted metadata is never rewritten.
+            canonical = self.path.parent / "quarterly-scopes" / scope_id / "revisions" / f"v{current['revision']}" / "accepted-company-input.json"
+            boundary_payload = dict(current); boundary_payload["cutoff"] = cutoff
+            self._write_accepted_input(boundary_payload, round_boundary=canonical.exists())
+            return False
         # New accepted company evidence supersedes an incomplete stage edition too. An
         # industry revision cannot wait for the cross-industry market stage, which is
         # allowed to depend on other scopes. Single-process execution prevents overlap.
@@ -588,7 +617,7 @@ def inspect_due(root: Path, *, day: str, cutoff: str, config_path: str, universe
                            "quarter_id": scope["quarter_id"], "revision": scope["revision"], "period_start": scope["period_start"],
                            "period_end": scope["period_end"], "cutoff": scope["cutoff"],
                            "input_fingerprint": scope["input_fingerprint"],
-                           "accepted_company_input_path": str((ledger.path.parent / "quarterly-scopes" / scope["scope_id"] / "revisions" / f"v{scope['revision']}" / "accepted-company-input.json").relative_to(root)),
+                           "accepted_company_input_path": scope.get("active_input_path") or str((ledger.path.parent / "quarterly-scopes" / scope["scope_id"] / "revisions" / f"v{scope['revision']}" / "accepted-company-input.json").relative_to(root)),
                            "pending_input_fingerprint": scope.get("pending_fingerprint"),
                            "frozen_universe_hash": scope["frozen_universe_hash"], "frozen_industry": frozen_industry,
                            "frozen_scope_path": str(frozen_path.relative_to(root)),

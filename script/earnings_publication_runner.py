@@ -75,7 +75,8 @@ def prepare_input(root: Path, *, publication_type: str, scope_id: str, quarter_i
     return path
 
 
-def _codex(root: Path, binary: Path, profile: dict[str, Any], prompt: str, output: Path, events: Path, stderr: Path, timeout: int) -> dict | None:
+def _codex(root: Path, binary: Path, profile: dict[str, Any], prompt: str, output: Path,
+           events: Path, stderr: Path, timeout: int) -> dict | None:
     model, effort = profile["model"], profile["reasoning_effort"]
     if (model, effort) not in SUPPORTED: raise ValueError("unsupported publication profile; fallback forbidden")
     command = [str(binary), "exec", "--ignore-user-config", "--ephemeral", "--sandbox", "read-only", "-C", str(root),
@@ -87,6 +88,16 @@ def _codex(root: Path, binary: Path, profile: dict[str, Any], prompt: str, outpu
         with events.open("w") as event_file, stderr.open("w") as error_file:
             proc = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=event_file, stderr=error_file,
                                     text=True, env=env, start_new_session=True)
+            attempt_state_path = events.parent / "attempt-state.json"
+            role = "writer" if events.name.startswith("writer-") else "checker" if events.name.startswith("checker-") else None
+            if attempt_state_path.exists() and role:
+                attempt_state = read_json(attempt_state_path)
+                active = [row for row in attempt_state.get("calls", [])
+                          if row.get("role") == role and row.get("status") == "started"]
+                if len(active) != 1:
+                    raise ValueError(f"{role} model process ownership is not uniquely started")
+                active[0].update(pid=proc.pid, process_group=proc.pid)
+                atomic_write_json(attempt_state_path, attempt_state)
             proc.communicate(prompt, timeout=timeout)
         usage = None
         for line in events.read_text().splitlines():
