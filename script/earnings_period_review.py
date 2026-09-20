@@ -260,19 +260,25 @@ class QuarterlyReviewLedger:
     def close(self) -> None:
         self.db.close()
 
-    def _write_accepted_input(self, row: sqlite3.Row | dict[str, Any], *, round_boundary: bool = False) -> str:
+    def _write_accepted_input(self, row: sqlite3.Row | dict[str, Any]) -> str:
         payload = dict(row)
         base = self.path.parent / "quarterly-scopes" / payload["scope_id"] / "revisions" / f"v{payload['revision']}"
-        if round_boundary:
-            safe_round = sha256_bytes(str(payload.get("active_round_id") or "legacy").encode())[:16]
-            path = base / "rounds" / safe_round / "accepted-company-input.json"
-        else:
-            path = base / "accepted-company-input.json"
-        if not path.exists():
-            atomic_write_json(path, {"schema_version": 1, "scope_id": payload["scope_id"],
+        boundary = {"schema_version": 1, "scope_id": payload["scope_id"],
             "revision": payload["revision"], "round_id": payload.get("active_round_id"),
             "cutoff": payload["cutoff"], "input_fingerprint": payload.get("input_fingerprint"),
-            "reports": json.loads(payload.get("accepted_reports_json") or "[]")})
+            "reports": json.loads(payload.get("accepted_reports_json") or "[]")}
+        digest = sha256_bytes(canonical_json(boundary))
+        path = base / "inputs" / f"{digest}.json"
+        if path.exists():
+            if read_json(path) != boundary:
+                raise ValueError("content-addressed accepted input differs from its digest path")
+        else:
+            atomic_write_json(path, boundary)
+        # Preserve the pre-content-addressed compatibility artifact once; it is an
+        # immutable historical boundary and is never used as the active pointer.
+        legacy = base / "accepted-company-input.json"
+        if not legacy.exists():
+            atomic_write_json(legacy, boundary)
         relative = str(path.relative_to(self.path.resolve().parents[2]))
         self.db.execute("UPDATE quarterly_scopes SET active_input_path=? WHERE scope_id=?",
                         (relative, payload["scope_id"])); self.db.commit()
@@ -334,9 +340,8 @@ class QuarterlyReviewLedger:
             self.db.commit()
             # The legacy canonical file is created once. Later rounds get their own
             # immutable boundary path so old accepted metadata is never rewritten.
-            canonical = self.path.parent / "quarterly-scopes" / scope_id / "revisions" / f"v{current['revision']}" / "accepted-company-input.json"
             boundary_payload = dict(current); boundary_payload["cutoff"] = cutoff
-            self._write_accepted_input(boundary_payload, round_boundary=canonical.exists())
+            self._write_accepted_input(boundary_payload)
             return False
         # New accepted company evidence supersedes an incomplete stage edition too. An
         # industry revision cannot wait for the cross-industry market stage, which is

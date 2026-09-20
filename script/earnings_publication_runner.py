@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -11,7 +12,8 @@ import subprocess
 import time
 from typing import Any
 
-from earnings_common import ROOT, atomic_write_json, canonical_json, classify_model_failure, ensure_inside, load_config, read_json, sha256_bytes, sha256_file, utc_now
+from earnings_common import (ROOT, atomic_write_json, canonical_json, classify_model_failure, ensure_inside,
+                             load_config, process_identity, read_json, sha256_bytes, sha256_file, utc_now)
 from earnings_publication import (REQUIRED_SECTIONS, build_publication, claim_occurrence_inventory,
                                   financial_fact_catalog, validate_reader_markdown)
 
@@ -85,9 +87,11 @@ def _codex(root: Path, binary: Path, profile: dict[str, Any], prompt: str, outpu
     env = {k: v for k, v in os.environ.items() if not k.startswith(("CC_CONNECT_", "TCA_SEC_", "FEISHU_", "LARK_"))}
     proc = None
     try:
-        with events.open("w") as event_file, stderr.open("w") as error_file:
+        ownership_path = events.parent / f"{events.stem}-process.lock"
+        with events.open("w") as event_file, stderr.open("w") as error_file, ownership_path.open("a") as ownership:
+            fcntl.flock(ownership, fcntl.LOCK_EX)
             proc = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=event_file, stderr=error_file,
-                                    text=True, env=env, start_new_session=True)
+                                    text=True, env=env, start_new_session=True, pass_fds=(ownership.fileno(),))
             attempt_state_path = events.parent / "attempt-state.json"
             role = "writer" if events.name.startswith("writer-") else "checker" if events.name.startswith("checker-") else None
             if attempt_state_path.exists() and role:
@@ -96,7 +100,9 @@ def _codex(root: Path, binary: Path, profile: dict[str, Any], prompt: str, outpu
                           if row.get("role") == role and row.get("status") == "started"]
                 if len(active) != 1:
                     raise ValueError(f"{role} model process ownership is not uniquely started")
-                active[0].update(pid=proc.pid, process_group=proc.pid)
+                active[0].update(pid=proc.pid, process_group=proc.pid,
+                                 process_identity=process_identity(proc.pid),
+                                 ownership_lock=str(ownership_path.relative_to(root)))
                 atomic_write_json(attempt_state_path, attempt_state)
             proc.communicate(prompt, timeout=timeout)
         usage = None
@@ -147,7 +153,7 @@ def _start_attempt_call(state_path: Path, role: str, profile: dict[str, Any], *,
     calls.append({"role": role, "model": profile["model"], "effort": profile["reasoning_effort"],
                   "attempt": attempt, "status": "started", "usage": None, "failure": None,
                   "failure_class": None, "call_id": f"publication:{call_scope}:{role}:{attempt}",
-                  "started_at": utc_now()})
+                  "started_at": utc_now(), "execution_window_id": os.environ.get("TCA_EARNINGS_WINDOW_ID")})
     state["model_calls_started"] = len(calls)
     atomic_write_json(state_path, state)
     return attempt

@@ -27,13 +27,16 @@
 - 公司 current 队列可在多个窗口持续推进；不预留历史名额。worker 在 company 与 downstream 窗口间轮转，只要 downstream 有积压就先给它完整窗口，不再依赖不足以启动季度/checker 的尾部 reserve。历史工作不能消耗当前工作配额。
 - 季度 scope 的 cutoff 在同 revision 内固定。只有下一轮合法新证据才触发新 revision，因此 challenge/synthesis 不会被同轮新时钟或逐公司到达反复饿死。
 - 季度 revision 持久化精确的 accepted company input 清单；DAG 启动后的同轮迟到报告登记为 deferred input，由下一轮 revision 接收。等待跨行业 market 或 publication/cloud 镜像不再被计作可运行研究 DAG。
+- 合法的同轮输入扩展写入新的内容寻址 boundary 文件并原子切换 `active_input_path`，旧 boundary 永不覆写；季度 context 同时校验文件内容地址、scope/revision/fingerprint/report list 与数据库 active pointer。
 - 没有 accepted company evidence 的季度 scope 记录为 waiting 而不是 actionable 或 complete；当前冻结轮次以 waiting 收口，使下次触发能冻结新 cutoff 接纳新披露。跨行业 market readiness 独立读取完整季度 scope 注册表，不能依赖只包含未完成行业的 due 列表。
+- market 只有在所有当前 synthesis artifact 与 full/revision、checker-passed reader publication 精确绑定时才计 actionable；研究尚未完成时不重复计 market，发布门槛未满足时计 waiting。最后一个行业耗尽本窗软配额后，market 因而能驱动下一窗口继续。
 - 通知只在 outer finalizer 汇总。相同 publication/version/destination 沿用现有 outbox 去重；迟到完成可在后续轮次补充，同版本不重复。
-- 外层窗口以独立进程组运行；每个真实模型 runner 另把独立 session 的 pid/process group 写入持久调用记录。外层异常先清理 daily 进程组，再按本窗口 ownership 清理这些独立模型组并从数据库、runner request/result 重建进度与用量；无法证明调用次数时显式标记 unknown，不合成一次调用。worker 锁有等待上限，轮次记录 owner generation，旧代在交接后不能继续执行。
+- 外层窗口以独立进程组运行；每个真实模型 runner 另把窗口 id、pid/process group、进程身份与继承 ownership lock 写入持久调用记录。外层异常先清理 daily 进程组，再仅清理同窗口、无匹配终态 result、身份一致且仍持锁的独立模型组，避免误杀完成调用或复用 PID；随后从数据库、runner request/result 重建进度与用量。无法证明调用次数时显式标记 unknown，不合成一次调用。worker 锁有等待上限，轮次记录 owner generation，旧代在交接后不能继续执行。
 
 ## 迁移、部署与回滚
 
 - SQLite 增量只新增 `daily.execution_windows` 和独立 continuation 状态；`reservations.day` 对新运行保存不可重复的窗口 scope，旧日期记录原样保留。不修改 research task、attempt、artifact 或 company semantic hash。
+- starter 与直接 worker 在首次 progress 读取前持专用 migration lock 检查季度 schema；发现旧列集时先把原 SQLite 复制到 `runtime/earnings/migrations/`，记录 running/completed/failed 状态，再执行幂等加列迁移。迁移失败不得启动研究窗口。
 - tracked 配置把历史独立研究和 publication backfill 默认配额设为 0；这两个调度项不在 company research semantic hash 中，无需伪造旧配置等价。生产 runtime 配置应按键合并，保留身份、activation flags 和 frozen legacy snapshot registry。
 - 部署时保持原 cron、`mute=true` 和 150 分钟 timeout，只更新 wrapper 指向 continuation starter；先备份 runtime SQLite/config，再运行离线测试和一次 `python3 script/earnings_continuation.py --status` 状态检查。确认 NAS 允许 wrapper 子进程以 `start_new_session` 留存；若宿主统一清理进程组，必须改用该主机已有的受管理 service，而不能退回“等次日”。
 - 回滚可把 wrapper 恢复为直接调用 `earnings_daily.py`，并恢复两个软配额；保留 continuation SQLite 和所有不可变产物，不删除状态、不重置 attempts。

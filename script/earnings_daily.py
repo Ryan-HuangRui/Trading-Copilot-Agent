@@ -293,6 +293,58 @@ def _latest_role_artifact(root: Path, state: EarningsState, subject: str, report
     return None
 
 
+def _quarterly_market_readiness(root: Path, state: EarningsState, qdb: sqlite3.Connection) -> dict[str, list[dict]]:
+    """Project only market batches that the authoritative context gate can execute."""
+    prior_factory = qdb.row_factory; qdb.row_factory = sqlite3.Row
+    actionable: list[dict] = []; waiting: list[dict] = []
+    try:
+        quarters = qdb.execute("""SELECT q.quarter_id,MIN(q.period_start) AS period_start,
+          MAX(q.period_end) AS period_end FROM quarterly_scopes q
+          JOIN quarterly_stages market ON market.scope_id=q.scope_id AND market.stage='market'
+          JOIN quarterly_stages synthesis ON synthesis.scope_id=q.scope_id AND synthesis.stage='synthesis'
+          WHERE q.edition!='monitor' GROUP BY q.quarter_id
+          HAVING SUM(synthesis.state='completed')=COUNT(*) AND SUM(market.state='completed')<COUNT(*)
+          ORDER BY MAX(q.period_end)""").fetchall()
+        for quarter in quarters:
+            scopes = qdb.execute("SELECT * FROM quarterly_scopes WHERE quarter_id=? AND edition!='monitor' ORDER BY industry_id",
+                                 (quarter["quarter_id"],)).fetchall()
+            reasons = []
+            for scope in scopes:
+                stage = qdb.execute("""SELECT state,artifact_path,artifact_sha256 FROM quarterly_stages
+                    WHERE scope_id=? AND stage='synthesis'""", (scope["scope_id"],)).fetchone()
+                if not stage or stage["state"] != "completed" or not stage["artifact_path"] or not stage["artifact_sha256"]:
+                    reasons.append(f"{scope['industry_id']}:synthesis-waiting"); continue
+                source = root / stage["artifact_path"]
+                if not source.is_file() or sha256_file(source) != stage["artifact_sha256"]:
+                    reasons.append(f"{scope['industry_id']}:synthesis-invalid"); continue
+                artifact = state.db.execute("SELECT 1 FROM report_artifacts WHERE path=? AND sha256=? AND source_mode='live'",
+                                            (stage["artifact_path"], stage["artifact_sha256"])).fetchone()
+                publication = state.db.execute("""SELECT * FROM publication_artifacts WHERE publication_type='industry'
+                    AND scope_id=? AND quarter_id=? ORDER BY version DESC LIMIT 1""",
+                    (scope["industry_id"], scope["quarter_id"])).fetchone()
+                if not artifact or not publication:
+                    reasons.append(f"{scope['industry_id']}:publication-waiting"); continue
+                publication = dict(publication); manifest_path = root / publication["manifest_path"]
+                if (publication["edition"] not in {"full", "revision"} or not manifest_path.is_file() or
+                        sha256_file(manifest_path) != publication["manifest_sha256"]):
+                    reasons.append(f"{scope['industry_id']}:publication-ineligible"); continue
+                manifest = read_json(manifest_path)
+                source_hashes = {row.get("sha256") for row in manifest.get("sources", [])}
+                newer = state.db.execute("""SELECT 1 FROM publication_jobs WHERE series_key IN
+                    (SELECT series_key FROM publication_jobs WHERE publication_manifest_path=?)
+                    AND revision>(SELECT revision FROM publication_jobs WHERE publication_manifest_path=? LIMIT 1)
+                    AND state!='superseded'""", (publication["manifest_path"], publication["manifest_path"])).fetchone()
+                if (manifest.get("publishable") is not True or manifest.get("checker", {}).get("status") != "passed" or
+                        manifest.get("checker", {}).get("errors") or stage["artifact_sha256"] not in source_hashes or newer):
+                    reasons.append(f"{scope['industry_id']}:publication-gate-waiting")
+            target = {"quarter_id": quarter["quarter_id"], "period_start": quarter["period_start"],
+                      "period_end": quarter["period_end"], "reasons": reasons}
+            (waiting if reasons else actionable).append(target)
+    finally:
+        qdb.row_factory = prior_factory
+    return {"actionable": actionable, "waiting": waiting}
+
+
 def _quarterly_company_signature(root: Path, state: EarningsState, industry: dict, quarter_id: str) -> str:
     issuer_ids = {row["issuer_id"] for row in state.db.execute("SELECT issuer_id,symbol FROM issuers")
                   if row["symbol"] in {item["symbol"] for item in industry["issuers"]}}
@@ -483,13 +535,8 @@ def run_quarterly_step(root: Path, config: dict, universe: dict, state: Earnings
                 continue
         # Market readiness comes from the authoritative quarter registry, not the
         # incomplete-industry due list (which is empty precisely when all syntheses finish).
-        ready_quarter = qledger.db.execute("""SELECT q.quarter_id,MIN(q.period_start) AS period_start,
-              MAX(q.period_end) AS period_end FROM quarterly_scopes q
-              JOIN quarterly_stages synthesis ON synthesis.scope_id=q.scope_id AND synthesis.stage='synthesis'
-              JOIN quarterly_stages market ON market.scope_id=q.scope_id AND market.stage='market'
-              WHERE q.edition!='monitor' GROUP BY q.quarter_id
-              HAVING SUM(synthesis.state='completed')=COUNT(*) AND SUM(market.state='completed')<COUNT(*)
-              ORDER BY MAX(q.period_end) LIMIT 1""").fetchone()
+        market_readiness = _quarterly_market_readiness(root, state, qledger.db)
+        ready_quarter = market_readiness["actionable"][0] if market_readiness["actionable"] else None
         if (not quota_open and ledger.used(day, "quarterly") < cap and ready_quarter
                 and research_window_available(config, deadline, prepare_context=True)):
             first = dict(ready_quarter); reports = []
@@ -943,7 +990,10 @@ def round_progress(root: Path, state: EarningsState, config: dict, cutoff: str |
     quarterly_pending = 0
     quarterly_waiting = 0
     quarterly_blocked = 0
+    quarterly_market = 0
+    quarterly_market_waiting = 0
     quarterly_progress = []
+    progress_error = 0
     quarterly_path = root / "runtime/earnings/quarterly.sqlite"
     if config.get("quarterly", {}).get("automatic_trigger_enabled") is True and quarterly_path.exists():
         qdb = sqlite3.connect(quarterly_path)
@@ -965,9 +1015,15 @@ def round_progress(root: Path, state: EarningsState, config: dict, cutoff: str |
             quarterly_progress = [tuple(row) for row in qdb.execute("""SELECT scope_id,stage,state,
               COALESCE(input_hash,''),COALESCE(artifact_sha256,''),attempts FROM quarterly_stages
               ORDER BY scope_id,stage""").fetchall()]
+            market_readiness = _quarterly_market_readiness(root, state, qdb)
+            quarterly_market = len(market_readiness["actionable"])
+            quarterly_market_waiting = len(market_readiness["waiting"])
+        except sqlite3.OperationalError:
+            # Read-only status callers may observe a legacy DB before the locked
+            # starter/worker bootstrap. Report degraded progress; never mutate here.
+            progress_error = 1
         finally:
             qdb.close()
-    progress_error = 0
     own_ledger = ledger is None
     try:
         if ledger is None:
@@ -985,6 +1041,8 @@ def round_progress(root: Path, state: EarningsState, config: dict, cutoff: str |
     pending = {"current_company": current_pending, "daily_industry": daily_industry_pending,
                "quarterly_scopes": quarterly_pending,
                "quarterly_waiting": quarterly_waiting,
+               "quarterly_market": quarterly_market,
+               "quarterly_market_waiting": quarterly_market_waiting,
                "publications": publication_pending}
     basis = {"pending": pending, "blockers": blockers,
              "tasks": [tuple(row) for row in state.db.execute(
@@ -992,9 +1050,9 @@ def round_progress(root: Path, state: EarningsState, config: dict, cutoff: str |
              "publications": [tuple(row) for row in state.db.execute(
                  "SELECT job_id,state,attempts,COALESCE(publication_manifest_path,'') FROM publication_jobs ORDER BY job_id")],
              "quarterly": quarterly_progress}
-    actionable = current_pending + daily_industry_pending + quarterly_pending + publication_pending
+    actionable = current_pending + daily_industry_pending + quarterly_pending + quarterly_market + publication_pending
     return {"pending": pending, "blockers": blockers,
-            "actionable_count": actionable, "waiting_count": quarterly_waiting,
+            "actionable_count": actionable, "waiting_count": quarterly_waiting + quarterly_market_waiting,
             "blocker_count": sum(blockers.values()),
             "fingerprint": hashlib.sha256(json.dumps(basis, sort_keys=True).encode()).hexdigest()}
 

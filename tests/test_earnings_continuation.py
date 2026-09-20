@@ -5,6 +5,8 @@ from pathlib import Path
 import sys
 import time
 import subprocess
+import sqlite3
+import fcntl
 from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
@@ -31,6 +33,33 @@ def deployment(root: Path, **overrides) -> None:
 
 
 class EarningsContinuationTests(unittest.TestCase):
+    def test_worker_bootstraps_legacy_quarterly_schema_before_first_progress_read(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); round_row, args = self.prepare(root)
+            qpath = root / "runtime/earnings/quarterly.sqlite"
+            legacy = sqlite3.connect(qpath)
+            legacy.executescript("""CREATE TABLE quarterly_scopes(scope_id TEXT PRIMARY KEY,quarter_id TEXT NOT NULL,
+              industry_id TEXT NOT NULL,period_start TEXT NOT NULL,period_end TEXT NOT NULL,
+              frozen_universe_json TEXT NOT NULL,frozen_universe_hash TEXT NOT NULL,cutoff TEXT NOT NULL,
+              edition TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,revision INTEGER NOT NULL DEFAULT 1,
+              input_fingerprint TEXT,UNIQUE(quarter_id,industry_id,edition));
+              CREATE TABLE quarterly_stages(scope_id TEXT NOT NULL,stage TEXT NOT NULL,state TEXT NOT NULL,input_hash TEXT,
+              artifact_path TEXT,artifact_sha256 TEXT,attempts INTEGER NOT NULL DEFAULT 0,error TEXT,updated_at TEXT NOT NULL,
+              PRIMARY KEY(scope_id,stage));""")
+            legacy.commit(); legacy.close()
+            empty = {"fingerprint": "empty", "actionable_count": 0, "waiting_count": 0,
+                     "blocker_count": 0, "pending": {}, "blockers": {}}
+            work = {"status": "success", "errors": [], "progress": empty, "collection_complete": True,
+                    "usage_summary": {"actual_model_calls": 0, "calls": []}}
+            final = {**work, "delivery": {"delivery": {"state": "suppressed"}}}
+            with patch("earnings_continuation._run_daily", side_effect=[work, final]) as run_daily:
+                result = worker(root, args)
+            columns = {row[1] for row in sqlite3.connect(qpath).execute("PRAGMA table_info(quarterly_scopes)")}
+            self.assertEqual(result["state"], "complete")
+            self.assertEqual(run_daily.call_count, 2)
+            self.assertIn("accepted_reports_json", columns)
+            self.assertTrue(list((root / "runtime/earnings/migrations").glob("quarterly-pre-goal-driven-*.sqlite.bak")))
+
     def test_start_preserves_delivery_pending_and_retries_only_finalizer(self):
         with TemporaryDirectory() as temp:
             root = Path(temp).resolve(); round_row, args = self.prepare(root)
@@ -113,15 +142,39 @@ class EarningsContinuationTests(unittest.TestCase):
         with TemporaryDirectory() as temp:
             root = Path(temp).resolve(); attempt = root / "runtime/earnings/runs/w/attempt"; attempt.mkdir(parents=True)
             marker = root / "detached-marker"
+            lock_path = attempt / "model-process.lock"; lock_handle = lock_path.open("a")
+            fcntl.flock(lock_handle, fcntl.LOCK_EX)
             proc = subprocess.Popen([sys.executable, "-c",
                 f"import time,pathlib;time.sleep(.8);pathlib.Path(r'{marker}').write_text('late')"],
-                start_new_session=True)
+                start_new_session=True, pass_fds=(lock_handle.fileno(),)); lock_handle.close()
+            identity = earnings_continuation._process_identity(proc.pid)
             atomic_write_json(attempt / "runner-request.json", {"call_id": "real-call", "started_at": "2026-09-21T00:00:00Z",
-                "pid": proc.pid, "process_group": proc.pid, "status": "running", "usage": None})
-            killed = earnings_continuation._terminate_owned_model_groups(root)
+                "pid": proc.pid, "process_group": proc.pid, "process_identity": identity,
+                "ownership_lock": str(lock_path.relative_to(root)),
+                "execution_window_id": "window-1", "status": "running", "usage": None})
+            killed = earnings_continuation._terminate_owned_model_groups(root, window_id="window-1")
             self.assertEqual(killed[0]["call_id"], "real-call")
             proc.wait(timeout=3); time.sleep(1)
             self.assertFalse(marker.exists())
+
+    def test_cleanup_skips_completed_call_and_identity_mismatch(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); attempt = root / "runtime/earnings/runs/w/attempt"; attempt.mkdir(parents=True)
+            lock_path = attempt / "model-process.lock"; lock_handle = lock_path.open("a")
+            fcntl.flock(lock_handle, fcntl.LOCK_EX)
+            proc = subprocess.Popen([sys.executable, "-c", "import time;time.sleep(2)"], start_new_session=True,
+                                    pass_fds=(lock_handle.fileno(),)); lock_handle.close()
+            request = {"call_id": "done", "started_at": "2026-09-21T00:00:00Z", "pid": proc.pid,
+                "process_group": proc.pid, "process_identity": earnings_continuation._process_identity(proc.pid),
+                "ownership_lock": str(lock_path.relative_to(root)),
+                "execution_window_id": "window-1", "status": "running", "usage": None}
+            atomic_write_json(attempt / "runner-request.json", request)
+            atomic_write_json(attempt / "runner-result.json", {"call_id": "done", "status": "completed"})
+            self.assertEqual(earnings_continuation._terminate_owned_model_groups(root, window_id="window-1"), [])
+            (attempt / "runner-result.json").unlink(); request["process_identity"] = "reused-pid"
+            atomic_write_json(attempt / "runner-request.json", request)
+            self.assertEqual(earnings_continuation._terminate_owned_model_groups(root, window_id="window-1"), [])
+            self.assertIsNone(proc.poll()); proc.terminate(); proc.wait(timeout=3)
 
     def test_aborted_window_reconciles_progress_without_synthetic_model_call(self):
         with TemporaryDirectory() as temp:
@@ -178,6 +231,31 @@ class EarningsContinuationTests(unittest.TestCase):
                  patch("earnings_continuation._run_daily", side_effect=[work, final]) as run_daily:
                 worker(root, args)
             self.assertEqual(run_daily.call_args_list[0].kwargs["execution_focus"], "downstream")
+
+    def test_worker_continues_from_last_industry_to_market_and_verified_publication(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); _round, args = self.prepare(root)
+            before = {"fingerprint": "industry", "actionable_count": 1, "waiting_count": 0,
+                      "blocker_count": 0, "pending": {"quarterly_scopes": 1}, "blockers": {}}
+            market = {"fingerprint": "market", "actionable_count": 1, "waiting_count": 0,
+                      "blocker_count": 0, "pending": {"quarterly_scopes": 0, "quarterly_market": 1}, "blockers": {}}
+            publication = {"fingerprint": "publication", "actionable_count": 1, "waiting_count": 0,
+                           "blocker_count": 0, "pending": {"quarterly_market": 0, "publications": 1}, "blockers": {}}
+            done = {"fingerprint": "verified", "actionable_count": 0, "waiting_count": 0,
+                    "blocker_count": 0, "pending": {}, "blockers": {}}
+            windows = [{"status": "success", "errors": [], "progress": progress, "collection_complete": True,
+                        "usage_summary": {"actual_model_calls": 1, "calls": []}}
+                       for progress in (market, publication, done)]
+            final = {"status": "success", "errors": [], "progress": done,
+                     "delivery": {"delivery": {"state": "suppressed"}},
+                     "usage_summary": {"actual_model_calls": 0, "calls": []}}
+            with patch("earnings_continuation.round_progress", side_effect=[before, market, publication]), \
+                 patch("earnings_continuation._run_daily", side_effect=[*windows, final]) as run_daily:
+                result = worker(root, args)
+            self.assertEqual(result["state"], "complete")
+            self.assertEqual(run_daily.call_count, 4)
+            self.assertTrue(all(call.kwargs.get("execution_focus") == "downstream"
+                                for call in run_daily.call_args_list[:3]))
 
     def prepare(self, root: Path) -> tuple[dict, argparse.Namespace]:
         (root / "config").mkdir(parents=True)

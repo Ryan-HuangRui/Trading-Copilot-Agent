@@ -20,6 +20,14 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="microseconds")
 
 
+def process_identity(pid: int) -> str | None:
+    """Return the live PID/process-group tuple; callers also verify an ownership lock."""
+    try:
+        return f"{pid}:{os.getpgid(pid)}"
+    except (OSError, ProcessLookupError):
+        return None
+
+
 def classify_model_failure(*values: object) -> str | None:
     """Classify explicit backend failures without treating timeouts as quota events."""
     text = "\n".join(str(value) for value in values if value).lower()

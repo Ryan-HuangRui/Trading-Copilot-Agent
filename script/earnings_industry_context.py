@@ -7,6 +7,7 @@ import argparse
 from datetime import date
 import json
 import os
+import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -80,6 +81,28 @@ def _company_inputs(state: EarningsState, root: Path, issuer_ids: list[str], per
                               "source_mode": row["source_mode"], "cutoff": report.get("cutoff"), "issuer_id": issuer_id})
             researched.append(issuer_id)
     return artifacts, researched
+
+
+def _validated_accepted_boundary(root: Path, path: Path, frozen_scope: dict[str, Any]) -> dict[str, Any]:
+    boundary = read_json(path)
+    if (boundary.get("scope_id") != frozen_scope.get("scope_id") or
+            int(boundary.get("revision", -1)) != int(frozen_scope.get("revision", -2))):
+        raise ValueError("accepted company input scope/revision differs from frozen scope")
+    if path.parent.name == "inputs" and path.stem != sha256_bytes(canonical_json(boundary)):
+        raise ValueError("accepted company input content address mismatch")
+    registry = sqlite3.connect(root / "runtime/earnings/quarterly.sqlite"); registry.row_factory = sqlite3.Row
+    try:
+        row = registry.execute("""SELECT revision,input_fingerprint,accepted_reports_json,active_input_path
+            FROM quarterly_scopes WHERE scope_id=?""", (boundary["scope_id"],)).fetchone()
+    finally:
+        registry.close()
+    relative = relative_to_root(root, path)
+    if (not row or int(row["revision"]) != int(boundary["revision"]) or
+            row["input_fingerprint"] != boundary.get("input_fingerprint") or
+            json.loads(row["accepted_reports_json"] or "[]") != boundary.get("reports") or
+            row["active_input_path"] != relative):
+        raise ValueError("accepted company input file differs from active quarterly registry boundary")
+    return boundary
 
 
 def _source_documents(state: EarningsState, root: Path, issuer_ids: list[str], cutoff: str,
@@ -178,7 +201,9 @@ def main() -> None:
         if args.accepted_company_input:
             accepted_path = ensure_inside(resolve_path(root, args.accepted_company_input),
                                           [root / "runtime" / "earnings" / "quarterly-scopes"])
-            accepted_payload = read_json(accepted_path)
+            if frozen_scope is None:
+                raise ValueError("accepted company input requires a frozen quarterly scope")
+            accepted_payload = _validated_accepted_boundary(root, accepted_path, frozen_scope)
             accepted_reports = accepted_payload.get("reports") or []
         company_artifacts, researched_ids = _company_inputs(state, root, issuer_ids, args.period_start,
             args.period_end, cutoff.isoformat(), research_quarter, accepted_reports)

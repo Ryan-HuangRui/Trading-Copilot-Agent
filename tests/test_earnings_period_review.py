@@ -23,6 +23,24 @@ from earnings_state import EarningsState
 
 
 class EarningsPeriodReviewTests(unittest.TestCase):
+    def test_same_round_expansion_uses_new_content_address_without_rewriting_old_boundary(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); ledger = QuarterlyReviewLedger(root / "runtime/earnings/quarterly.sqlite")
+            scope = ledger.freeze({"quarter_id": "2026-Q2", "period_start": "2026-04-01", "period_end": "2026-06-30"},
+                {"industry_id": "a", "issuers": [], "key_symbols": []}, "2026-09-20T02:00:00Z", edition="full")
+            one = [{"issuer_id": "a", "report_id": "A", "task_id": "ta", "path": "report/A.json", "sha256": "A"}]
+            two = one + [{"issuer_id": "b", "report_id": "B", "task_id": "tb", "path": "report/B.json", "sha256": "B"}]
+            ledger.begin_revision(scope["scope_id"], "fingerprint-A", scope["cutoff"], round_id="round", accepted_reports=one)
+            first_path = root / ledger.db.execute("SELECT active_input_path FROM quarterly_scopes").fetchone()[0]
+            first_bytes = first_path.read_bytes()
+            ledger.begin_revision(scope["scope_id"], "fingerprint-A-B", scope["cutoff"], round_id="round", accepted_reports=two)
+            row = dict(ledger.db.execute("SELECT * FROM quarterly_scopes").fetchone()); second_path = root / row["active_input_path"]
+            second = json.loads(second_path.read_text())
+            self.assertNotEqual(first_path, second_path)
+            self.assertEqual(first_path.read_bytes(), first_bytes)
+            self.assertEqual((second["input_fingerprint"], second["reports"]), (row["input_fingerprint"], two))
+            ledger.close()
+
     def test_legacy_fingerprint_migration_binds_reports_without_resetting_stage(self):
         with TemporaryDirectory() as temp:
             root = Path(temp).resolve(); path = root / "runtime/earnings/quarterly.sqlite"; path.parent.mkdir(parents=True)

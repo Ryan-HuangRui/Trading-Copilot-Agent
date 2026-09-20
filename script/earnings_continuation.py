@@ -9,6 +9,7 @@ import json
 import fcntl
 import os
 import signal
+import shutil
 from pathlib import Path
 import sqlite3
 import subprocess
@@ -17,7 +18,8 @@ import time
 import uuid
 from zoneinfo import ZoneInfo
 
-from earnings_common import ROOT, atomic_write_json, load_config, parse_time, read_json, utc_now
+from earnings_common import (ROOT, atomic_write_json, load_config, parse_time, process_identity,
+                             read_json, sha256_file, utc_now)
 from earnings_daily import round_progress, summarize_batch_usage
 from earnings_delivery import destination, exclusive_lock, runtime_path
 from earnings_state import EarningsState
@@ -118,7 +120,64 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
-def _terminate_owned_model_groups(root: Path, *, started_after: datetime | None = None) -> list[dict]:
+def _process_identity(pid: int) -> str | None:
+    return process_identity(pid)
+
+
+def _ownership_lock_held(root: Path, relative: str | None) -> bool:
+    if not relative:
+        return False
+    path = (root / relative).resolve()
+    try:
+        path.relative_to((root / "runtime/earnings").resolve())
+        with path.open("a") as handle:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return True
+            fcntl.flock(handle, fcntl.LOCK_UN)
+    except (OSError, ValueError):
+        return False
+    return False
+
+
+def _bootstrap_quarterly_schema(root: Path) -> dict:
+    """Back up and migrate the legacy quarterly DB before any progress query."""
+    quarterly = runtime_path(root, "runtime/earnings/quarterly.sqlite")
+    if not quarterly.exists():
+        return {"status": "not_needed", "reason": "quarterly database absent"}
+    state_path = runtime_path(root, "runtime/earnings/migrations/quarterly-goal-driven-state.json")
+    with exclusive_lock(runtime_path(root, "runtime/earnings/quarterly-migration.lock")):
+        db = sqlite3.connect(quarterly)
+        try:
+            columns = {row[1] for row in db.execute("PRAGMA table_info(quarterly_scopes)")}
+        finally:
+            db.close()
+        required = {"accepted_reports_json", "active_round_id", "active_input_path"}
+        if required <= columns:
+            return {"status": "ready", "migrated": False}
+        digest = sha256_file(quarterly)
+        backup = runtime_path(root, f"runtime/earnings/migrations/quarterly-pre-goal-driven-{digest[:16]}.sqlite.bak")
+        backup.parent.mkdir(parents=True, exist_ok=True)
+        if not backup.exists():
+            shutil.copy2(quarterly, backup)
+        atomic_write_json(state_path, {"status": "running", "source_sha256": digest,
+            "backup_path": str(backup.relative_to(root)), "started_at": utc_now()})
+        try:
+            from earnings_period_review import QuarterlyReviewLedger
+            ledger = QuarterlyReviewLedger(quarterly); ledger.close()
+            atomic_write_json(state_path, {"status": "completed", "source_sha256": digest,
+                "backup_path": str(backup.relative_to(root)), "completed_at": utc_now()})
+            return {"status": "completed", "migrated": True, "backup_path": str(backup.relative_to(root))}
+        except Exception as exc:
+            atomic_write_json(state_path, {"status": "failed", "source_sha256": digest,
+                "backup_path": str(backup.relative_to(root)), "failed_at": utc_now(),
+                "reason": f"{type(exc).__name__}: {exc}"})
+            raise
+
+
+def _terminate_owned_model_groups(root: Path, *, window_id: str | None = None,
+                                  started_after: datetime | None = None) -> list[dict]:
     """Terminate detached model sessions proven by durable runner ownership records."""
     records: list[tuple[Path, dict, dict | None]] = []
     for path in list((root / "runtime/earnings/runs").glob("**/runner-request.json")) + \
@@ -137,11 +196,24 @@ def _terminate_owned_model_groups(root: Path, *, started_after: datetime | None 
             records.append((path, call, payload))
     killed = []
     for path, call, container in records:
+        if window_id and call.get("execution_window_id") != window_id:
+            continue
         started = parse_time(call.get("started_at"))
         if started_after and (not started or started < started_after):
             continue
         pid = call.get("process_group") or call.get("pid")
         if not isinstance(pid, int) or call.get("status") not in {"running", "reserved", "started"}:
+            continue
+        result_path = path.with_name("runner-result.json") if path.name == "runner-request.json" else None
+        if result_path and result_path.exists():
+            try:
+                terminal = read_json(result_path)
+            except (OSError, json.JSONDecodeError):
+                terminal = {}
+            if terminal.get("call_id") == call.get("call_id") and terminal.get("status") in {"completed", "failed", "success"}:
+                continue
+        if (not call.get("process_identity") or process_identity(pid) != call.get("process_identity") or
+                not _ownership_lock_held(root, call.get("ownership_lock"))):
             continue
         try:
             os.killpg(pid, signal.SIGTERM)
@@ -189,6 +261,7 @@ def _start_locked(root: Path, args: argparse.Namespace) -> dict:
     ledger = ContinuationLedger(root)
     try:
         deployed = destination(root, runtime_path(root, args.deployment))
+        _bootstrap_quarterly_schema(root)
         active_worker = ledger.db.execute(
             "SELECT * FROM workers WHERE state='running' ORDER BY started_at DESC LIMIT 1").fetchone()
         worker_age = None
@@ -252,8 +325,9 @@ def _run_daily(root: Path, args: argparse.Namespace, round_row: dict, window_id:
         command.append("--defer-finalize")
         if resume_only:
             command.append("--resume-only")
+    env = dict(os.environ); env["TCA_EARNINGS_WINDOW_ID"] = window_id
     process = subprocess.Popen(command, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                               text=True, start_new_session=True)
+                               text=True, start_new_session=True, env=env)
     try:
         process_timeout = getattr(args, "process_timeout_seconds", None) or max(90, window_seconds + 45)
         stdout, stderr = process.communicate(timeout=process_timeout)
@@ -311,6 +385,7 @@ def worker(root: Path, args: argparse.Namespace) -> dict:
         ledger.db.commit()
     try:
         with _worker_lock(runtime_path(root, "runtime/earnings/continuation-worker.lock")):
+            _bootstrap_quarterly_schema(root)
             round_row_raw = ledger.db.execute("SELECT * FROM rounds WHERE round_id=?", (args.round_id,)).fetchone()
             if not round_row_raw:
                 raise ValueError("continuation round does not exist")
@@ -351,7 +426,7 @@ def worker(root: Path, args: argparse.Namespace) -> dict:
                 ledger.db.commit()
                 available = min(window_seconds, max(60, int(deadline - time.monotonic() - final_reserve)))
                 downstream = sum(int(before["pending"].get(key, 0)) for key in
-                                 ("daily_industry", "quarterly_scopes", "publications"))
+                                 ("daily_industry", "quarterly_scopes", "quarterly_market", "publications"))
                 company = int(before["pending"].get("current_company", 0))
                 previous_focus = last_result.get("execution_focus")
                 focus = ("downstream" if downstream and (not company or previous_focus != "downstream")
@@ -362,7 +437,7 @@ def worker(root: Path, args: argparse.Namespace) -> dict:
                                         resume_only=collection_complete, execution_focus=focus)
                     result["execution_focus"] = focus
                 except Exception as exc:
-                    terminated = _terminate_owned_model_groups(root, started_after=window_started)
+                    terminated = _terminate_owned_model_groups(root, window_id=window_id, started_after=window_started)
                     reconcile_state = EarningsState(root / config["paths"]["state"])
                     try:
                         reconciled_progress = round_progress(root, reconcile_state, config, cutoff=round_row["cutoff"])

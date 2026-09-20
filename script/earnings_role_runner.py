@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import fcntl
 import os
 from pathlib import Path
 import signal
@@ -10,7 +11,8 @@ import subprocess
 import sys
 from typing import Any
 
-from earnings_common import atomic_write_json, classify_model_failure, ensure_inside, read_json, sha256_file, utc_now
+from earnings_common import (atomic_write_json, classify_model_failure, ensure_inside, process_identity,
+                             read_json, sha256_file, utc_now)
 from earnings_delivery import runtime_path
 from earnings_manifest_preflight import preflight_or_defer
 
@@ -93,17 +95,22 @@ def run_role(root: Path, manifest_path: Path, *, binary: str, timeout: int) -> d
     atomic_write_json(request_path, {"schema_version": 1, "status": "reserved", "call_id": call_id,
         "model": model, "effort": effort,
         "provider": "codex-cli-openai-auth", "command": command, "manifest_sha256": manifest_hash,
-        "timeout_seconds": timeout, "started_at": utc_now(), "usage": None})
+        "timeout_seconds": timeout, "started_at": utc_now(), "usage": None,
+        "execution_window_id": os.environ.get("TCA_EARNINGS_WINDOW_ID")})
     env = {key: value for key, value in os.environ.items()
            if not key.startswith(("CC_CONNECT_", "TCA_SEC_", "FEISHU_", "LARK_", "LONGBRIDGE_", "LONGPORT_"))}
     proc = None
     usage = None
     try:
-        with events_path.open("w") as events, stderr_path.open("w") as stderr:
+        ownership_path = attempt_dir / "model-process.lock"
+        with events_path.open("w") as events, stderr_path.open("w") as stderr, ownership_path.open("a") as ownership:
+            fcntl.flock(ownership, fcntl.LOCK_EX)
             proc = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=events, stderr=stderr,
-                                    env=env, text=True, start_new_session=True)
+                                    env=env, text=True, start_new_session=True, pass_fds=(ownership.fileno(),))
             request = read_json(request_path)
-            request.update(status="running", pid=proc.pid, process_group=proc.pid)
+            request.update(status="running", pid=proc.pid, process_group=proc.pid,
+                           process_identity=process_identity(proc.pid),
+                           ownership_lock=str(ownership_path.relative_to(root)))
             atomic_write_json(request_path, request)
             proc.communicate(prompt, timeout=timeout)
         for line in events_path.read_text().splitlines():
@@ -153,6 +160,8 @@ def run_role(root: Path, manifest_path: Path, *, binary: str, timeout: int) -> d
                   "model": model, "effort": effort, "usage": usage, "manifest_sha256": manifest_hash,
                   "completed_at": utc_now(), "report_sha256": sha256_file(report_path)}
         atomic_write_json(attempt_dir / "runner-result.json", result)
+        request = read_json(request_path); request.update(status="completed", finished_at=utc_now())
+        atomic_write_json(request_path, request)
         return result
     except BaseException as exc:
         if proc is not None and proc.poll() is None:
@@ -167,6 +176,8 @@ def run_role(root: Path, manifest_path: Path, *, binary: str, timeout: int) -> d
                 failed[f"{kind}_path"] = str(path.relative_to(root))
                 failed[f"{kind}_sha256"] = sha256_file(path)
         atomic_write_json(attempt_dir / "runner-result.json", failed)
+        request = read_json(request_path); request.update(status="failed", finished_at=utc_now())
+        atomic_write_json(request_path, request)
         raise
 
 

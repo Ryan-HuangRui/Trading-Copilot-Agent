@@ -12,7 +12,7 @@ sys.path.insert(0, str(ROOT / 'script'))
 from earnings_common import atomic_write_json, sha256_file
 from earnings_daily import (DailyLedger, _latest_company_publication_heads, _publication_matches_current_head,
     fail_owned_attempt, finalize, notification_material, render_publication_entries, run, run_gap_review_step,
-    run_publication_work, season_limit, unresolved_terminal_count)
+    run_publication_work, round_progress, season_limit, unresolved_terminal_count)
 from earnings_period_review import QuarterlyReviewLedger
 from earnings_state import EarningsState
 from earnings_role_runner import run_role
@@ -181,6 +181,7 @@ class EarningsDailyTests(unittest.TestCase):
             config = json.loads((ROOT / 'config/earnings_research.json').read_text())
             config['quarterly']['automatic_trigger_enabled'] = True
             config['budgets']['quarterly_tasks_per_day'] = 5
+            atomic_write_json(root / 'config/earnings_universe.json', {'industries': []})
             state = EarningsState(root / 'runtime/earnings/state.sqlite'); ledger = DailyLedger(root)
             state.db.execute('PRAGMA foreign_keys=OFF')
             qledger = QuarterlyReviewLedger(root / 'runtime/earnings/quarterly.sqlite')
@@ -202,7 +203,18 @@ class EarningsDailyTests(unittest.TestCase):
                     qledger.set_stage(scope['scope_id'], stage, 'completed')
                 qledger.set_stage(scope['scope_id'], 'synthesis', 'completed', artifact_path=str(report.relative_to(root)),
                                   artifact_sha256=digest)
+                publication = root / f'report/earnings/publications/industry/{industry}/2026-Q2/v1/publication-manifest.json'
+                atomic_write_json(publication, {'publication_id': f'pub-{industry}', 'publication_type': 'industry',
+                    'scope_id': industry, 'quarter_id': '2026-Q2', 'edition': 'full', 'version': 1,
+                    'publishable': True, 'checker': {'status': 'passed', 'errors': []},
+                    'sources': [{'path': str(report.relative_to(root)), 'sha256': digest}]})
+                state.db.execute('INSERT INTO publication_artifacts VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
+                    (f'pub-{industry}', f'series-{industry}', 'industry', industry, '2026-Q2', 'full', 1,
+                     str(publication.relative_to(root)), sha256_file(publication), f'content-{industry}', 'passed',
+                     '2026-08-31T00:00:00Z'))
             state.db.commit(); qledger.close()
+            progress = round_progress(root, state, config, cutoff='2026-09-21T02:00:00Z', ledger=ledger)
+            self.assertEqual(progress['pending']['quarterly_market'], 1)
             review = {'quarter': {'quarter_id': '2026-Q2'}, 'scopes': []}
             market_context = {'status': 'success', 'model_execution_required': True,
                               'artifacts': ['runtime/earnings/market-input.json']}
