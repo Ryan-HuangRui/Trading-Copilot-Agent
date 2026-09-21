@@ -23,6 +23,11 @@ class EarningsMarketContextTests(unittest.TestCase):
         rows = [{"industry_id": "a", "edition": "full", "checker_status": "passed"}] * 2
         self.assertEqual(assess_market_dependencies(["a", "b"], rows, requested_edition="full")["missing_or_ineligible"], ["b"])
 
+    def test_partial_revision_cannot_enter_full_market(self):
+        rows = [{"industry_id": "a", "edition": "revision", "checker_status": "passed",
+                 "completeness_status": "partial", "version_kind": "revision"}]
+        self.assertFalse(assess_market_dependencies(["a"], rows, requested_edition="full")["eligible"])
+
     def test_five_scope_fixture_chain_uses_full_registry_and_checked_publications(self):
         with TemporaryDirectory() as temp:
             root = Path(temp).resolve(); (root / "config").mkdir()

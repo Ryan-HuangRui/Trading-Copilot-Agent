@@ -271,7 +271,9 @@ def unresolved_terminal_count(state: EarningsState, cutoff: str | None = None) -
       WHERE t.state='terminal_failed' AND t.source_mode='live' AND NOT EXISTS (
         SELECT 1 FROM research_tasks n WHERE n.rowid>t.rowid AND n.source_mode=t.source_mode
       AND n.task_type=t.task_type AND n.subject_id=t.subject_id
-        AND n.period_start IS t.period_start AND n.period_end IS t.period_end)
+        AND n.period_start IS t.period_start AND n.period_end IS t.period_end
+        AND NOT (n.state='superseded' AND EXISTS(SELECT 1 FROM dependency_reuse_audit a
+          WHERE a.failed_task_id=n.task_id AND a.reused_task_id=t.task_id)))
       {terminal_cutoff}
       AND (t.task_type!='company' OR t.period_end IS (SELECT MAX(x.period_end)
         FROM research_tasks x JOIN earnings_events xe ON xe.event_id=x.subject_id
@@ -325,7 +327,7 @@ def _quarterly_market_readiness(root: Path, state: EarningsState, qdb: sqlite3.C
                 if not artifact or not publication:
                     reasons.append(f"{scope['industry_id']}:publication-waiting"); continue
                 publication = dict(publication); manifest_path = root / publication["manifest_path"]
-                if (publication["edition"] not in {"full", "revision"} or not manifest_path.is_file() or
+                if (publication["edition"] != "full" or not manifest_path.is_file() or
                         sha256_file(manifest_path) != publication["manifest_sha256"]):
                     reasons.append(f"{scope['industry_id']}:publication-ineligible"); continue
                 manifest = read_json(manifest_path)
@@ -660,8 +662,6 @@ def run_publication_work(root: Path, config: dict, state: EarningsState, ledger:
         if state.db.execute("SELECT 1 FROM publication_jobs WHERE source_sha256=? AND publication_type=? AND quarter_id=?",
                             (row["sha256"], publication_type, quarter)).fetchone():
             continue
-        if int(existing) > 0:
-            edition = "revision"
         revision = int(existing) + 1; job_id = hashlib.sha256(f"{series_key}:{revision}".encode()).hexdigest()
         now = utc_now()
         with state.immediate() as db:
@@ -855,7 +855,8 @@ def run_publication_work(root: Path, config: dict, state: EarningsState, ledger:
 
 def render_publication_entries(rows: list[tuple[dict, dict, dict]]) -> list[str]:
     """Never truncate checked cloud report entries; notification size is gated later as a whole."""
-    return [f"- {publication['title']}（{publication['edition']} v{publication['version']}）：{cloud['url']}"
+    return [f"- {publication['title']}（{'阶段版' if publication['edition'] == 'stage' else '完整版'}；"
+            f"{'修订' if publication.get('version_kind') == 'revision' else '首版'} v{publication['version']}）：{cloud['url']}"
             for publication, cloud, _version in rows]
 
 
@@ -952,7 +953,9 @@ def round_progress(root: Path, state: EarningsState, config: dict, cutoff: str |
       AND NOT EXISTS(SELECT 1 FROM research_tasks n WHERE n.rowid>t.rowid
         AND n.task_type=t.task_type AND n.subject_id=t.subject_id
         AND n.period_start IS t.period_start AND n.period_end IS t.period_end
-        AND n.source_mode=t.source_mode)
+        AND n.source_mode=t.source_mode
+        AND NOT (n.state='superseded' AND EXISTS(SELECT 1 FROM dependency_reuse_audit a
+          WHERE a.failed_task_id=n.task_id AND a.reused_task_id=t.task_id)))
       AND t.period_end IS (SELECT MAX(x.period_end) FROM research_tasks x
         JOIN earnings_events xe ON xe.event_id=x.subject_id WHERE x.task_type='company'
         AND xe.issuer_id=e.issuer_id AND x.source_mode=t.source_mode
@@ -1123,7 +1126,7 @@ def finalize(root: Path, deployed: dict, deployed_path: Path, day: str, reports:
                     legal = False; break
             if not legal:
                 continue
-        formal = publication["publication_type"] in {"industry", "market"} and publication["edition"] in {"full", "revision"}
+        formal = publication["publication_type"] in {"industry", "market"} and publication["edition"] in {"full", "stage"}
         priority_company = publication["publication_type"] in {"company", "ipo"} and publication["scope_id"] in key_symbols
         current_company = priority_company and _publication_matches_current_head(publication, publication_heads)
         if publication.get("checker", {}).get("status") == "passed" and cloud.get("state") == "verified" and (formal or current_company):

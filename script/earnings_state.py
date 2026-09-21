@@ -294,7 +294,9 @@ class EarningsState:
                 if failed_input.get(field) != completed_input.get(field): differences.append(field)
         proof = {"failed_task_id": failed_task_id, "reused_task_id": completed_task_id,
                  "eligible": not differences, "differences": sorted(set(differences)),
-                 "output_manifest": completed["output_manifest"]}
+                 "output_manifest": completed["output_manifest"],
+                 "failed_before": {key: failed[key] for key in failed.keys()},
+                 "completed_before": {key: completed[key] for key in completed.keys()}}
         return proof
 
     def apply_dependency_reuse(self, failed_task_id: str, completed_task_id: str, *, reason: str) -> dict[str, Any]:
@@ -443,7 +445,9 @@ class EarningsState:
           AND x.state IN ('queued','running','completed','retryable_failed','terminal_failed') AND NOT EXISTS(
             SELECT 1 FROM research_tasks xn WHERE xn.rowid>x.rowid AND xn.task_type=x.task_type
             AND xn.subject_id=x.subject_id AND xn.period_start IS x.period_start AND xn.period_end IS x.period_end
-            AND xn.source_mode=x.source_mode))"""
+            AND xn.source_mode=x.source_mode
+            AND NOT (xn.state='superseded' AND EXISTS(SELECT 1 FROM dependency_reuse_audit a
+              WHERE a.failed_task_id=xn.task_id AND a.reused_task_id=x.task_id))))"""
         depth_expr = """(SELECT COUNT(DISTINCT x.period_end) FROM research_tasks x
           JOIN earnings_events xe ON xe.event_id=x.subject_id JOIN earnings_events te ON te.event_id=t.subject_id
           WHERE x.task_type='company' AND xe.issuer_id=te.issuer_id AND x.source_mode=t.source_mode
@@ -451,7 +455,9 @@ class EarningsState:
           AND x.state IN ('queued','running','completed','retryable_failed') AND NOT EXISTS(
             SELECT 1 FROM research_tasks xn WHERE xn.rowid>x.rowid AND xn.task_type=x.task_type
             AND xn.subject_id=x.subject_id AND xn.period_start IS x.period_start AND xn.period_end IS x.period_end
-            AND xn.source_mode=x.source_mode))"""
+            AND xn.source_mode=x.source_mode
+            AND NOT (xn.state='superseded' AND EXISTS(SELECT 1 FROM dependency_reuse_audit a
+              WHERE a.failed_task_id=xn.task_id AND a.reused_task_id=x.task_id))))"""
         if company_tier not in {None, "current", "history"}:
             raise ValueError("company_tier must be current or history")
         if task_type == "company" and company_tier:
@@ -465,11 +471,15 @@ class EarningsState:
                 WHERE d.task_id=t.task_id AND (p.state!='completed' OR EXISTS(
                   SELECT 1 FROM research_tasks pn WHERE pn.rowid>p.rowid AND pn.task_type=p.task_type
                   AND pn.subject_id=p.subject_id AND pn.period_start IS p.period_start
-                  AND pn.period_end IS p.period_end AND pn.source_mode=p.source_mode)))
+                  AND pn.period_end IS p.period_end AND pn.source_mode=p.source_mode
+                  AND NOT (pn.state='superseded' AND EXISTS(SELECT 1 FROM dependency_reuse_audit a
+                    WHERE a.failed_task_id=pn.task_id AND a.reused_task_id=p.task_id)))))
                 AND NOT EXISTS(SELECT 1 FROM research_tasks n WHERE n.rowid>t.rowid
                   AND n.task_type=t.task_type AND n.subject_id=t.subject_id
                   AND n.period_start IS t.period_start AND n.period_end IS t.period_end
-                  AND n.source_mode=t.source_mode)
+                  AND n.source_mode=t.source_mode
+                  AND NOT (n.state='superseded' AND EXISTS(SELECT 1 FROM dependency_reuse_audit a
+                    WHERE a.failed_task_id=n.task_id AND a.reused_task_id=t.task_id)))
                 ORDER BY t.created_at,t.task_id""",
                 params,
             ).fetchall()
@@ -485,7 +495,9 @@ class EarningsState:
                       AND x.state IN ('queued','running','completed','retryable_failed') AND NOT EXISTS(
                         SELECT 1 FROM research_tasks xn WHERE xn.rowid>x.rowid AND xn.task_type=x.task_type
                         AND xn.subject_id=x.subject_id AND xn.period_start IS x.period_start
-                        AND xn.period_end IS x.period_end AND xn.source_mode=x.source_mode)""",
+                        AND xn.period_end IS x.period_end AND xn.source_mode=x.source_mode
+                        AND NOT (xn.state='superseded' AND EXISTS(SELECT 1 FROM dependency_reuse_audit a
+                          WHERE a.failed_task_id=xn.task_id AND a.reused_task_id=x.task_id)))""",
                       (meta["issuer_id"], row["source_mode"], row["period_end"])).fetchone()[0]
                 return (0 if meta and meta["symbol"] in priority else 1, depth,
                         0 if int(row["attempts"]) == 0 else 1,
@@ -520,12 +532,16 @@ class EarningsState:
                 WHERE d.task_id=? AND (p.state!='completed' OR EXISTS(
                   SELECT 1 FROM research_tasks pn WHERE pn.rowid>p.rowid AND pn.task_type=p.task_type
                   AND pn.subject_id=p.subject_id AND pn.period_start IS p.period_start
-                  AND pn.period_end IS p.period_end AND pn.source_mode=p.source_mode))""", (task_id,),
+                  AND pn.period_end IS p.period_end AND pn.source_mode=p.source_mode
+                  AND NOT (pn.state='superseded' AND EXISTS(SELECT 1 FROM dependency_reuse_audit a
+                    WHERE a.failed_task_id=pn.task_id AND a.reused_task_id=p.task_id))))""", (task_id,),
             ).fetchone()["count"]
             superseded = db.execute("""SELECT 1 FROM research_tasks n WHERE n.rowid>? AND n.task_type=?
-              AND n.subject_id=? AND n.period_start IS ? AND n.period_end IS ? AND n.source_mode=?""",
+              AND n.subject_id=? AND n.period_start IS ? AND n.period_end IS ? AND n.source_mode=?
+              AND NOT (n.state='superseded' AND EXISTS(SELECT 1 FROM dependency_reuse_audit a
+                WHERE a.failed_task_id=n.task_id AND a.reused_task_id=?))""",
               (row["db_rowid"], row["task_type"], row["subject_id"],
-               row["period_start"], row["period_end"], row["source_mode"])).fetchone()
+               row["period_start"], row["period_end"], row["source_mode"], task_id)).fetchone()
             if not eligible_state or blocked or superseded or row["attempts"] >= row["max_attempts"]:
                 return None
             db.execute("UPDATE research_tasks SET state='running',lease_owner=?,lease_expires_at=?,attempts=attempts+1,updated_at=? WHERE task_id=?",

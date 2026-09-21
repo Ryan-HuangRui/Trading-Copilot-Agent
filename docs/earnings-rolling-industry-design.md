@@ -5,12 +5,12 @@
 - `disclosed` 只由冻结 public cutoff 前实际公开、且能映射到目标经营季度的原始披露决定；`fetched`、`researched` 与可读 `publication` 分别计数，互不代替。
 - 行业阶段研究默认在固定样本达到 60% 披露时触发；六家公司采用向上取整，因此是四家。任一预先配置的关键龙头已披露也可触发有限样本阶段版。两家非龙头披露不触发模型。
 - 触发后若没有足够的已验收公司研究，scope 进入 `waiting_for_research`，优先完成必需公司事实；至少一份 cutoff 合法的已验收输入到位后，依次执行 gap audit、industry、challenge、synthesis、writer、checker 与可选 cloud。阶段版不绕过任何核查门。
-- `full` 仍要求配置的完整门槛、关键成员、已披露成员研究与 gap disposition。`stage` 表示有限样本，不得宣称行业完整；`revision` 表示同一季度的实质新增输入。重复披露/hash 不产生 revision。
+- `full` 仍要求配置的完整门槛、关键成员、已披露成员研究与 gap disposition。`stage` 表示有限样本，不得宣称行业完整；版本种类另记为 `initial`/`revision`，因此阶段版修订仍是 `stage`，不能进入 full market。重复披露/hash 不产生 revision。
 
 ## 冻结边界与迁移
 
 - 每个在途 revision 冻结 expected/key 样本、public cutoff、已验收公司报告清单与指纹。后续研究完成或新披露只写入 pending boundary；当前 DAG 不重启，完成后合并为下一 revision。
-- public cutoff 判断原始披露是否可用；research cutoff 判断后来生成的报告何时可被消费。二者分列保存。旧库把现有 `cutoff` 安全迁移为 `public_cutoff`，新增 `research_cutoff`；不可变 scope/revision 文件不覆写，新边界写入内容寻址文件。
+- public cutoff 判断原始披露是否可用；research cutoff 记录已验收产物边界。报告生成时间不能代替证据边界：每条引用必须命中精确注册的 document id/version/hash，且公开时间不晚于 public cutoff。二者分列保存。旧库把现有 `cutoff` 安全迁移为 `public_cutoff`，新增 `research_cutoff`；不可变 scope/revision 文件不覆写，新边界写入内容寻址文件。
 - 非 tail 日也会从 cutoff 合法的实际披露经营期间发现季度并创建 scope。错峰财年继续使用最大自然季度重叠映射，报告必须展示公司实际期间，不能把披露月份冒充经营季度。
 
 ## 更新、封板与迟到更正

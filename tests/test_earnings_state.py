@@ -101,7 +101,28 @@ class EarningsStateTests(unittest.TestCase):
         row = self.state.db.execute("SELECT state,attempts,error FROM research_tasks WHERE task_id=?", (failed,)).fetchone()
         self.assertEqual((row["state"], row["attempts"]), ("superseded", 2))
         self.assertIn(old, row["error"])
-        self.assertEqual(self.state.db.execute("SELECT COUNT(*) FROM dependency_reuse_audit").fetchone()[0], 1)
+        audit = self.state.db.execute("SELECT proof_json FROM dependency_reuse_audit").fetchone()
+        proof = __import__("json").loads(audit[0])
+        self.assertEqual(proof["failed_before"]["error"], "AMAT failed")
+
+    def test_single_claim_accepts_dependency_after_audited_reuse(self):
+        self.test_failed_dependency_reuse_requires_exact_frozen_semantics_and_is_audited()
+        old = self.state.db.execute("SELECT reused_task_id FROM dependency_reuse_audit").fetchone()[0]
+        child, _ = self.state.enqueue_task(task_type="industry", subject_id="semiconductors",
+            period_start="2026-04-01", period_end="2026-06-30", input_hash="industry",
+            method_version="v1", source_mode="live", profile="quarterly", model="gpt-6-astra",
+            effort="high", dependencies=[old])
+        claimed = self.state.claim_task(child, owner="review", lease_seconds=60)
+        self.assertEqual(claimed["task_id"], child)
+
+    def test_bulk_claim_ignores_only_audited_reuse_tombstone(self):
+        self.test_failed_dependency_reuse_requires_exact_frozen_semantics_and_is_audited()
+        old = self.state.db.execute("SELECT reused_task_id FROM dependency_reuse_audit").fetchone()[0]
+        child, _ = self.state.enqueue_task(task_type="industry", subject_id="display",
+            period_start="2026-04-01", period_end="2026-06-30", input_hash="display",
+            method_version="v1", source_mode="live", profile="quarterly", model="gpt-6-astra",
+            effort="high", dependencies=[old])
+        self.assertIn(child, [row["task_id"] for row in self.state.claim_tasks(owner="bulk", limit=20, lease_seconds=60)])
 
     def test_failed_dependency_reuse_rejects_revised_source_hash(self):
         old = self.enqueue("amat-old")

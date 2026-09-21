@@ -337,7 +337,7 @@ class QuarterlyReviewLedger:
               AND state!='pending' LIMIT 1""", (scope_id,)).fetchone()
             incomplete = self.db.execute("""SELECT 1 FROM quarterly_stages WHERE scope_id=?
               AND stage IN ('gap_review','industry','challenge','synthesis','publication','checker','cloud')
-              AND state!='completed' LIMIT 1""", (scope_id,)).fetchone()
+              AND state NOT IN ('completed','blocked') LIMIT 1""", (scope_id,)).fetchone()
             if started and incomplete:
                 self.db.execute("""UPDATE quarterly_scopes SET pending_fingerprint=?,pending_reports_json=?,
                   pending_round_id=?,pending_cutoff=?,updated_at=? WHERE scope_id=?""",
@@ -362,7 +362,7 @@ class QuarterlyReviewLedger:
             if started:
                 incomplete = self.db.execute("""SELECT 1 FROM quarterly_stages WHERE scope_id=?
                   AND stage IN ('gap_review','industry','challenge','synthesis','publication','checker','cloud')
-                  AND state!='completed' LIMIT 1""",
+                  AND state NOT IN ('completed','blocked') LIMIT 1""",
                   (scope_id,)).fetchone()
                 if incomplete:
                     self.db.execute("""UPDATE quarterly_scopes SET pending_fingerprint=?,pending_reports_json=?,
@@ -379,8 +379,8 @@ class QuarterlyReviewLedger:
             else:
                 self.db.execute("""UPDATE quarterly_scopes SET input_fingerprint=?,accepted_reports_json=?,
                   pending_fingerprint=NULL,pending_reports_json=NULL,pending_round_id=NULL,pending_cutoff=NULL,
-                  updated_at=? WHERE scope_id=?""",
-                  (input_fingerprint, reports_json, utc_now(), scope_id))
+                  research_cutoff=?,updated_at=? WHERE scope_id=?""",
+                  (input_fingerprint, reports_json, cutoff, utc_now(), scope_id))
                 self.db.execute("INSERT OR REPLACE INTO quarterly_input_boundaries VALUES(?,?,?,?,?,?,?,?,?,?)",
                   (scope_id, round_key, row["revision"], row["cutoff"], input_fingerprint, reports_json,
                    None, None, "expanded_before_dag_start", utc_now()))
@@ -490,11 +490,45 @@ def _period_members(state: EarningsState, issuer_ids: list[str], quarter_id: str
                                 research_cutoff=cutoff)[0:3]
 
 
+def validate_report_public_evidence(state: EarningsState, root: Path, report: dict[str, Any],
+                                    public_cutoff: str) -> tuple[bool, str | None]:
+    """Validate every cited source against the immutable document registry.
+
+    Report generation timestamps are intentionally irrelevant: acceptance is bound
+    to the exact registered document version/hash and its public availability.
+    """
+    evidence = report.get("evidence")
+    if not isinstance(evidence, list) or not evidence:
+        return False, "report has no registered evidence"
+    cutoff_dt = parse_time(public_cutoff)
+    for item in evidence:
+        document_id, version, digest = item.get("document_id"), item.get("document_version"), item.get("document_hash")
+        if not document_id or version is None or not digest:
+            return False, "evidence lacks document identity/version/hash"
+        row = state.db.execute("SELECT * FROM documents WHERE document_id=? AND version=? AND content_sha256=?",
+                               (str(document_id), int(version), str(digest))).fetchone()
+        if not row:
+            return False, f"evidence document is not registered: {document_id}@{version}"
+        public = row["accepted_at"] or row["published_at"]
+        if not public or parse_time(public) > cutoff_dt:
+            return False, f"evidence document is after public cutoff: {document_id}@{version}"
+        original = root / row["original_path"]
+        if not original.is_file() or sha256_file(original) != row["content_sha256"]:
+            return False, f"evidence document file/hash invalid: {document_id}@{version}"
+    return True, None
+
+
 def _period_member_audit(state: EarningsState, issuer_ids: list[str], quarter_id: str,
                          public_cutoff: str | None = None, research_cutoff: str | None = None,
-                         accepted_report_hashes: set[str] | None = None) -> tuple[set[str], set[str], set[str], dict[str, list[str]]]:
+                         accepted_report_hashes: set[str] | None = None, *,
+                         cutoff: str | None = None) -> tuple[set[str], set[str], set[str], dict[str, list[str]]]:
+    # ``cutoff`` is retained as a compatibility alias for old callers while all
+    # quarterly entry points pass the two boundaries explicitly.
+    if cutoff is not None:
+        if public_cutoff is not None or research_cutoff is not None:
+            raise ValueError("cutoff alias cannot be combined with explicit boundaries")
+        public_cutoff = research_cutoff = cutoff
     public_cutoff_dt = parse_time(public_cutoff or utc_now())
-    research_cutoff_dt = parse_time(research_cutoff or public_cutoff or utc_now())
     root = state.path.resolve().parents[2]
     disclosed: set[str] = set(); fetched: set[str] = set(); researched: set[str] = set()
     reasons: dict[str, list[str]] = {issuer_id: [] for issuer_id in issuer_ids}
@@ -520,21 +554,20 @@ def _period_member_audit(state: EarningsState, issuer_ids: list[str], quarter_id
                 continue
             if not report_path.is_file() or sha256_file(report_path) != row["sha256"]:
                 reasons[issuer_id].append(f"research file/hash invalid: {row['report_id']}"); continue
-            report = read_json(report_path); report_cutoff = parse_time(report.get("cutoff"))
-            evidence_timestamps = [row.get("public_timestamp") for row in report.get("evidence", [])]
-            evidence_legal = bool(evidence_timestamps and all(
-                value and parse_time(value) <= public_cutoff_dt for value in evidence_timestamps))
-            if not report_cutoff or (report_cutoff > research_cutoff_dt and not evidence_legal):
-                reasons[issuer_id].append(f"research after cutoff: {row['report_id']}"); continue
+            report = read_json(report_path)
+            for evidence in report.get("evidence", []):
+                if evidence.get("document_id") and evidence.get("document_version") is not None and evidence.get("document_hash"):
+                    evidence_document_keys.add((str(evidence["document_id"]), int(evidence["document_version"]),
+                                                str(evidence["document_hash"])))
+            evidence_legal, evidence_error = validate_report_public_evidence(
+                state, root, report, public_cutoff or utc_now())
+            if not evidence_legal:
+                reasons[issuer_id].append(f"research evidence invalid: {row['report_id']}: {evidence_error}"); continue
             try: resolved_period = resolve_report_period(report)
             except ValueError:
                 reasons[issuer_id].append(f"research period unresolved: {row['report_id']}"); continue
             if resolved_period["research_quarter"] != quarter_id: continue
             eligible_reports.append((row, report, resolved_period))
-            for evidence in report.get("evidence", []):
-                if evidence.get("document_id") and evidence.get("document_version") is not None and evidence.get("document_hash"):
-                    evidence_document_keys.add((str(evidence["document_id"]), int(evidence["document_version"]),
-                                                str(evidence["document_hash"])))
         documents = state.db.execute("""SELECT d.* FROM documents d WHERE issuer_id=? AND source_mode='live'
             AND version=(SELECT MAX(x.version) FROM documents x WHERE x.document_id=d.document_id)""", (issuer_id,)).fetchall()
         for raw in documents:
@@ -577,8 +610,8 @@ def _scope_input_snapshot(state: EarningsState, root: Path, scope: sqlite3.Row, 
             path = root / row["path"]
             if not path.is_file() or sha256_file(path) != row["sha256"]: continue
             report = read_json(path)
-            report_cutoff = parse_time(report.get("cutoff"))
-            if not report_cutoff or report_cutoff > parse_time(cutoff): continue
+            evidence_legal, _ = validate_report_public_evidence(state, root, report, cutoff)
+            if not evidence_legal: continue
             try: period = resolve_report_period(report)
             except ValueError: continue
             if period["research_quarter"] == scope["quarter_id"]:
@@ -614,6 +647,20 @@ def _available_mapped_quarters(state: EarningsState, cutoff: str) -> set[str]:
                                            form=row.get("form"))["research_quarter"])
         except ValueError:
             continue
+    # SEC document metadata may omit reporting_start/reporting_end. A completed,
+    # hash-registered company report can still bind the exact standalone fact period
+    # to the immutable source document without mutating the source row.
+    root = state.path.resolve().parents[2]
+    reports = state.db.execute("""SELECT a.* FROM report_artifacts a JOIN research_tasks t ON t.task_id=a.task_id
+      WHERE a.report_type='company' AND a.source_mode='live' AND t.state='completed' ORDER BY a.rowid DESC""").fetchall()
+    for raw in reports:
+        row = dict(raw); path = root / row["path"]
+        if not path.is_file() or sha256_file(path) != row["sha256"]: continue
+        report = read_json(path)
+        legal, _ = validate_report_public_evidence(state, root, report, cutoff)
+        if not legal: continue
+        try: quarters.add(resolve_report_period(report)["research_quarter"])
+        except ValueError: continue
     return quarters
 
 
@@ -648,14 +695,29 @@ def inspect_due(root: Path, *, day: str, cutoff: str, config_path: str, universe
             if not exists:
                 for industry in universe["industries"]:
                     ledger.freeze(quarter, industry, cutoff, edition="stage")
+        # Terminal publication repair closes the old research DAG without erasing
+        # its failure. This prevents later accepted evidence from being trapped as
+        # a permanent pending revision.
+        for failed in state.db.execute("""SELECT scope_id,quarter_id,source_sha256,error FROM publication_jobs
+            WHERE publication_type='industry' AND state='terminal_failed'""").fetchall():
+            matched = ledger.db.execute("""SELECT q.scope_id FROM quarterly_scopes q JOIN quarterly_stages s
+              ON s.scope_id=q.scope_id AND s.stage='synthesis' WHERE q.industry_id=? AND q.quarter_id=?
+              AND s.artifact_sha256=?""", (failed["scope_id"], failed["quarter_id"], failed["source_sha256"])).fetchone()
+            if matched:
+                for stage in ("publication", "checker", "cloud"):
+                    current = ledger.db.execute("SELECT state FROM quarterly_stages WHERE scope_id=? AND stage=?",
+                                                (matched["scope_id"], stage)).fetchone()
+                    if current and current["state"] != "completed":
+                        ledger.set_stage(matched["scope_id"], stage, "blocked", error=failed["error"])
         for registered in ledger.db.execute("SELECT * FROM quarterly_scopes ORDER BY period_end,industry_id").fetchall():
             fingerprint, accepted = _scope_input_snapshot(state, root, registered, cutoff)
             ledger.begin_revision(registered["scope_id"], fingerprint, cutoff,
                                   round_id=round_id, accepted_reports=accepted)
         # Incomplete scopes remain due after their nominal window and across quarter rollovers.
         due = ledger.db.execute("""SELECT DISTINCT q.* FROM quarterly_scopes q JOIN quarterly_stages s ON s.scope_id=q.scope_id
-            WHERE s.stage IN ('coverage','gap_review','industry','challenge','synthesis')
-              AND s.state!='completed' ORDER BY q.period_end,q.created_at,q.industry_id""").fetchall()
+            WHERE (s.stage IN ('coverage','gap_review','industry','challenge','synthesis') AND s.state!='completed')
+              OR q.finalization_state NOT LIKE 'finalized_%'
+            ORDER BY q.period_end,q.created_at,q.industry_id""").fetchall()
         scopes = []
         gap_artifacts = []
         for raw_scope in due:
@@ -684,13 +746,9 @@ def inspect_due(root: Path, *, day: str, cutoff: str, config_path: str, universe
                     report_path = root / row["path"]
                     if not report_path.is_file() or sha256_file(report_path) != row["sha256"]: continue
                     report = read_json(report_path)
-                    report_cutoff = parse_time(report.get("cutoff"))
-                    evidence_timestamps = [item.get("public_timestamp") for item in report.get("evidence", [])]
-                    evidence_legal = bool(evidence_timestamps and all(value and parse_time(value) <=
-                        parse_time(scope.get("public_cutoff") or scope["cutoff"]) for value in evidence_timestamps))
-                    if (not report_cutoff or (report_cutoff > parse_time(scope.get("research_cutoff") or scope["cutoff"])
-                                              and not evidence_legal)):
-                        continue
+                    evidence_legal, _ = validate_report_public_evidence(
+                        state, root, report, scope.get("public_cutoff") or scope["cutoff"])
+                    if not evidence_legal: continue
                     try: mapped = resolve_report_period(report)
                     except ValueError: continue
                     if mapped["research_quarter"] != scope["quarter_id"]: continue
@@ -743,6 +801,10 @@ def inspect_due(root: Path, *, day: str, cutoff: str, config_path: str, universe
                     "all expected samples and full gates" if finalization_state == "ready_full" else
                     ("configured quarter close with disclosed gaps" if finalization_state == "ready_stage_with_gaps" else None),
                     utc_now(), scope["scope_id"])); ledger.db.commit()
+                if finalization_state in {"ready_full", "ready_stage_with_gaps"} and ledger.finalize_if_ready(scope["scope_id"]):
+                    scope = dict(ledger.db.execute("SELECT * FROM quarterly_scopes WHERE scope_id=?",
+                                                   (scope["scope_id"],)).fetchone())
+                    finalization_state = scope["finalization_state"]
             frozen_path = ledger.path.parent / "quarterly-scopes" / scope["scope_id"] / "revisions" / f"v{scope['revision']}" / "frozen-scope.json"
             scopes.append({"scope_id": scope["scope_id"], "industry_id": scope["industry_id"],
                            "quarter_id": scope["quarter_id"], "revision": scope["revision"], "period_start": scope["period_start"],

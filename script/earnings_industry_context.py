@@ -40,12 +40,6 @@ def _registered_report(state: EarningsState, root: Path, path_text: str) -> tupl
     return read_json(path), dict(row)
 
 
-def _evidence_within_cutoff(report: dict[str, Any], cutoff: str) -> bool:
-    """A later-created accepted report is legal only when every cited source was already public."""
-    timestamps = [row.get("public_timestamp") for row in report.get("evidence", [])]
-    return bool(timestamps and all(value and parse_time(value) <= parse_time(cutoff) for value in timestamps))
-
-
 def _company_inputs(state: EarningsState, root: Path, issuer_ids: list[str], period_start: str, period_end: str,
                     cutoff: str, research_quarter: str | None = None,
                     accepted_reports: list[dict[str, Any]] | None = None) -> tuple[list[dict[str, Any]], list[str]]:
@@ -68,9 +62,9 @@ def _company_inputs(state: EarningsState, root: Path, issuer_ids: list[str], per
                     continue
                 candidate_path = ensure_inside(resolve_path(root, candidate["path"]), [root / "report" / "earnings"])
                 candidate_report = read_json(candidate_path)
-                if parse_time(candidate_report.get("cutoff")) > parse_time(cutoff):
-                    if accepted_reports is None or not _evidence_within_cutoff(candidate_report, cutoff):
-                        continue
+                from earnings_period_review import validate_report_public_evidence
+                evidence_legal, _ = validate_report_public_evidence(state, root, candidate_report, cutoff)
+                if not evidence_legal: continue
                 if research_quarter:
                     from earnings_period_review import resolve_report_period
                     try: mapped = resolve_report_period(candidate_report)
@@ -222,8 +216,13 @@ def main() -> None:
             scope = report.get("scope") or {}
             if scope.get("industry_id") != args.industry or scope.get("reporting_start") != args.period_start or scope.get("reporting_end") != args.period_end:
                 raise ValueError("predecessor scope does not match requested industry period")
-            if report.get("research_mode") != args.mode or parse_time(report.get("cutoff")) > cutoff:
+            if report.get("research_mode") != args.mode:
                 raise ValueError("predecessor mode/cutoff is incompatible")
+            if parse_time(report.get("cutoff")) > cutoff:
+                from earnings_period_review import validate_report_public_evidence
+                predecessor_legal, reason = validate_report_public_evidence(state, root, report, cutoff.isoformat())
+                if not predecessor_legal:
+                    raise ValueError(f"predecessor evidence exceeds public boundary: {reason}")
             predecessor_reports.append(report); predecessor_rows.append(row)
         if args.role == "challenge" and not any(r.get("report_type") == "industry" for r in predecessor_reports):
             raise ValueError("challenge role requires a registered industry predecessor report")
@@ -251,7 +250,8 @@ def main() -> None:
         if research_quarter and source_mode == "live":
             from earnings_period_review import _period_member_audit
             disclosed_ids, fetched_ids, researched_ids_audit, _ = _period_member_audit(
-                state, issuer_ids, research_quarter, cutoff=cutoff.isoformat(),
+                state, issuer_ids, research_quarter, public_cutoff=cutoff.isoformat(),
+                research_cutoff=cutoff.isoformat(),
                 accepted_report_hashes={row["sha256"] for row in (accepted_reports or company_artifacts)})
         else:
             if research_quarter:

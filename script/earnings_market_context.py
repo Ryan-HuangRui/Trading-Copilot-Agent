@@ -18,7 +18,8 @@ def assess_market_dependencies(expected_industry_ids: list[str], rows: list[dict
     eligible = set()
     for row in rows:
         if row.get("industry_id") not in expected_industry_ids or row.get("checker_status") != "passed": continue
-        if requested_edition == "stage" or row.get("edition") in {"full", "revision"}:
+        complete = row.get("completeness_status", "full" if row.get("edition") == "full" else None) == "full"
+        if requested_edition == "stage" or (row.get("edition") == "full" and complete):
             eligible.add(row["industry_id"])
     missing = sorted(set(expected_industry_ids) - eligible)
     return {"expected_industries": len(expected_industry_ids), "eligible_industries": len(eligible),
@@ -47,15 +48,21 @@ def build_context(root: Path, *, source_paths: list[Path], period_start: str, pe
             scope = report.get("scope") or {}; industry_id = scope.get("industry_id")
             if report.get("report_type") != "synthesis" or report.get("research_mode") != "quarterly":
                 raise ValueError("market input must be a quarterly industry synthesis")
-            if report.get("source_mode") != "live" or not parse_time(report.get("cutoff")) or parse_time(report["cutoff"]) > parse_time(cutoff):
+            if report.get("source_mode") != "live" or not parse_time(report.get("cutoff")):
                 raise ValueError("market input must be accepted live research at or before the frozen cutoff")
             if scope.get("reporting_start") != period_start or scope.get("reporting_end") != period_end:
                 raise ValueError("industry synthesis period differs from frozen market quarter")
             if industry_id in seen_industries: raise ValueError("duplicate industry synthesis dependency")
             seen_industries.add(industry_id)
             frozen_scope = next((item for item in frozen_scopes if item["industry"]["industry_id"] == industry_id), None)
-            if frozen_scope is None or parse_time(report["cutoff"]) > parse_time(frozen_scope["cutoff"]):
-                raise ValueError("industry synthesis exceeds its frozen scope cutoff")
+            if frozen_scope is None:
+                raise ValueError("industry synthesis is outside the frozen scope")
+            if parse_time(report["cutoff"]) > parse_time(frozen_scope.get("research_cutoff") or frozen_scope["cutoff"]):
+                from earnings_period_review import validate_report_public_evidence
+                legal, reason = validate_report_public_evidence(
+                    state, root, report, frozen_scope.get("public_cutoff") or frozen_scope["cutoff"])
+                if not legal:
+                    raise ValueError(f"industry synthesis evidence exceeds its frozen public boundary: {reason}")
             quarterly_db = root / "runtime/earnings/quarterly.sqlite"
             if quarterly_db.is_file():
                 import sqlite3
@@ -91,7 +98,10 @@ def build_context(root: Path, *, source_paths: list[Path], period_start: str, pe
                 if (publication_manifest.get("publishable") is True and publication_manifest.get("checker", {}).get("status") == "passed"
                         and not publication_manifest.get("checker", {}).get("errors") and digest in source_hashes and not pending):
                     checker_status = "passed"; report_edition = publication["edition"]
-            reports.append({"industry_id": industry_id, "edition": report_edition, "checker_status": checker_status})
+            reports.append({"industry_id": industry_id, "edition": report_edition, "checker_status": checker_status,
+                            "completeness_status": publication_manifest.get("completeness_status",
+                                "full" if report_edition == "full" else "partial") if publication else None,
+                            "version_kind": publication_manifest.get("version_kind") if publication else None})
             predecessors.append({"report_id": report["report_id"], "task_id": report["task_id"], "path": relative_to_root(root, path),
                                  "sha256": digest, "report_type": "synthesis", "industry_id": industry_id})
         gate = assess_market_dependencies(expected_industries, reports, requested_edition=edition)

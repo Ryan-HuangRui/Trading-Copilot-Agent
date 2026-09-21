@@ -15,6 +15,7 @@ from earnings_period_review import (
     QuarterlyReviewLedger,
     inspect_due,
     _period_members,
+    _period_member_audit,
     record_gap_review,
 )
 from earnings_industry_context import _company_inputs
@@ -53,6 +54,55 @@ class EarningsPeriodReviewTests(unittest.TestCase):
             self.assertNotEqual(first_path, second_path)
             self.assertEqual(first_path.read_bytes(), first_bytes)
             self.assertEqual((second["input_fingerprint"], second["reports"]), (row["input_fingerprint"], two))
+            self.assertEqual(row["research_cutoff"], scope["cutoff"])
+            ledger.close()
+
+    def test_same_round_expansion_advances_artifact_boundary_not_public_boundary(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); ledger = QuarterlyReviewLedger(root / "runtime/earnings/quarterly.sqlite")
+            scope = ledger.freeze({"quarter_id": "2026-Q2", "period_start": "2026-04-01", "period_end": "2026-06-30"},
+                {"industry_id": "a", "issuers": [], "key_symbols": []}, "2026-09-16T02:00:00Z", edition="stage")
+            ledger.begin_revision(scope["scope_id"], "A", "2026-09-16T02:00:00Z", round_id="round", accepted_reports=[])
+            ledger.begin_revision(scope["scope_id"], "A-B", "2026-09-20T16:37:31Z", round_id="round",
+                                  accepted_reports=[{"sha256": "B"}])
+            row = ledger.db.execute("SELECT public_cutoff,research_cutoff FROM quarterly_scopes").fetchone()
+            self.assertEqual(tuple(row), ("2026-09-16T02:00:00Z", "2026-09-20T16:37:31Z"))
+            ledger.close()
+
+    def test_report_timestamp_cannot_admit_evidence_after_public_boundary(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); state = EarningsState(root / "runtime/earnings/state.sqlite")
+            self._register_disclosure(state, root, "LATE", 1, "2026-04-01", "2026-06-30", "2026-09-19T00:00:00Z")
+            task, _ = state.enqueue_task(task_type="company", subject_id="event-late", period_start="2026-04-01",
+                period_end="2026-06-30", input_hash="late", method_version="v1", source_mode="live", profile="daily",
+                model="m", effort="e")
+            state.db.execute("UPDATE research_tasks SET state='completed' WHERE task_id=?", (task,))
+            report = root / "report/earnings/late.json"
+            atomic_write_json(report, {"cutoff": "2026-09-20T00:00:00Z",
+                "scope": {"issuer_id": "issuer-late", "reporting_start": "2026-04-01", "reporting_end": "2026-06-30"},
+                "evidence": [{"evidence_id": "e", "document_id": "doc-LATE", "document_version": 1,
+                    "document_hash": sha256_file(root / "raw_data/earnings/LATE.txt")} ]})
+            state.db.execute("INSERT INTO report_artifacts VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", ("r", task, "company",
+                "event-late", "2026-04-01", "2026-06-30", str(report.relative_to(root)), sha256_file(report), "m",
+                "live", "partial", "2026-09-20T00:00:00Z"))
+            _, _, researched, reasons = _period_member_audit(state, ["issuer-late"], "2026-Q2",
+                public_cutoff="2026-09-16T00:00:00Z", research_cutoff="2026-09-20T00:00:00Z")
+            self.assertEqual(researched, set())
+            self.assertTrue(any("after public cutoff" in reason for reason in reasons["issuer-late"]))
+            state.close()
+
+    def test_terminal_delivery_closes_old_dag_for_pending_revision(self):
+        with TemporaryDirectory() as temp:
+            ledger = QuarterlyReviewLedger(Path(temp).resolve() / "runtime/earnings/quarterly.sqlite")
+            scope = ledger.freeze({"quarter_id": "2026-Q2", "period_start": "2026-04-01", "period_end": "2026-06-30"},
+                {"industry_id": "a", "issuers": [], "key_symbols": []}, "2026-09-01T00:00:00Z", edition="stage")
+            ledger.begin_revision(scope["scope_id"], "A", scope["cutoff"], round_id="r1")
+            for stage in ("gap_review", "industry", "challenge", "synthesis"):
+                ledger.set_stage(scope["scope_id"], stage, "completed")
+            for stage in ("publication", "checker", "cloud"):
+                ledger.set_stage(scope["scope_id"], stage, "blocked", error="bounded repair exhausted")
+            self.assertTrue(ledger.begin_revision(scope["scope_id"], "B", "2026-09-02T00:00:00Z", round_id="r2"))
+            self.assertEqual(ledger.db.execute("SELECT revision,input_fingerprint FROM quarterly_scopes").fetchone()[:], (2, "B"))
             ledger.close()
 
     def test_same_round_pending_input_starts_new_revision_after_inflight_dag_finishes(self):
@@ -476,20 +526,24 @@ class EarningsPeriodReviewTests(unittest.TestCase):
 
     def test_quarterly_context_selects_fiscal_period_by_mapping_not_end_date_range(self):
         with TemporaryDirectory() as temp:
-            root = Path(temp).resolve(); path = root / "report/earnings/company.json"
+            root = Path(temp).resolve(); state = EarningsState(root / "runtime/earnings/state.sqlite")
+            self._register_disclosure(state, root, "A", 1, "2026-04-27", "2026-07-26", "2026-08-01T00:00:00Z")
+            path = root / "report/earnings/company.json"
             atomic_write_json(path, {"cutoff": "2026-08-01T00:00:00Z",
                 "scope": {"issuer_id": "issuer-a", "reporting_start": "2026-04-27", "reporting_end": "2026-07-26"},
-                "thesis_state": "emerging"})
-            row = {"report_id": "r", "task_id": "t", "path": str(path.relative_to(root)), "sha256": sha256_file(path),
-                   "completeness": "partial", "source_mode": "live", "period_end": "2026-07-26"}
-            class DB:
-                def execute(self, *_args): return self
-                def fetchall(self): return [row]
-            class State: db = DB()
-            artifacts, researched = _company_inputs(State(), root, ["issuer-a"], "2026-04-01", "2026-06-30",
+                "thesis_state": "emerging", "evidence": [{"evidence_id": "e", "document_id": "doc-A",
+                    "document_version": 1, "document_hash": sha256_file(root / "raw_data/earnings/A.txt")} ]})
+            task, _ = state.enqueue_task(task_type="company", subject_id="event-a", period_start="2026-04-27",
+                period_end="2026-07-26", input_hash="i", method_version="v1", source_mode="live", profile="daily",
+                model="m", effort="e")
+            state.db.execute("INSERT INTO report_artifacts VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", ("r", task, "company",
+                "event-a", "2026-04-27", "2026-07-26", str(path.relative_to(root)), sha256_file(path), "m", "live",
+                "partial", "2026-08-01T00:00:00Z"))
+            artifacts, researched = _company_inputs(state, root, ["issuer-a"], "2026-04-01", "2026-06-30",
                 "2026-08-02T00:00:00Z", "2026-Q2")
             self.assertEqual(researched, ["issuer-a"])
             self.assertEqual(artifacts[0]["report_id"], "r")
+            state.close()
 
 
 if __name__ == "__main__":

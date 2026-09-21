@@ -641,6 +641,8 @@ def build_publication(root: Path, publication_type: str, scope_id: str, quarter_
     series_id = stable_id("publication-series", publication_type, scope_id, quarter_id)
     manifest = {"schema_version": 2, "publication_id": publication_id, "series_id": series_id, "publication_type": publication_type,
                 "scope_id": scope_id, "quarter_id": quarter_id, "edition": edition, "version": version,
+                "version_kind": "revision" if version > 1 else "initial",
+                "completeness_status": "full" if edition == "full" else "partial",
                 "title": report_title, "language": "zh-CN", "created_at": utc_now(), "content_sha256": body_hash,
                 "previous_manifest_sha256": previous_sha,
                 "sources": [{"path": r["path"], "sha256": r["sha256"], "report_id": r["report"].get("report_id")} for r in sources],
