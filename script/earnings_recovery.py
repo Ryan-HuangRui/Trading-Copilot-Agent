@@ -10,7 +10,7 @@ from pathlib import Path
 import sqlite3
 
 from earnings_common import ROOT, atomic_write_json, read_json, safe_segment, utc_now
-from earnings_publication_runner import prepare_repair_input
+from earnings_publication_runner import prepare_repair_input, recheck_publication
 from earnings_delivery import exclusive_lock
 from earnings_state import EarningsState
 
@@ -39,7 +39,7 @@ def recover(root: Path, *, action: str, job_id: str | None = None, task_id: str 
             raise ValueError("this exact bounded recovery was already executed")
         before: dict
         mutation: dict
-        if action in {"resume-checker", "schedule-repair"}:
+        if action in {"resume-checker", "schedule-repair", "recheck-publication"}:
             if not job_id or task_id:
                 raise ValueError("publication recovery requires exactly --job-id")
             row = state.db.execute("SELECT * FROM publication_jobs WHERE job_id=?", (job_id,)).fetchone()
@@ -52,7 +52,12 @@ def recover(root: Path, *, action: str, job_id: str | None = None, task_id: str 
                 raise ValueError("publication job has no frozen input manifest")
             manifest_path = root / row["input_manifest_path"]
             manifest = read_json(manifest_path)
-            if action == "resume-checker":
+            if action == "recheck-publication":
+                if row["state"] != "terminal_failed":
+                    raise ValueError("deterministic recheck requires an exact terminal publication job")
+                mutation = {"state": "cloud_pending", "attempts": int(row["attempts"]),
+                            "input_manifest_path": row["input_manifest_path"], "model_calls": 0}
+            elif action == "resume-checker":
                 if not (manifest_path.parent / "writer-stage.json").exists():
                     raise ValueError("resume-checker requires a completed frozen writer stage")
                 result_path = root / manifest["permitted_outputs"]["runner_result"]
@@ -110,7 +115,18 @@ def recover(root: Path, *, action: str, job_id: str | None = None, task_id: str 
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         backup = audit_dir / "backups" / f"state-{timestamp}-{target_id}.sqlite"
         _backup(state, backup)
-        if action in {"resume-checker", "schedule-repair"}:
+        if action == "recheck-publication":
+            rechecked = recheck_publication(root, root / before["input_manifest_path"])
+            if rechecked.get("status") != "success" or not rechecked.get("manifest_path"):
+                raise ValueError(f"deterministic publication recheck failed: {rechecked.get('reason') or 'unknown'}")
+            cursor = state.db.execute("""UPDATE publication_jobs SET state='cloud_pending',publication_manifest_path=?,
+              error=?,updated_at=? WHERE job_id=? AND state=? AND attempts=? AND input_manifest_path=?""",
+              (rechecked["manifest_path"], "operator deterministic recheck passed", utc_now(), job_id,
+               before["state"], before["attempts"], before["input_manifest_path"]))
+            if cursor.rowcount != 1:
+                raise ValueError("publication job changed after preview; no recheck recovery applied")
+            result["recheck"] = rechecked
+        elif action in {"resume-checker", "schedule-repair"}:
             if action == "schedule-repair":
                 repair = prepare_repair_input(root, root / before["input_manifest_path"])
                 mutation["input_manifest_path"] = str(repair.relative_to(root))
@@ -141,7 +157,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", default=str(ROOT))
     parser.add_argument("--action", required=True,
-                        choices=["resume-checker", "schedule-repair", "release-expired-task", "reuse-dependency"])
+                        choices=["resume-checker", "schedule-repair", "recheck-publication",
+                                 "release-expired-task", "reuse-dependency"])
     parser.add_argument("--job-id")
     parser.add_argument("--task-id")
     parser.add_argument("--reuse-task-id")

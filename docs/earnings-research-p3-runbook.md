@@ -55,6 +55,8 @@ python3 script/earnings_delivery.py --decision runtime/earnings/outbox/<ID>/deci
 
 `earnings-recovery` 同样默认 preview，必须精确指定一个 job/task；`--execute` 前程序以 SQLite backup API 写入 `runtime/earnings/recovery/backups/`，并留下单次恢复审计，禁止对同一目标重复扩张尝试。`resume-checker` 只复用已冻结 writer，`schedule-repair` 只对已有 checker/validator 失败创建唯一修稿，`release-expired-task` 只处理已过期租约。不要删除 SQLite、清空 publication 目录或全量重跑。
 
+若 publication repair 的 semantic checker 已通过、仅因确定性解析器缺陷而终止，部署修复后先对精确 job 执行 `recheck-publication` preview，再加 `--execute`。该动作调用冻结 manifest 的零模型重检，成功后保留原 attempts 和失败记录，只把 job 推进到 `cloud_pending`；重检仍失败则不改变 job。
+
 失败依赖复用必须先 preview，再对同一精确目标 apply：
 
 ```bash

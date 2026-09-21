@@ -3,6 +3,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "script"))
@@ -13,6 +14,32 @@ from earnings_state import EarningsState
 
 
 class EarningsRecoveryTests(unittest.TestCase):
+    def test_terminal_publication_can_be_deterministically_rechecked_without_resetting_attempts(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); state = EarningsState(root / "runtime/earnings/state.sqlite")
+            manifest = root / "runtime/earnings/publications/runs/job/repair-attempt-1/input-manifest.json"
+            atomic_write_json(manifest, {"input_manifest_hash": "frozen"})
+            now = "2026-09-20T00:00:00Z"
+            state.db.execute("""INSERT INTO publication_jobs(job_id,series_key,source_path,source_sha256,publication_type,
+              scope_id,quarter_id,edition,revision,state,input_manifest_path,publication_manifest_path,error,attempts,created_at,updated_at)
+              VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", ("managed-care", "series", "report/source.json", "hash", "industry",
+              "managed-care", "2026-Q2", "stage", 1, "terminal_failed", str(manifest.relative_to(root)), None,
+              "deterministic unit mismatch", 2, now, now))
+            state.close()
+            preview = recover(root, action="recheck-publication", job_id="managed-care")
+            self.assertEqual(preview["planned"], {"state": "cloud_pending", "attempts": 2,
+                "input_manifest_path": str(manifest.relative_to(root)), "model_calls": 0})
+            with patch("earnings_recovery.recheck_publication", return_value={"status": "success",
+                    "manifest_path": "report/earnings/publications/industry/managed-care/2026-Q2/v1/publication-manifest.json"}) as recheck:
+                result = recover(root, action="recheck-publication", job_id="managed-care", execute=True)
+            self.assertEqual(result["status"], "success")
+            recheck.assert_called_once_with(root, manifest)
+            state = EarningsState(root / "runtime/earnings/state.sqlite")
+            row = state.db.execute("SELECT state,attempts,publication_manifest_path FROM publication_jobs").fetchone()
+            self.assertEqual(tuple(row), ("cloud_pending", 2,
+                "report/earnings/publications/industry/managed-care/2026-Q2/v1/publication-manifest.json"))
+            state.close()
+
     def test_dependency_reuse_is_preview_first_backed_up_and_one_shot(self):
         with TemporaryDirectory() as temp:
             root = Path(temp).resolve(); state = EarningsState(root / "runtime/earnings/state.sqlite")
