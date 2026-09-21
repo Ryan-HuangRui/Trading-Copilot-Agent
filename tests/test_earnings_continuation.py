@@ -83,6 +83,27 @@ class EarningsContinuationTests(unittest.TestCase):
             self.assertEqual(run_daily.call_count, 1)
             self.assertTrue(run_daily.call_args.kwargs["finalize_only"])
 
+    def test_completed_research_preserves_deferred_notification_for_next_day(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); _, args = self.prepare(root)
+            empty = {"fingerprint": "empty", "actionable_count": 0, "blocker_count": 0,
+                     "pending": {}, "blockers": {}}
+            done = {"status": "success", "errors": [], "progress": empty, "collection_complete": True}
+            deferred = {"status": "success", "delivery": {"delivery": {"state": "deferred"}}}
+            with patch("earnings_continuation.round_progress", return_value=empty), \
+                 patch("earnings_continuation._run_daily", side_effect=[done, deferred]):
+                result = worker(root, args)
+            self.assertEqual(result["state"], "delivery_pending")
+            ledger = ContinuationLedger(root)
+            row = ledger.db.execute("SELECT research_outcome FROM rounds WHERE round_id=?", (args.round_id,)).fetchone()
+            self.assertEqual(row[0], "complete")
+            ledger.close()
+            with patch("earnings_continuation._run_daily", return_value=deferred) as run_daily:
+                result = worker(root, args)
+            self.assertEqual(result["state"], "delivery_pending")
+            self.assertEqual(run_daily.call_count, 1)
+            self.assertTrue(run_daily.call_args.kwargs["finalize_only"])
+
     def test_delivery_unknown_is_terminal_and_not_restarted(self):
         with TemporaryDirectory() as temp:
             root = Path(temp).resolve(); round_row, args = self.prepare(root)
@@ -343,6 +364,44 @@ class EarningsContinuationTests(unittest.TestCase):
             self.assertEqual(row["state"], "active")
             self.assertIn("handed off", row["stop_reason"])
             ledger.close()
+
+    def test_short_worker_tail_hands_off_without_false_no_progress(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); round_row, args = self.prepare(root)
+            deployment(root, continuation_worker_seconds=8400, continuation_window_seconds=1800)
+            before = {"fingerprint": "before", "actionable_count": 28, "blocker_count": 5,
+                      "pending": {"current_company": 11, "publications": 11}, "blockers": {}}
+            after = {**before, "fingerprint": "after"}
+            daily = {"status": "failed", "errors": ["terminal publications need review"],
+                     "progress": after, "collection_complete": True,
+                     "usage_summary": {"actual_model_calls": 5}}
+            # Production stopped after 136m: ~68s were left after the finalizer
+            # reserve, so the old >=60 loop ran two empty windows and yielded.
+            with patch("earnings_continuation.round_progress", return_value=before), \
+                 patch("earnings_continuation._run_daily", return_value=daily) as run_daily, \
+                 patch("earnings_continuation.spawn_worker", return_value=999) as spawn, \
+                 patch("earnings_continuation.time.monotonic", side_effect=[0, 0, 0, 8212]):
+                result = worker(root, args)
+            self.assertEqual(result["state"], "active")
+            self.assertEqual(run_daily.call_count, 1)
+            self.assertEqual(run_daily.call_args.args[4], 1800)
+            spawn.assert_called_once_with(root, args, round_row["round_id"], 2)
+            ledger = ContinuationLedger(root)
+            saved = ledger.db.execute("SELECT * FROM rounds WHERE round_id=?", (args.round_id,)).fetchone()
+            self.assertEqual(saved["no_progress_windows"], 0)
+            self.assertEqual(saved["owner_generation"], 2)
+            self.assertEqual(saved["cutoff"], round_row["cutoff"])
+            self.assertEqual(ledger.db.execute("SELECT COUNT(*) FROM windows").fetchone()[0], 1)
+            ledger.close()
+
+    def test_worker_rejects_budget_that_cannot_fit_one_full_window(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); _, args = self.prepare(root)
+            deployment(root, continuation_worker_seconds=300, continuation_window_seconds=1800)
+            with patch("earnings_continuation.spawn_worker") as spawn:
+                with self.assertRaisesRegex(ValueError, "full window"):
+                    worker(root, args)
+                spawn.assert_not_called()
 
     def test_no_progress_yields_without_spawning_or_repeating_models(self):
         with TemporaryDirectory() as temp:

@@ -19,6 +19,30 @@ from earnings_role_runner import run_role
 
 
 class EarningsDailyTests(unittest.TestCase):
+    def test_cross_day_finalizer_uses_current_notification_day_and_frozen_evidence(self):
+        from datetime import datetime, timezone
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            config = json.loads((ROOT / 'config/earnings_research.json').read_text())
+            atomic_write_json(root / 'config/earnings_research.json', config)
+            atomic_write_json(root / 'config/earnings_universe.json', {'industries': []})
+            atomic_write_json(root / 'runtime/earnings/deployment.json', {'schema_version': 1,
+                'verified_repo': str(root), 'project': 'test', 'session': 'test', 'verified_at': 'test',
+                'verified_from_cron_id': 'test', 'cc_connect_bin': '/bin/false', 'codex_bin': '/bin/false',
+                'delivery_enabled': False})
+            cutoff = '2026-09-20T16:37:31+00:00'
+            args = argparse.Namespace(repo_root=str(root), config='config/earnings_research.json',
+                deployment='runtime/earnings/deployment.json', resume_only=True, collect_only=False,
+                send=False, finalize_only=True, batch_date='2026-09-21', cutoff=cutoff, round_id='frozen')
+            with patch('earnings_daily.datetime') as clock, patch('earnings_daily.finalize') as final:
+                clock.now.return_value = datetime(2026, 9, 22, 2, tzinfo=timezone.utc)
+                final.return_value = {'delivery': {'state': 'preview'}}
+                result = run(args)
+            self.assertEqual(final.call_args.args[3], '2026-09-22')
+            self.assertEqual(final.call_args.kwargs['cutoff'], cutoff)
+            self.assertEqual(result['date'], '2026-09-21')
+            self.assertEqual(result['notification_date'], '2026-09-22')
+
     def test_short_daily_window_defers_company_and_industry_before_claiming(self):
         with TemporaryDirectory() as temp:
             root = Path(temp).resolve(); (root / 'config').mkdir()

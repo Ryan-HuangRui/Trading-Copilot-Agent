@@ -1209,13 +1209,17 @@ def run(args: argparse.Namespace) -> dict:
                 summary_reports = summary.get("reports") or []
                 summary_errors = summary.get("errors") or []
                 progress = round_progress(root, state, config, cutoff=cutoff, ledger=ledger)
-                delivery = finalize(root, deployed, deployed_path, day, summary_reports, summary_errors,
+                # The evidence cutoff/batch date stays frozen across days, but a
+                # delayed notification consumes today's slot, not an old used slot.
+                notification_day = now.astimezone(ZoneInfo("Asia/Shanghai")).date().isoformat()
+                delivery = finalize(root, deployed, deployed_path, notification_day, summary_reports, summary_errors,
                                     state, send=args.send, cutoff=cutoff)
                 result = {"schema_version": 1, "workflow": "earnings-daily", "status": "success",
                     "run_id": run_id, "round_id": getattr(args, "round_id", None),
                     "execution_window_id": quota_scope, "date": day, "cutoff": cutoff,
                     "reports": summary_reports, "errors": summary_errors, "publications": [], "quarterly": [],
-                    "delivery": delivery, "completed_at": utc_now(), "progress": progress,
+                    "delivery": delivery, "notification_date": notification_day,
+                    "completed_at": utc_now(), "progress": progress,
                     "usage_summary": summarize_batch_usage(root, day, [], [], since=window_started_at), "finalize_only": True}
                 atomic_write_json(logs / "daily-result.json", result)
                 return result

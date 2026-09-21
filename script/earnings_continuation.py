@@ -375,6 +375,8 @@ def worker(root: Path, args: argparse.Namespace) -> dict:
     no_progress_limit = int(deployed.get("continuation_no_progress_windows", 2))
     if not 300 <= session_seconds <= 43200 or not 60 <= window_seconds <= 7200:
         raise ValueError("invalid continuation worker/window bounds")
+    if final_reserve < 0 or session_seconds <= window_seconds + final_reserve:
+        raise ValueError("continuation worker must fit a full window and finalization reserve")
     ledger = ContinuationLedger(root)
     worker_row = ledger.db.execute("SELECT * FROM workers WHERE round_id=? AND generation=? ORDER BY started_at DESC LIMIT 1",
                                    (args.round_id, args.generation)).fetchone()
@@ -412,7 +414,9 @@ def worker(root: Path, args: argparse.Namespace) -> dict:
             delivery_only = round_row["state"] == "delivery_pending"
             stop_state = "delivery_pending" if delivery_only else None
             stop_reason = "retrying durable delivery only" if delivery_only else None
-            while stop_state is None and deadline - time.monotonic() >= final_reserve + 60:
+            # A short tail cannot satisfy the daily runner's research/checker start
+            # thresholds. Hand it off instead of counting empty windows as stalls.
+            while stop_state is None and deadline - time.monotonic() >= final_reserve + window_seconds:
                 index = ledger.db.execute("SELECT COALESCE(MAX(window_index),0)+1 FROM windows WHERE round_id=?",
                                           (args.round_id,)).fetchone()[0]
                 window_id = f"{args.round_id}-g{args.generation}-w{index}"
@@ -541,6 +545,8 @@ def worker(root: Path, args: argparse.Namespace) -> dict:
                     delivery_state = ((final_result.get("delivery") or {}).get("delivery") or {}).get("state")
                     if final_result.get("status") == "failed" or delivery_state in {"retryable_failed", "failed"}:
                         stop_state = "delivery_pending"; stop_reason += "; delivery pending retry"
+                    elif delivery_state == "deferred" and (delivery_only or stop_state in {"complete", "blocked", "waiting"}):
+                        stop_state = "delivery_pending"; stop_reason += "; waiting for next notification slot"
                     elif delivery_state == "unknown":
                         stop_state = "delivery_unknown"; stop_reason += "; automatic retry suppressed"
                     elif delivery_only:

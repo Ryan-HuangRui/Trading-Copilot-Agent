@@ -19,6 +19,8 @@
 4. 只有完成、quota/capacity、永久失败或无进展等停止条件才使用 `--finalize-only` 做一次汇总/去重交付；汇总来自所有窗口的持久化结果。轮次独立保存 `research_outcome`。可重试交付失败进入 `delivery_pending`，真实 starter 不得把它改回 active，后续只重试 outbox 交付并恢复原研究结果；`unknown` 进入人工确认状态，不自动重复发送。代际 handoff 不发送中间通知。
 5. 无待办、连续无进展、quota 熔断或永久失败只剩人工任务时停止。quota/capacity 不伪装为完成；暂停轮次可由下次 cron 继续同一 cutoff。完成后才关闭轮次，下一次 cron 冻结新 cutoff/revision。
 
+worker 剩余时间不足一个完整执行窗口及 finalizer 预留时，直接交接下一代，不启动短尾窗，也不把时间不足计为无进展。配置必须容纳至少一个完整窗口。跨日 finalizer 保持原研究日期与 cutoff，但使用实际发送日的通知名额；研究结束而通知因当日名额延后时保存 `delivery_pending`，下一日仅重试交付，不重做研究。
+
 该 runner 不空轮询、不保持无限前台进程，也不猜测 cc-connect 参数。wrapper 仍由现有 muted cron 调用；仅把内部 `earnings_daily.py` 替换为 continuation starter。单窗口、单模型调用 timeout 和有限 retry 保持不变。
 
 ## 完成、失败与公平性
