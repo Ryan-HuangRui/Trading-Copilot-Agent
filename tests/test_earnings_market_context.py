@@ -78,6 +78,8 @@ class EarningsMarketContextTests(unittest.TestCase):
             self.assertEqual(manifest["scope"]["industry_cutoffs"]["i0"], "2026-09-01T00:00:00Z")
             self.assertEqual(manifest["scope"]["industry_cutoffs"]["i4"], "2026-09-05T00:00:00Z")
             first_scope = json.loads(frozen_paths[0].read_text())["scope_id"]
+            for stage in ("gap_review", "industry", "challenge", "publication", "checker", "cloud"):
+                ledger.set_stage(first_scope, stage, "completed")
             ledger.begin_revision(first_scope, "baseline", "2026-09-05T00:00:00Z")
             self.assertTrue(ledger.begin_revision(first_scope, "late-evidence", "2026-09-06T00:00:00Z"))
             with self.assertRaisesRegex(ValueError, "current scope revision"):

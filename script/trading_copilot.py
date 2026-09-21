@@ -3873,6 +3873,7 @@ def run_earnings_passthrough(args: argparse.Namespace) -> None:
         "frozen_scope": "frozen-scope", "record_gap_review": "record-gap-review", "scope_id": "scope-id",
         "input_manifest_hash": "input-manifest-hash",
         "action": "action", "job_id": "job-id", "task_id": "task-id",
+        "reuse_task_id": "reuse-task-id", "reason": "reason",
     }
     for name, option in option_names.items():
         value = getattr(args, name, None)
@@ -3968,9 +3969,11 @@ def build_parser() -> argparse.ArgumentParser:
     earnings_recovery = sub.add_parser("earnings-recovery", help="Preview or apply one explicitly selected bounded recovery")
     earnings_recovery.add_argument("--repo-root", default=str(ROOT))
     earnings_recovery.add_argument("--action", required=True,
-        choices=["resume-checker", "schedule-repair", "release-expired-task"])
+        choices=["resume-checker", "schedule-repair", "release-expired-task", "reuse-dependency"])
     earnings_recovery.add_argument("--job-id")
     earnings_recovery.add_argument("--task-id")
+    earnings_recovery.add_argument("--reuse-task-id")
+    earnings_recovery.add_argument("--reason")
     earnings_recovery.add_argument("--execute", action="store_true")
     earnings_recovery.set_defaults(func=run_earnings_passthrough)
 

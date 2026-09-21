@@ -11,7 +11,7 @@ from pathlib import Path
 import sqlite3
 from typing import Any, Iterator, Sequence
 
-from earnings_common import ROOT, confined_path, emit, envelope, parse_time, stable_id, utc_now
+from earnings_common import ROOT, confined_path, emit, envelope, parse_time, sha256_file, stable_id, utc_now
 
 
 SCHEMA = """
@@ -50,6 +50,12 @@ CREATE TABLE IF NOT EXISTS task_dependencies (
   PRIMARY KEY(task_id, dependency_task_id),
   FOREIGN KEY(task_id) REFERENCES research_tasks(task_id),
   FOREIGN KEY(dependency_task_id) REFERENCES research_tasks(task_id)
+);
+CREATE TABLE IF NOT EXISTS dependency_reuse_audit (
+  failed_task_id TEXT PRIMARY KEY, reused_task_id TEXT NOT NULL, proof_json TEXT NOT NULL,
+  reason TEXT NOT NULL, created_at TEXT NOT NULL,
+  FOREIGN KEY(failed_task_id) REFERENCES research_tasks(task_id),
+  FOREIGN KEY(reused_task_id) REFERENCES research_tasks(task_id)
 );
 CREATE TABLE IF NOT EXISTS source_watermarks (
   source TEXT NOT NULL, scope TEXT NOT NULL, watermark TEXT, status TEXT NOT NULL,
@@ -251,6 +257,68 @@ class EarningsState:
         if not row:
             raise ValueError(f"frozen task input missing: {task_id}")
         return json.loads(row["input_json"])
+
+    def preview_dependency_reuse(self, failed_task_id: str, completed_task_id: str) -> dict[str, Any]:
+        """Prove whether a failed dependency may explicitly reuse an older accepted result."""
+        failed = self.db.execute("SELECT * FROM research_tasks WHERE task_id=?", (failed_task_id,)).fetchone()
+        completed = self.db.execute("SELECT * FROM research_tasks WHERE task_id=?", (completed_task_id,)).fetchone()
+        if not failed or not completed:
+            raise ValueError("dependency reuse task is missing")
+        differences: list[str] = []
+        if failed["state"] != "terminal_failed": differences.append("failed_state")
+        if completed["state"] != "completed" or not completed["output_manifest"]:
+            differences.append("completed_output")
+        artifact = self.db.execute("SELECT path,sha256 FROM report_artifacts WHERE task_id=?",
+                                   (completed_task_id,)).fetchone()
+        resolved_state = self.path.resolve()
+        repo_root = (resolved_state.parents[2] if resolved_state.parent.name == "earnings"
+                     and resolved_state.parent.parent.name == "runtime" else resolved_state.parent)
+        if not artifact:
+            differences.append("accepted_report")
+        else:
+            artifact_path = repo_root / artifact["path"]
+            if not artifact_path.is_file() or sha256_file(artifact_path) != artifact["sha256"]:
+                differences.append("accepted_report")
+        for field in ("task_type", "subject_id", "period_start", "period_end", "method_version",
+                      "source_mode", "profile", "model", "effort"):
+            if failed[field] != completed[field]: differences.append("subject" if field == "subject_id" else field)
+        try:
+            failed_input = self.task_input(failed_task_id)
+            completed_input = self.task_input(completed_task_id)
+        except ValueError:
+            failed_input = completed_input = None
+            differences.append("frozen_input")
+        if failed_input is not None and completed_input is not None:
+            for field in ("documents", "companyfacts", "calculation_inputs", "event", "issuer",
+                          "configuration_hash", "configuration_basis", "semantic_configuration", "source_mode"):
+                if failed_input.get(field) != completed_input.get(field): differences.append(field)
+        proof = {"failed_task_id": failed_task_id, "reused_task_id": completed_task_id,
+                 "eligible": not differences, "differences": sorted(set(differences)),
+                 "output_manifest": completed["output_manifest"]}
+        return proof
+
+    def apply_dependency_reuse(self, failed_task_id: str, completed_task_id: str, *, reason: str) -> dict[str, Any]:
+        """Apply one previewed equivalence without deleting the failure or its attempts."""
+        if not reason.strip():
+            raise ValueError("dependency reuse requires an operator reason")
+        proof = self.preview_dependency_reuse(failed_task_id, completed_task_id)
+        if not proof["eligible"]:
+            raise ValueError(f"dependency tasks are not equivalent: {', '.join(proof['differences'])}")
+        with self.immediate() as db:
+            db.execute("""INSERT OR IGNORE INTO task_dependencies(task_id,dependency_task_id)
+              SELECT task_id,? FROM task_dependencies WHERE dependency_task_id=?""",
+              (completed_task_id, failed_task_id))
+            db.execute("DELETE FROM task_dependencies WHERE dependency_task_id=?", (failed_task_id,))
+            changed = db.execute("""UPDATE research_tasks SET state='superseded',error=?,updated_at=?
+              WHERE task_id=? AND state='terminal_failed'""",
+              (f"explicitly reused equivalent completed task {completed_task_id}: {reason}",
+               utc_now(), failed_task_id)).rowcount
+            if changed != 1:
+                raise ValueError("failed dependency changed after preview; no reuse applied")
+            db.execute("INSERT INTO dependency_reuse_audit VALUES(?,?,?,?,?)",
+                       (failed_task_id, completed_task_id,
+                        json.dumps(proof, ensure_ascii=False, sort_keys=True, separators=(",", ":")), reason, utc_now()))
+        return {**proof, "status": "superseded", "reason": reason}
 
     def register_task_manifest(self, task_id: str, path: str, digest: str) -> None:
         with self.immediate() as db:

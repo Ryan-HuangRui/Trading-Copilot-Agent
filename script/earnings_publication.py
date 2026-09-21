@@ -34,18 +34,21 @@ _UNIT = {
     "percentage points": ("ratio", Decimal("0.01")), "个百分点": ("ratio", Decimal("0.01")),
     "USD": ("USD", Decimal("1")), "美元": ("USD", Decimal("1")),
     "USD million": ("USD", Decimal("1000000")), "million USD": ("USD", Decimal("1000000")),
+    "USD millions": ("USD", Decimal("1000000")), "millions USD": ("USD", Decimal("1000000")),
     "百万美元": ("USD", Decimal("1000000")),
     "USD billion": ("USD", Decimal("1000000000")), "billion USD": ("USD", Decimal("1000000000")),
+    "USD billions": ("USD", Decimal("1000000000")), "billions USD": ("USD", Decimal("1000000000")),
     "亿美元": ("USD", Decimal("100000000")),
     "CNY": ("CNY", Decimal("1")), "元": ("CNY", Decimal("1")),
-    "CNY million": ("CNY", Decimal("1000000")), "CNY billion": ("CNY", Decimal("1000000000")),
+    "CNY million": ("CNY", Decimal("1000000")), "CNY millions": ("CNY", Decimal("1000000")),
+    "CNY billion": ("CNY", Decimal("1000000000")), "CNY billions": ("CNY", Decimal("1000000000")),
     "百万元": ("CNY", Decimal("1000000")), "亿元": ("CNY", Decimal("100000000")),
     "year": ("duration_year", Decimal("1")), "years": ("duration_year", Decimal("1")),
     "年": ("duration_year", Decimal("1")),
 }
 
 _NUMBER_PATTERN = r"[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?"
-_FINANCIAL_UNIT_PATTERN = (r"USD\s+(?:million|billion)|CNY\s+(?:million|billion)|million\s+USD|billion\s+USD|"
+_FINANCIAL_UNIT_PATTERN = (r"USD\s+(?:millions?|billions?)|CNY\s+(?:millions?|billions?)|millions?\s+USD|billions?\s+USD|"
                            r"percentage\s+points|百万美元|亿美元|百万元|亿元|个百分点|个基点|美元|元|%|％|bps|years?|年|days?|天")
 
 
@@ -88,10 +91,11 @@ def _display_candidates(value: str, unit: str, *, rounded: bool = False) -> list
 
 def _normalized_financial_unit(unit: Any, currency: Any) -> str:
     source_unit = str(unit or "").strip()
-    if source_unit.lower() not in {"million", "billion"}:
+    singular = source_unit.lower().removesuffix("s")
+    if singular not in {"million", "billion"}:
         return source_unit
     source_currency = str(currency or "").strip().upper()
-    return f"{source_currency} {source_unit.lower()}" if source_currency in {"USD", "CNY"} else source_unit
+    return f"{source_currency} {singular}" if source_currency in {"USD", "CNY"} else source_unit
 
 
 def _period_key(period: Any) -> str:

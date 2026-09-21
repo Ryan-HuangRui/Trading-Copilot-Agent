@@ -23,6 +23,20 @@ from earnings_state import EarningsState
 
 
 class EarningsPeriodReviewTests(unittest.TestCase):
+    def _register_disclosure(self, state, root, symbol, index, start, end, public_at):
+        issuer = f"issuer-{symbol.lower()}"; event = f"event-{symbol.lower()}"
+        state.upsert_issuer(issuer_id=issuer, cik=str(index + 1), symbol=symbol, name=symbol,
+                            identity_status="resolved")
+        state.refresh_event(event, issuer, "earnings", start, end)
+        original = root / f"raw_data/earnings/{symbol}.txt"; original.parent.mkdir(parents=True, exist_ok=True)
+        original.write_text(f"{symbol} disclosure")
+        state.register_document({"document_id": f"doc-{symbol}", "issuer_id": issuer, "event_id": event,
+            "form": "10-Q", "source_type": "sec_filing", "source_url": f"https://example.com/{symbol}",
+            "provider": "sec", "backend": "test", "reporting_start": start, "reporting_end": end,
+            "published_at": public_at, "accepted_at": public_at, "fetched_at": public_at,
+            "public_time_precision": "second", "original_path": str(original.relative_to(root)),
+            "content_sha256": sha256_file(original), "source_mode": "live", "metadata_json": "{}"})
+
     def test_same_round_expansion_uses_new_content_address_without_rewriting_old_boundary(self):
         with TemporaryDirectory() as temp:
             root = Path(temp).resolve(); ledger = QuarterlyReviewLedger(root / "runtime/earnings/quarterly.sqlite")
@@ -39,6 +53,48 @@ class EarningsPeriodReviewTests(unittest.TestCase):
             self.assertNotEqual(first_path, second_path)
             self.assertEqual(first_path.read_bytes(), first_bytes)
             self.assertEqual((second["input_fingerprint"], second["reports"]), (row["input_fingerprint"], two))
+            ledger.close()
+
+    def test_same_round_pending_input_starts_new_revision_after_inflight_dag_finishes(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); ledger = QuarterlyReviewLedger(root / "runtime/earnings/quarterly.sqlite")
+            scope = ledger.freeze({"quarter_id": "2026-Q2", "period_start": "2026-04-01", "period_end": "2026-06-30"},
+                {"industry_id": "a", "issuers": [], "key_symbols": []}, "2026-09-20T02:00:00Z", edition="stage")
+            first = [{"issuer_id": "a", "report_id": "A", "task_id": "ta", "path": "report/A.json", "sha256": "A"}]
+            later = first + [{"issuer_id": "b", "report_id": "B", "task_id": "tb", "path": "report/B.json", "sha256": "B"}]
+            ledger.begin_revision(scope["scope_id"], "A", scope["cutoff"], round_id="round", accepted_reports=first)
+            ledger.set_stage(scope["scope_id"], "industry", "running", input_hash="A")
+            self.assertFalse(ledger.begin_revision(scope["scope_id"], "A-B", scope["cutoff"],
+                                                   round_id="round", accepted_reports=later))
+            self.assertEqual(ledger.db.execute("SELECT revision,pending_fingerprint FROM quarterly_scopes").fetchone()[:],
+                             (1, "A-B"))
+            for stage in ("gap_review", "industry", "challenge", "synthesis", "publication", "checker", "cloud"):
+                ledger.set_stage(scope["scope_id"], stage, "completed")
+            self.assertTrue(ledger.begin_revision(scope["scope_id"], "A-B", scope["cutoff"],
+                                                  round_id="round", accepted_reports=later))
+            current = ledger.db.execute("SELECT revision,input_fingerprint,pending_fingerprint FROM quarterly_scopes").fetchone()
+            self.assertEqual(tuple(current), (2, "A-B", None))
+            self.assertEqual(json.loads(ledger.db.execute("SELECT accepted_reports_json FROM quarterly_scopes").fetchone()[0]), later)
+            ledger.close()
+
+    def test_new_cutoff_does_not_reset_inflight_dag_and_is_audited_as_pending(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); ledger = QuarterlyReviewLedger(root / "runtime/earnings/quarterly.sqlite")
+            scope = ledger.freeze({"quarter_id": "2026-Q2", "period_start": "2026-04-01", "period_end": "2026-06-30"},
+                {"industry_id": "a", "issuers": [], "key_symbols": []}, "2026-09-20T02:00:00Z", edition="stage")
+            ledger.begin_revision(scope["scope_id"], "A", scope["cutoff"], round_id="round-1", accepted_reports=[])
+            ledger.set_stage(scope["scope_id"], "industry", "running", input_hash="A")
+            self.assertFalse(ledger.begin_revision(scope["scope_id"], "A-B", "2026-09-21T02:00:00Z",
+                                                   round_id="round-2", accepted_reports=[]))
+            pending = ledger.db.execute("SELECT revision,pending_fingerprint,pending_round_id,pending_cutoff FROM quarterly_scopes").fetchone()
+            self.assertEqual(tuple(pending), (1, "A-B", "round-2", "2026-09-21T02:00:00Z"))
+            self.assertEqual(ledger.db.execute("SELECT state FROM quarterly_stages WHERE stage='industry'").fetchone()[0], "running")
+            for stage in ("gap_review", "industry", "challenge", "synthesis", "publication", "checker", "cloud"):
+                ledger.set_stage(scope["scope_id"], stage, "completed")
+            self.assertTrue(ledger.begin_revision(scope["scope_id"], "A-B", "2026-09-21T02:00:00Z",
+                                                  round_id="round-2", accepted_reports=[]))
+            current = ledger.db.execute("SELECT revision,public_cutoff,pending_round_id,pending_cutoff FROM quarterly_scopes").fetchone()
+            self.assertEqual(tuple(current), (2, "2026-09-21T02:00:00Z", None, None))
             ledger.close()
 
     def test_legacy_fingerprint_migration_binds_reports_without_resetting_stage(self):
@@ -120,6 +176,105 @@ class EarningsPeriodReviewTests(unittest.TestCase):
         self.assertEqual(assessment["coverage_ratio"], 0.9)
         self.assertFalse(assessment["eligible_full"])
         self.assertEqual(assessment["counts"]["key_missing_issuers"], ["i9"])
+
+    def test_stage_trigger_uses_disclosures_not_completed_research(self):
+        expected = [f"i{i}" for i in range(6)]
+        triggered = assess_industry_maturity(
+            expected_issuer_ids=expected, key_issuer_ids=["i0"],
+            disclosed_issuer_ids=expected[:4], fetched_issuer_ids=expected[:3],
+            researched_issuer_ids=expected[:1], critical_gap_status="unresolved",
+            threshold=0.9, stage_threshold=0.6,
+        )
+        self.assertTrue(triggered["eligible_stage"])
+        self.assertEqual(triggered["stage_trigger"], "disclosure_ratio")
+        self.assertFalse(triggered["eligible_full"])
+
+    def test_key_disclosure_triggers_limited_stage_but_two_non_keys_do_not(self):
+        expected = [f"i{i}" for i in range(6)]
+        key = assess_industry_maturity(
+            expected_issuer_ids=expected, key_issuer_ids=["i0"],
+            disclosed_issuer_ids=["i0"], fetched_issuer_ids=["i0"],
+            researched_issuer_ids=["i0"], critical_gap_status="unresolved",
+            threshold=0.9, stage_threshold=0.6,
+        )
+        sparse = assess_industry_maturity(
+            expected_issuer_ids=expected, key_issuer_ids=["i0"],
+            disclosed_issuer_ids=["i1", "i2"], fetched_issuer_ids=["i1", "i2"],
+            researched_issuer_ids=["i1", "i2"], critical_gap_status="unresolved",
+            threshold=0.9, stage_threshold=0.6,
+        )
+        self.assertEqual((key["eligible_stage"], key["stage_trigger"]), (True, "key_disclosure"))
+        self.assertEqual((sparse["eligible_stage"], sparse["stage_trigger"]), (False, None))
+
+    def test_non_tail_four_of_six_disclosures_create_stage_scope_before_research(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); (root / "config").mkdir()
+            config = json.loads((Path(__file__).resolve().parents[1] / "config/earnings_research.json").read_text())
+            config["quarterly"]["automatic_trigger_enabled"] = True
+            config["quarterly"]["initial_backfill_quarters"] = 0
+            atomic_write_json(root / "config/earnings_research.json", config)
+            symbols = [f"S{i}" for i in range(6)]
+            atomic_write_json(root / "config/earnings_universe.json", {"industries": [{"industry_id": "sample",
+                "metric_template": "m", "issuers": [{"symbol": symbol} for symbol in symbols],
+                "key_symbols": ["S0"]}]})
+            state = EarningsState(root / "runtime/earnings/state.sqlite")
+            for index, symbol in enumerate(symbols[:4]):
+                self._register_disclosure(state, root, symbol, index, "2026-04-01", "2026-06-30",
+                                          "2026-08-01T00:00:00Z")
+            state.close()
+            review = inspect_due(root, day="2026-08-10", cutoff="2026-08-10T00:00:00Z",
+                config_path="config/earnings_research.json", universe_path="config/earnings_universe.json")
+            self.assertFalse(review["quarter"]["tail_window"])
+            self.assertEqual(len(review["scopes"]), 1)
+            scope = review["scopes"][0]
+            self.assertEqual(scope["maturity"]["counts"]["disclosed_issuers"], 4)
+            self.assertTrue(scope["eligible_stage"])
+            self.assertEqual(scope["maturity"]["stage_trigger"], "disclosure_ratio")
+            self.assertEqual(scope["finalization"]["state"], "open")
+
+    def test_current_natural_quarter_scope_can_start_from_mapped_key_disclosure(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); (root / "config").mkdir()
+            config = json.loads((Path(__file__).resolve().parents[1] / "config/earnings_research.json").read_text())
+            config["quarterly"]["automatic_trigger_enabled"] = True
+            config["quarterly"]["initial_backfill_quarters"] = 0
+            atomic_write_json(root / "config/earnings_research.json", config)
+            atomic_write_json(root / "config/earnings_universe.json", {"industries": [{"industry_id": "off-cycle",
+                "metric_template": "m", "issuers": [{"symbol": "KEY"}, {"symbol": "PEER"}],
+                "key_symbols": ["KEY"]}]})
+            state = EarningsState(root / "runtime/earnings/state.sqlite")
+            self._register_disclosure(state, root, "KEY", 0, "2026-07-01", "2026-09-15",
+                                      "2026-09-18T00:00:00Z")
+            state.close()
+            review = inspect_due(root, day="2026-09-21", cutoff="2026-09-21T00:00:00Z",
+                config_path="config/earnings_research.json", universe_path="config/earnings_universe.json")
+            scope = next(row for row in review["scopes"] if row["quarter_id"] == "2026-Q3")
+            self.assertTrue(scope["eligible_stage"])
+            self.assertEqual(scope["maturity"]["stage_trigger"], "key_disclosure")
+            self.assertEqual(scope["edition"], "stage")
+
+    def test_legacy_scope_migrates_public_and_research_cutoffs_separately(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); path = root / "runtime/earnings/quarterly.sqlite"; path.parent.mkdir(parents=True)
+            legacy = sqlite3.connect(path)
+            legacy.executescript("""CREATE TABLE quarterly_scopes(scope_id TEXT PRIMARY KEY,quarter_id TEXT NOT NULL,
+              industry_id TEXT NOT NULL,period_start TEXT NOT NULL,period_end TEXT NOT NULL,
+              frozen_universe_json TEXT NOT NULL,frozen_universe_hash TEXT NOT NULL,cutoff TEXT NOT NULL,
+              edition TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,
+              UNIQUE(quarter_id,industry_id,edition));""")
+            legacy.execute("INSERT INTO quarterly_scopes VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                ("consumer", "2026-Q2", "consumer-retail", "2026-04-01", "2026-06-30",
+                 json.dumps({"industry_id": "consumer-retail", "issuers": [], "key_symbols": []}),
+                 "universe", "2026-09-16T02:00:00.189002Z", "stage", "created", "updated"))
+            legacy.commit(); legacy.close()
+            ledger = QuarterlyReviewLedger(path)
+            row = ledger.db.execute("SELECT cutoff,public_cutoff,research_cutoff FROM quarterly_scopes").fetchone()
+            self.assertEqual(tuple(row), ("2026-09-16T02:00:00.189002Z",) * 3)
+            ledger.begin_revision("consumer", "accepted-five", "2026-09-20T16:37:31.718967Z",
+                                  round_id="round-later", accepted_reports=[])
+            row = ledger.db.execute("SELECT public_cutoff,research_cutoff FROM quarterly_scopes").fetchone()
+            self.assertEqual(tuple(row), ("2026-09-16T02:00:00.189002Z", "2026-09-20T16:37:31.718967Z"))
+            ledger.close()
 
     def test_scope_freeze_does_not_accept_later_universe_growth(self):
         with TemporaryDirectory() as temp:
@@ -250,6 +405,28 @@ class EarningsPeriodReviewTests(unittest.TestCase):
             self.assertEqual({row[0] for row in ledger.db.execute("SELECT state FROM quarterly_stages")}, {"pending"})
             revision_file = root / "runtime/earnings/quarterly-scopes" / scope["scope_id"] / "revisions/v2/frozen-scope.json"
             self.assertEqual(json.loads(revision_file.read_text())["cutoff"], "2026-09-02T00:00:00Z")
+            ledger.close()
+
+    def test_finalization_seals_delivered_revision_and_late_input_opens_new_revision(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); ledger = QuarterlyReviewLedger(root / "runtime/earnings/quarterly.sqlite")
+            scope = ledger.freeze({"quarter_id": "2026-Q2", "period_start": "2026-04-01", "period_end": "2026-06-30"},
+                {"industry_id": "a", "issuers": [], "key_symbols": []}, "2026-08-31T00:00:00Z", edition="stage")
+            ledger.begin_revision(scope["scope_id"], "first", scope["cutoff"], round_id="round-1")
+            ledger.db.execute("UPDATE quarterly_scopes SET finalization_state='ready_stage_with_gaps' WHERE scope_id=?",
+                              (scope["scope_id"],))
+            for stage in ("gap_review", "industry", "challenge", "synthesis", "publication", "checker", "cloud"):
+                ledger.set_stage(scope["scope_id"], stage, "completed", artifact_path=f"{stage}.json")
+            self.assertTrue(ledger.finalize_if_ready(scope["scope_id"]))
+            self.assertFalse(ledger.finalize_if_ready(scope["scope_id"]))
+            sealed = ledger.db.execute("SELECT finalization_state,finalized_revision FROM quarterly_scopes").fetchone()
+            self.assertEqual(tuple(sealed), ("finalized_stage_with_gaps", 1))
+            self.assertTrue(ledger.begin_revision(scope["scope_id"], "late-correction", "2026-09-05T00:00:00Z",
+                                                  round_id="round-2"))
+            reopened = ledger.db.execute("SELECT revision,edition,finalization_state,finalized_revision FROM quarterly_scopes").fetchone()
+            self.assertEqual(tuple(reopened), (2, "revision", "open", None))
+            self.assertEqual(ledger.db.execute("SELECT COUNT(*) FROM quarterly_stage_history WHERE revision=1").fetchone()[0],
+                             len(ledger.STAGES))
             ledger.close()
 
     def test_deadline_scope_is_superseded_by_late_accepted_evidence_without_market_completion(self):

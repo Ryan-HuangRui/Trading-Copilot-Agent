@@ -55,6 +55,15 @@ python3 script/earnings_delivery.py --decision runtime/earnings/outbox/<ID>/deci
 
 `earnings-recovery` 同样默认 preview，必须精确指定一个 job/task；`--execute` 前程序以 SQLite backup API 写入 `runtime/earnings/recovery/backups/`，并留下单次恢复审计，禁止对同一目标重复扩张尝试。`resume-checker` 只复用已冻结 writer，`schedule-repair` 只对已有 checker/validator 失败创建唯一修稿，`release-expired-task` 只处理已过期租约。不要删除 SQLite、清空 publication 目录或全量重跑。
 
+失败依赖复用必须先 preview，再对同一精确目标 apply：
+
+```bash
+python3 script/trading_copilot.py earnings-recovery --action reuse-dependency --task-id <FAILED_TASK> --reuse-task-id <OLDER_COMPLETED_TASK> --reason "source hash, semantic config and method are equivalent"
+python3 script/trading_copilot.py earnings-recovery --action reuse-dependency --task-id <FAILED_TASK> --reuse-task-id <OLDER_COMPLETED_TASK> --reason "source hash, semantic config and method are equivalent" --execute
+```
+
+预览会拒绝 subject/期间、文档版本/hash、方法、模型配置或语义配置差异。执行保留失败 attempts，将其标为 `superseded`，重绑依赖并写审计；含修订或重大新事实时不得回退旧结果。
+
 模型错误分为 quota 与 capacity：明确额度耗尽会立即熔断本批次后续模型调用，采集、状态和可恢复队列仍保留；容量不足只进入有限退避，不冒充额度耗尽，也不升级模型。`daily-result.json.usage_summary` 记录本批次真实调用数、缓存/非缓存输入、输出、缺失 usage 和缓存结果复用数；usage 缺失保持 null 语义，不填零。
 
 公司研究任务的配置指纹只包含 source policy、daily profile 和公司研究重试/历史窗口；publication、cloud、通知和批次时间参数不再触发全量公司重研。升级时会复用除旧全量配置哈希外完全相同的 legacy frozen task；已运行任务继续使用创建时冻结的配置哈希。

@@ -113,6 +113,7 @@
   },
   "quarterly": {
     "mature_coverage_ratio": 0.9,
+    "stage_disclosure_ratio": 0.6,
     "require_key_issuers": true,
     "require_completed_company_research": true,
     "require_critical_gap_review": true,

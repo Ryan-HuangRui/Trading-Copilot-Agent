@@ -660,6 +660,8 @@ def run_publication_work(root: Path, config: dict, state: EarningsState, ledger:
         if state.db.execute("SELECT 1 FROM publication_jobs WHERE source_sha256=? AND publication_type=? AND quarter_id=?",
                             (row["sha256"], publication_type, quarter)).fetchone():
             continue
+        if int(existing) > 0:
+            edition = "revision"
         revision = int(existing) + 1; job_id = hashlib.sha256(f"{series_key}:{revision}".encode()).hexdigest()
         now = utc_now()
         with state.immediate() as db:
@@ -817,7 +819,9 @@ def run_publication_work(root: Path, config: dict, state: EarningsState, ledger:
                         JOIN quarterly_stages s ON s.scope_id=q.scope_id AND s.stage='synthesis'
                         WHERE q.industry_id=? AND q.quarter_id=? AND s.artifact_sha256=?""",
                         (job["scope_id"], job["quarter_id"], job["source_sha256"])).fetchone()
-                    if qscope: qledger.set_stage(qscope[0], "cloud", "completed")
+                    if qscope:
+                        qledger.set_stage(qscope[0], "cloud", "completed")
+                        qledger.finalize_if_ready(qscope[0])
                 finally: qledger.close()
             continue
         if not ledger.reserve(day, job["job_id"] + ":cloud", "publication_cloud", cloud_cap): break
@@ -837,7 +841,9 @@ def run_publication_work(root: Path, config: dict, state: EarningsState, ledger:
                         JOIN quarterly_stages s ON s.scope_id=q.scope_id AND s.stage='synthesis'
                         WHERE q.industry_id=? AND q.quarter_id=? AND s.artifact_sha256=?""",
                         (job["scope_id"], job["quarter_id"], job["source_sha256"])).fetchone()
-                    if qscope: qledger.set_stage(qscope[0], "cloud", "completed")
+                    if qscope:
+                        qledger.set_stage(qscope[0], "cloud", "completed")
+                        qledger.finalize_if_ready(qscope[0])
                 finally: qledger.close()
             outcomes.append({"status": "success" if final_state == "complete" else "failed", "job_id": job["job_id"], "cloud": cloud})
         except Exception as exc:

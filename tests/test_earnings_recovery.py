@@ -7,12 +7,42 @@ from datetime import datetime, timedelta, timezone
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "script"))
 
-from earnings_common import atomic_write_json
+from earnings_common import atomic_write_json, sha256_file
 from earnings_recovery import recover
 from earnings_state import EarningsState
 
 
 class EarningsRecoveryTests(unittest.TestCase):
+    def test_dependency_reuse_is_preview_first_backed_up_and_one_shot(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); state = EarningsState(root / "runtime/earnings/state.sqlite")
+            tasks = []
+            for input_hash in ("old", "failed"):
+                task, _ = state.enqueue_task(task_type="company", subject_id="amat", period_start="2026-04-01",
+                    period_end="2026-06-30", input_hash=input_hash, method_version="v1", source_mode="live",
+                    profile="daily", model="gpt-5.6-sol", effort="medium")
+                state.freeze_task_input(task, {"documents": [{"document_id": "amat", "version": 1,
+                    "content_sha256": "a" * 64}], "configuration_hash": "same"}, input_hash)
+                tasks.append(task)
+            state.db.execute("UPDATE research_tasks SET state='completed',output_manifest='old.json' WHERE task_id=?", (tasks[0],))
+            report = root / "report/earnings/amat.json"
+            atomic_write_json(report, {"report_id": "amat-report", "task_id": tasks[0]})
+            state.db.execute("INSERT INTO report_artifacts VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                ("amat-report", tasks[0], "company", "amat", "2026-04-01", "2026-06-30",
+                 str(report.relative_to(root)), sha256_file(report), "manifest", "live", "partial", "now"))
+            state.db.execute("UPDATE research_tasks SET state='terminal_failed',attempts=2 WHERE task_id=?", (tasks[1],))
+            state.close()
+            preview = recover(root, action="reuse-dependency", task_id=tasks[1], reuse_task_id=tasks[0],
+                              reason="equivalent AMAT source and method")
+            self.assertTrue(preview["planned"]["eligible"])
+            result = recover(root, action="reuse-dependency", task_id=tasks[1], reuse_task_id=tasks[0],
+                             reason="equivalent AMAT source and method", execute=True)
+            self.assertEqual(result["status"], "success")
+            self.assertTrue((root / result["backup_path"]).exists())
+            with self.assertRaisesRegex(ValueError, "already executed"):
+                recover(root, action="reuse-dependency", task_id=tasks[1], reuse_task_id=tasks[0],
+                        reason="equivalent AMAT source and method", execute=True)
+
     def test_release_expired_task_mutates_only_selected_lease(self):
         with TemporaryDirectory() as temp:
             root = Path(temp).resolve()

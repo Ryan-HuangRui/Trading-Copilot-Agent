@@ -25,7 +25,7 @@ def _backup(state: EarningsState, target: Path) -> None:
 
 
 def recover(root: Path, *, action: str, job_id: str | None = None, task_id: str | None = None,
-            execute: bool = False) -> dict:
+            reuse_task_id: str | None = None, reason: str | None = None, execute: bool = False) -> dict:
     root = root.resolve()
     target_id = safe_segment(job_id or task_id or "", "recovery target")
     audit_dir = root / "runtime/earnings/recovery"
@@ -66,6 +66,18 @@ def recover(root: Path, *, action: str, job_id: str | None = None, task_id: str 
                     raise ValueError("schedule-repair requires a persisted failed runner result")
                 mutation = {"state": "retryable_failed", "attempts": 1,
                             "input_manifest_path": row["input_manifest_path"], "create_repair": True}
+        elif action == "reuse-dependency":
+            if not task_id or not reuse_task_id or job_id:
+                raise ValueError("dependency reuse requires --task-id and --reuse-task-id")
+            before_row = state.db.execute("SELECT * FROM research_tasks WHERE task_id=?", (task_id,)).fetchone()
+            if not before_row:
+                raise ValueError("unknown failed dependency task")
+            before = dict(before_row)
+            mutation = state.preview_dependency_reuse(task_id, reuse_task_id)
+            if not mutation["eligible"]:
+                raise ValueError(f"dependency tasks are not equivalent: {', '.join(mutation['differences'])}")
+            if not (reason or "").strip():
+                raise ValueError("dependency reuse requires --reason")
         elif action == "release-expired-task":
             if not task_id or job_id:
                 raise ValueError("task recovery requires exactly --task-id")
@@ -106,6 +118,8 @@ def recover(root: Path, *, action: str, job_id: str | None = None, task_id: str 
               publication_manifest_path=NULL,error=?,updated_at=? WHERE job_id=?""",
               (mutation["state"], mutation["attempts"], mutation["input_manifest_path"],
                f"operator bounded recovery: {action}", utc_now(), job_id))
+        elif action == "reuse-dependency":
+            state.apply_dependency_reuse(task_id, reuse_task_id, reason=reason or "")
         else:
             cursor = state.db.execute("""UPDATE research_tasks SET state=?,error=?,lease_owner=NULL,
               lease_expires_at=NULL,updated_at=? WHERE task_id=? AND state='running'
@@ -127,14 +141,17 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", default=str(ROOT))
     parser.add_argument("--action", required=True,
-                        choices=["resume-checker", "schedule-repair", "release-expired-task"])
+                        choices=["resume-checker", "schedule-repair", "release-expired-task", "reuse-dependency"])
     parser.add_argument("--job-id")
     parser.add_argument("--task-id")
+    parser.add_argument("--reuse-task-id")
+    parser.add_argument("--reason")
     parser.add_argument("--execute", action="store_true")
     args = parser.parse_args()
     try:
         result = recover(Path(args.repo_root), action=args.action, job_id=args.job_id,
-                         task_id=args.task_id, execute=args.execute)
+                         task_id=args.task_id, reuse_task_id=args.reuse_task_id,
+                         reason=args.reason, execute=args.execute)
     except (ValueError, OSError, sqlite3.Error, KeyError, json.JSONDecodeError) as exc:
         result = {"workflow": "earnings-recovery", "status": "failed", "reason": str(exc)}
     print(json.dumps(result, ensure_ascii=False))

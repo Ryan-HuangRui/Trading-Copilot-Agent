@@ -7,7 +7,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "script"))
 
-from earnings_common import classify_model_failure, company_research_configuration_hash
+from earnings_common import atomic_write_json, classify_model_failure, company_research_configuration_hash, sha256_file
 from earnings_state import EarningsState
 
 
@@ -75,6 +75,49 @@ class EarningsStateTests(unittest.TestCase):
         self.assertIn(newer, [row["task_id"] for row in claimed])
         self.assertNotIn(child, [row["task_id"] for row in claimed])
         self.assertIsNone(self.state.claim_task(child, owner="x", lease_seconds=60))
+
+    def test_failed_dependency_reuse_requires_exact_frozen_semantics_and_is_audited(self):
+        old, _ = self.state.enqueue_task(task_type="company", subject_id="amat", period_start="2026-04-01",
+            period_end="2026-06-30", input_hash="same", method_version="v1", source_mode="live",
+            profile="daily", model="gpt-5.6-sol", effort="medium")
+        self.state.freeze_task_input(old, {"documents": [{"document_id": "d", "version": 1,
+            "content_sha256": "a" * 64}], "configuration_hash": "config"}, "same")
+        self.state.db.execute("UPDATE research_tasks SET state='completed',output_manifest='old-output.json' WHERE task_id=?", (old,))
+        report = Path(self.temp.name) / "report/earnings/amat.json"
+        atomic_write_json(report, {"report_id": "amat-report", "task_id": old})
+        self.state.db.execute("INSERT INTO report_artifacts VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            ("amat-report", old, "company", "amat", "2026-04-01", "2026-06-30",
+             str(report.relative_to(Path(self.temp.name))), sha256_file(report), "manifest", "live", "partial", "now"))
+        failed, _ = self.state.enqueue_task(task_type="company", subject_id="amat", period_start="2026-04-01",
+            period_end="2026-06-30", input_hash="same-new-task", method_version="v1", source_mode="live",
+            profile="daily", model="gpt-5.6-sol", effort="medium")
+        self.state.freeze_task_input(failed, {"documents": [{"document_id": "d", "version": 1,
+            "content_sha256": "a" * 64}], "configuration_hash": "config"}, "same-new-task")
+        self.state.db.execute("UPDATE research_tasks SET state='terminal_failed',attempts=2,error='AMAT failed' WHERE task_id=?", (failed,))
+        preview = self.state.preview_dependency_reuse(failed, old)
+        self.assertTrue(preview["eligible"])
+        applied = self.state.apply_dependency_reuse(failed, old, reason="source/hash/config/method equivalent")
+        self.assertEqual(applied["status"], "superseded")
+        row = self.state.db.execute("SELECT state,attempts,error FROM research_tasks WHERE task_id=?", (failed,)).fetchone()
+        self.assertEqual((row["state"], row["attempts"]), ("superseded", 2))
+        self.assertIn(old, row["error"])
+        self.assertEqual(self.state.db.execute("SELECT COUNT(*) FROM dependency_reuse_audit").fetchone()[0], 1)
+
+    def test_failed_dependency_reuse_rejects_revised_source_hash(self):
+        old = self.enqueue("amat-old")
+        failed = self.enqueue("amat-failed")
+        self.state.freeze_task_input(old, {"documents": [{"document_id": "d", "version": 1,
+            "content_sha256": "a" * 64}], "configuration_hash": "config"}, "hash-amat-old")
+        self.state.freeze_task_input(failed, {"documents": [{"document_id": "d", "version": 2,
+            "content_sha256": "b" * 64}], "configuration_hash": "config"}, "hash-amat-failed")
+        self.state.db.execute("UPDATE research_tasks SET state='completed',output_manifest='old-output.json' WHERE task_id=?", (old,))
+        self.state.db.execute("UPDATE research_tasks SET state='terminal_failed' WHERE task_id=?", (failed,))
+        preview = self.state.preview_dependency_reuse(failed, old)
+        self.assertFalse(preview["eligible"])
+        self.assertIn("subject", preview["differences"])
+        self.assertIn("documents", preview["differences"])
+        with self.assertRaisesRegex(ValueError, "not equivalent"):
+            self.state.apply_dependency_reuse(failed, old, reason="must not fall back")
 
     def test_company_queue_round_robins_issuers_before_deeper_history(self):
         for issuer in ("issuer-a", "issuer-b"):

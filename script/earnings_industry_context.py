@@ -40,6 +40,12 @@ def _registered_report(state: EarningsState, root: Path, path_text: str) -> tupl
     return read_json(path), dict(row)
 
 
+def _evidence_within_cutoff(report: dict[str, Any], cutoff: str) -> bool:
+    """A later-created accepted report is legal only when every cited source was already public."""
+    timestamps = [row.get("public_timestamp") for row in report.get("evidence", [])]
+    return bool(timestamps and all(value and parse_time(value) <= parse_time(cutoff) for value in timestamps))
+
+
 def _company_inputs(state: EarningsState, root: Path, issuer_ids: list[str], period_start: str, period_end: str,
                     cutoff: str, research_quarter: str | None = None,
                     accepted_reports: list[dict[str, Any]] | None = None) -> tuple[list[dict[str, Any]], list[str]]:
@@ -62,7 +68,9 @@ def _company_inputs(state: EarningsState, root: Path, issuer_ids: list[str], per
                     continue
                 candidate_path = ensure_inside(resolve_path(root, candidate["path"]), [root / "report" / "earnings"])
                 candidate_report = read_json(candidate_path)
-                if parse_time(candidate_report.get("cutoff")) > parse_time(cutoff): continue
+                if parse_time(candidate_report.get("cutoff")) > parse_time(cutoff):
+                    if accepted_reports is None or not _evidence_within_cutoff(candidate_report, cutoff):
+                        continue
                 if research_quarter:
                     from earnings_period_review import resolve_report_period
                     try: mapped = resolve_report_period(candidate_report)

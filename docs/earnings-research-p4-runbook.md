@@ -77,6 +77,8 @@ adapter 的参数形状按官方 lark-cli 文档：它把 cwd 固定到准备目
 
 NAS 的 `runtime/earnings/p4-config.json` 应从新 tracked 配置按键合并，保留现有 activation flags、路径和身份配置，不整文件覆盖：`company_history_limit=0`、`publication_backfill_limit=0`、`publication_repairs_per_day=1`、`publication_full_start_threshold_seconds=900`、`publication_checker_start_threshold_seconds=480`、`publication_stage_timeout_seconds=900`、`phase_reserve_seconds=1200`。前两项暂停历史独立补稿，但历史证据仍可进入当前分析；`daily_company_limit`/`strong_season_company_limit` 是每个 continuation window 的软配额，不扩大单次调用。部署文件可设置 `continuation_worker_seconds`（建议 8400）、`continuation_window_seconds`（建议 1800）、`continuation_finalize_reserve_seconds`（建议 120）和 `continuation_no_progress_windows`（建议 2）。部署前先用 `earnings-recovery` preview 精确列出待恢复 job；备份后只恢复所选任务。
 
+滚动行业研究还需合并 `quarterly.stage_disclosure_ratio=0.6`。这不是完整度门槛：达到约 60% 披露或关键龙头披露只创建有限样本 stage，随后仍须完成 gap audit、industry、challenge、synthesis、writer、checker 与 cloud/archive。`tail_end` 仅触发封板/补缺检查；缺口存在时封为 `finalized_stage_with_gaps`，不得改写成 full。scope registry 会把 public cutoff 与 research cutoff 分列迁移，部署前备份 `quarterly.sqlite`，先离线运行 review-context/status 验证数量与 cutoff，再启动 muted continuation worker。
+
 现有 150 分钟 muted cron 不删除 timeout，也不新增高频 cron。部署后 wrapper 启动后台 continuation worker 并立即返回；检查 `continuation.sqlite`、worker 日志和 PID 留存。若 NAS/cc-connect 会清理 detached 子进程，使用 NAS 已有服务管理器运行同一 `earnings_continuation.py --worker` 命令，并以 starter 负责唤醒；禁止假设不存在的 cc-connect 参数。回滚时恢复旧 wrapper 即可，不能删除 continuation/research SQLite 或重置 attempts。
 
 母会话部署时按以下顺序执行（本实现任务不在线操作）：

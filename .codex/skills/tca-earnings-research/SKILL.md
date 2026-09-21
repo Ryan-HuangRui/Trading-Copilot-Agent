@@ -40,3 +40,16 @@ bounded worker generations while progress is being made. Do not admit disclosure
 cutoff, rebuild an in-flight industry revision from a newer global head, or declare quota, capacity,
 terminal failure or cloud `unknown` as completion. Current company/industry work and checked reader
 delivery precede historical standalone backfill, which is normally paused.
+
+Quarterly industry work is rolling rather than tail-only. Create a scope when cutoff-valid mapped
+disclosures reach the configured stage ratio (default 60%, so four of six) or a configured key issuer
+discloses. Keep disclosed, fetched, accepted research and checked publication separate. A triggered
+scope with insufficient accepted facts waits for the necessary company research, then resumes the
+same stage DAG; it never fabricates coverage. Later material accepted inputs enter a new immutable
+revision after the in-flight revision finishes. Quarter-end/tail is a finalization and gap checkpoint,
+not an initial-start gate; a finalized report with gaps remains a stage final, never full.
+
+Operational recovery stays exact-target and preview-first. A failed newer company dependency may
+reuse an older completed result only when frozen source versions/hashes, subject/period, method,
+model profile and semantic configuration are equivalent. Apply through `earnings-recovery
+--action reuse-dependency` with an explicit reason; retain failed attempts and the audit record.

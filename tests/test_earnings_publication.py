@@ -100,6 +100,48 @@ class EarningsPublicationTests(unittest.TestCase):
         self.assertEqual(facts["UnknownCurrency"]["unit"], "million")
         self.assertEqual(facts["UnknownCurrency"]["display_candidates"], [])
 
+    def test_managed_care_plural_scale_facts_bind_to_chinese_table_header(self):
+        report = json.loads(json.dumps(SOURCE))
+        q2 = {"kind": "duration", "start": "2026-04-01", "end": "2026-06-30"}
+        h1 = {"kind": "duration", "start": "2026-01-01", "end": "2026-06-30"}
+        values = [("health_benefits_operating_gain", "896", q2),
+                  ("carelonrx_operating_gain", "582", q2),
+                  ("carelon_services_operating_gain", "366", q2),
+                  ("operating_cash_flow", "6245", h1),
+                  ("working_capital_cash_flow_contribution", "4706", h1),
+                  ("prior_period_claim_development", "1195", h1)]
+        report["evidence"][0]["numeric_facts"] = [
+            {"metric": metric, "value": value, "unit": "USD millions", "currency": "USD",
+             "accounting_basis": "US GAAP", "period": period}
+            for metric, value, period in values]
+        body = markdown().replace("收入为 100 百万美元", "保险经营保持承压").replace(
+            "收入为 100 百万美元，增长也可能来自并购。", "经营变化需按分部核对。")
+        body += """
+| 指标 | 口径 | 数值（百万美元） |
+|---|---|---:|
+| Health Benefits经营收益 | 经营期间 2026-04-01 至 2026-06-30 | 896 |
+| CarelonRx经营收益 | 经营期间 2026-04-01 至 2026-06-30 | 582 |
+| Carelon Services经营收益 | 经营期间 2026-04-01 至 2026-06-30 | 366 |
+| 经营现金流 | 经营期间 2026-01-01 至 2026-06-30 | 6245 |
+| 营运资本贡献 | 经营期间 2026-01-01 至 2026-06-30 | 4706 |
+| 前期索赔有利发展 | 经营期间 2026-01-01 至 2026-06-30 | 1195 |
+"""
+        catalog = financial_fact_catalog([report])
+        facts = {row["value"]: row for row in catalog["facts"]}
+        claims = claim_occurrence_inventory(body)["claims"]
+        bindings = [{**facts[row["value"]], "display": row["display"], "occurrence": row["occurrence"]}
+                    for row in claims]
+        result = validate_reader_markdown(body, [report], publication_type="company",
+                                          explicit_fact_bindings=bindings)
+        self.assertEqual(result["status"], "passed", result["errors"])
+        self.assertEqual({row["display"] for row in result["fact_mappings"]},
+                         {"896", "582", "366", "6245", "4706", "1195"})
+        wrong_unit = body.replace("数值（百万美元）", "数值（百万元）")
+        self.assertEqual(validate_reader_markdown(wrong_unit, [report])["status"], "failed")
+        wrong_period = body.replace("2026-01-01 至 2026-06-30 | 6245",
+                                    "2025-01-01 至 2025-06-30 | 6245")
+        self.assertEqual(validate_reader_markdown(wrong_period, [report])["status"], "failed")
+
     def test_financial_catalog_uses_stable_ids_and_only_legitimate_derivations(self):
         report = json.loads(json.dumps(SOURCE))
         report["evidence"][0]["numeric_facts"].extend([
