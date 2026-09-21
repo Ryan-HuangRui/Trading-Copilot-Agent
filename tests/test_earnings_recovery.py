@@ -10,6 +10,7 @@ sys.path.insert(0, str(ROOT / "script"))
 
 from earnings_common import atomic_write_json, sha256_file
 from earnings_recovery import recover
+from earnings_period_review import QuarterlyReviewLedger
 from earnings_state import EarningsState
 
 
@@ -94,7 +95,7 @@ class EarningsRecoveryTests(unittest.TestCase):
             self.assertEqual(rows[task_ids[1]], "running")
             state.close()
 
-    def test_dependency_exclusion_is_preview_first_backed_up_and_releases_older_head(self):
+    def test_dependency_exclusion_is_preview_first_backed_up_and_blocks_older_head(self):
         with TemporaryDirectory() as temp:
             root = Path(temp).resolve(); state = EarningsState(root / "runtime/earnings/state.sqlite")
             old, _ = state.enqueue_task(task_type="company", subject_id="amat", period_start=None, period_end="2026-07-26",
@@ -115,7 +116,36 @@ class EarningsRecoveryTests(unittest.TestCase):
             state = EarningsState(root / "runtime/earnings/state.sqlite")
             self.assertEqual(state.db.execute("SELECT state FROM research_tasks WHERE task_id=?", (failed,)).fetchone()[0],
                              "excluded")
-            self.assertEqual(state.claim_task(child, owner="limited", lease_seconds=60)["task_id"], child)
+            self.assertIsNone(state.claim_task(child, owner="limited", lease_seconds=60))
+            state.close()
+
+    def test_dependency_exclusion_refuses_running_frozen_quarterly_scope(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); state = EarningsState(root / "runtime/earnings/state.sqlite")
+            old, _ = state.enqueue_task(task_type="company", subject_id="event", period_start=None,
+                period_end="2026-07-26", input_hash="old", method_version="v1", source_mode="live",
+                profile="daily", model="m", effort="e")
+            state.db.execute("UPDATE research_tasks SET state='completed' WHERE task_id=?", (old,))
+            report = root / "report/earnings/old.json"; atomic_write_json(report, {"report_id": "old"})
+            state.db.execute("INSERT INTO report_artifacts VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", ("old", old, "company",
+                "event", None, "2026-07-26", str(report.relative_to(root)), sha256_file(report), "m", "live",
+                "partial", "2026-08-01T00:00:00Z"))
+            failed, _ = state.enqueue_task(task_type="company", subject_id="event", period_start=None,
+                period_end="2026-07-26", input_hash="new", method_version="v1", source_mode="live",
+                profile="daily", model="m", effort="e")
+            state.db.execute("UPDATE research_tasks SET state='terminal_failed' WHERE task_id=?", (failed,)); state.close()
+            ledger = QuarterlyReviewLedger(root / "runtime/earnings/quarterly.sqlite")
+            scope = ledger.freeze({"quarter_id": "2026-Q2", "period_start": "2026-04-01", "period_end": "2026-06-30"},
+                {"industry_id": "semi", "issuers": [], "key_symbols": []}, "2026-08-01T00:00:00Z", edition="stage")
+            ledger.begin_revision(scope["scope_id"], "old-boundary", scope["cutoff"], accepted_reports=[{
+                "issuer_id": "issuer", "report_id": "old", "task_id": old,
+                "path": str(report.relative_to(root)), "sha256": sha256_file(report)}])
+            ledger.set_stage(scope["scope_id"], "industry", "running"); ledger.close()
+            with self.assertRaisesRegex(ValueError, "running_quarterly_scope"):
+                recover(root, action="exclude-dependency", task_id=failed, reason="cannot prove revision")
+            state = EarningsState(root / "runtime/earnings/state.sqlite")
+            self.assertEqual(state.db.execute("SELECT state FROM research_tasks WHERE task_id=?", (failed,)).fetchone()[0],
+                             "terminal_failed")
             state.close()
 
     def test_exact_checker_recovery_previews_then_backs_up_and_executes_once(self):

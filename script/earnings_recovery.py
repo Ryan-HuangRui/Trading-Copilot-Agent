@@ -24,6 +24,49 @@ def _backup(state: EarningsState, target: Path) -> None:
         destination.close()
 
 
+def _affected_quarterly_scopes(root: Path, state: EarningsState, task_id: str) -> list[dict]:
+    quarterly_path = root / "runtime/earnings/quarterly.sqlite"
+    if not quarterly_path.exists():
+        return []
+    failed = state.db.execute("SELECT * FROM research_tasks WHERE task_id=?", (task_id,)).fetchone()
+    db = sqlite3.connect(quarterly_path); db.row_factory = sqlite3.Row
+    try:
+        affected = []
+        for scope in db.execute("SELECT scope_id,revision,accepted_reports_json FROM quarterly_scopes"):
+            reports = json.loads(scope["accepted_reports_json"] or "[]")
+            matching = []
+            for report in reports:
+                row = state.db.execute("""SELECT t.* FROM report_artifacts a JOIN research_tasks t ON t.task_id=a.task_id
+                  WHERE a.report_id=? AND a.sha256=?""", (report.get("report_id"), report.get("sha256"))).fetchone()
+                if row and (row["task_type"], row["subject_id"], row["period_start"], row["period_end"], row["source_mode"]) == (
+                        failed["task_type"], failed["subject_id"], failed["period_start"], failed["period_end"], failed["source_mode"]):
+                    matching.append(row["task_id"])
+            if not matching:
+                continue
+            stages = {row["stage"]: row["state"] for row in db.execute(
+                "SELECT stage,state FROM quarterly_stages WHERE scope_id=?", (scope["scope_id"],))}
+            affected.append({"scope_id": scope["scope_id"], "revision": scope["revision"],
+                             "accepted_task_ids": matching, "stages": stages})
+        return affected
+    finally:
+        db.close()
+
+
+def _close_affected_quarterly_scopes(root: Path, affected: list[dict], task_id: str, reason: str) -> None:
+    if not affected:
+        return
+    db = sqlite3.connect(root / "runtime/earnings/quarterly.sqlite")
+    try:
+        now = utc_now()
+        for scope in affected:
+            db.execute("""UPDATE quarterly_stages SET state='blocked',error=?,updated_at=?
+              WHERE scope_id=? AND state!='completed'""",
+              (f"frozen input excluded by {task_id}: {reason}", now, scope["scope_id"]))
+        db.commit()
+    finally:
+        db.close()
+
+
 def recover(root: Path, *, action: str, job_id: str | None = None, task_id: str | None = None,
             reuse_task_id: str | None = None, reason: str | None = None, execute: bool = False) -> dict:
     root = root.resolve()
@@ -89,6 +132,13 @@ def recover(root: Path, *, action: str, job_id: str | None = None, task_id: str 
             before_row = state.db.execute("SELECT * FROM research_tasks WHERE task_id=?", (task_id,)).fetchone()
             if not before_row: raise ValueError("unknown failed dependency task")
             before = dict(before_row); mutation = state.preview_dependency_exclusion(task_id)
+            affected = _affected_quarterly_scopes(root, state, task_id)
+            running = [scope["scope_id"] for scope in affected if "running" in scope["stages"].values()]
+            mutation["affected_quarterly_scopes"] = affected
+            if running:
+                mutation["eligible"] = False
+                mutation["differences"] = list(mutation["differences"]) + ["running_quarterly_scope"]
+                mutation["running_quarterly_scopes"] = running
             if not mutation["eligible"]:
                 raise ValueError(f"dependency task is not excludable: {', '.join(mutation['differences'])}")
             if not (reason or "").strip(): raise ValueError("dependency exclusion requires --reason")
@@ -124,6 +174,13 @@ def recover(root: Path, *, action: str, job_id: str | None = None, task_id: str 
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         backup = audit_dir / "backups" / f"state-{timestamp}-{target_id}.sqlite"
         _backup(state, backup)
+        quarterly_backup = None
+        if action == "exclude-dependency" and mutation.get("affected_quarterly_scopes"):
+            quarterly_backup = audit_dir / "backups" / f"quarterly-{timestamp}-{target_id}.sqlite"
+            source = sqlite3.connect(root / "runtime/earnings/quarterly.sqlite")
+            destination = sqlite3.connect(quarterly_backup)
+            try: source.backup(destination)
+            finally: source.close(); destination.close()
         if action == "recheck-publication":
             rechecked = recheck_publication(root, root / before["input_manifest_path"])
             if rechecked.get("status") != "success" or not rechecked.get("manifest_path"):
@@ -147,6 +204,8 @@ def recover(root: Path, *, action: str, job_id: str | None = None, task_id: str 
             state.apply_dependency_reuse(task_id, reuse_task_id, reason=reason or "")
         elif action == "exclude-dependency":
             state.apply_dependency_exclusion(task_id, reason=reason or "")
+            _close_affected_quarterly_scopes(root, mutation.get("affected_quarterly_scopes", []),
+                                             task_id, reason or "")
         else:
             cursor = state.db.execute("""UPDATE research_tasks SET state=?,error=?,lease_owner=NULL,
               lease_expires_at=NULL,updated_at=? WHERE task_id=? AND state='running'
@@ -156,6 +215,8 @@ def recover(root: Path, *, action: str, job_id: str | None = None, task_id: str 
             if cursor.rowcount != 1:
                 raise ValueError("research task changed after preview; no recovery applied")
         result.update(status="success", executed=True, backup_path=str(backup.relative_to(root)), executed_at=utc_now())
+        if quarterly_backup:
+            result["quarterly_backup_path"] = str(quarterly_backup.relative_to(root))
         audit_dir.mkdir(parents=True, exist_ok=True)
         atomic_write_json(audit_path, result)
         return result

@@ -166,7 +166,7 @@ class EarningsStateTests(unittest.TestCase):
         proof = self.state.preview_dependency_reuse(tasks[0], tasks[1])
         self.assertTrue(proof["eligible"]); self.assertTrue(proof["configuration_proofs"]["equivalent"])
 
-    def test_explicit_dependency_exclusion_releases_limited_stage_but_preserves_failure(self):
+    def test_explicit_dependency_exclusion_blocks_older_head_and_preserves_failure(self):
         old = self.enqueue("excluded")
         self.state.complete_task(old, "old.json")
         failed, _ = self.state.enqueue_task(task_type="company", subject_id="excluded", period_start="2026-01-01",
@@ -177,7 +177,8 @@ class EarningsStateTests(unittest.TestCase):
         self.assertIsNone(self.state.claim_task(child, owner="before", lease_seconds=60))
         applied = self.state.apply_dependency_exclusion(failed, reason="semantic config proof unavailable")
         self.assertEqual(applied["failed_before"]["error"], "original")
-        self.assertEqual(self.state.claim_task(child, owner="after", lease_seconds=60)["task_id"], child)
+        self.assertIsNone(self.state.claim_task(child, owner="after", lease_seconds=60))
+        self.assertEqual(self.state.task_blocked_by_exclusion(old)["failed_task_id"], failed)
 
     def test_company_queue_round_robins_issuers_before_deeper_history(self):
         for issuer in ("issuer-a", "issuer-b"):

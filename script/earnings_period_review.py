@@ -130,10 +130,12 @@ def _quarter_deadline(quarter_id: str, seasons: list[dict[str, Any]]) -> date:
 def assess_industry_maturity(*, expected_issuer_ids: Iterable[str], key_issuer_ids: Iterable[str],
                              disclosed_issuer_ids: Iterable[str], fetched_issuer_ids: Iterable[str],
                              researched_issuer_ids: Iterable[str], critical_gap_status: str,
-                             threshold: float = 0.9, stage_threshold: float = 0.6) -> dict[str, Any]:
+                             threshold: float = 0.9, stage_threshold: float = 0.6,
+                             excluded_issuer_ids: Iterable[str] = ()) -> dict[str, Any]:
     expected = list(dict.fromkeys(expected_issuer_ids))
     key = set(key_issuer_ids); disclosed = set(disclosed_issuer_ids); fetched = set(fetched_issuer_ids)
     researched = set(researched_issuer_ids)
+    excluded = sorted(set(excluded_issuer_ids) & set(expected))
     expected_set = set(expected)
     disclosed &= expected_set; fetched &= disclosed; researched &= fetched
     key_missing = sorted(key - researched)
@@ -149,9 +151,11 @@ def assess_industry_maturity(*, expected_issuer_ids: Iterable[str], key_issuer_i
             "eligible_stage": stage_trigger is not None,
             "key_issuers_complete": not key_missing,
             "company_research_complete": disclosed <= researched,
+            "excluded_input_issuers": excluded,
+            "deterministic_exclusion_block": bool(excluded),
             "critical_gap_status": critical_gap_status,
             "eligible_full": bool(ratio >= threshold and not key_missing and disclosed <= researched
-                                  and critical_gap_status in {"resolved", "disclosed"})}
+                                  and not excluded and critical_gap_status in {"resolved", "disclosed"})}
 
 
 class QuarterlyReviewLedger:
@@ -200,7 +204,9 @@ class QuarterlyReviewLedger:
             ("active_round_id", "TEXT"), ("pending_fingerprint", "TEXT"),
             ("pending_round_id", "TEXT"), ("pending_cutoff", "TEXT"),
             ("accepted_reports_json", "TEXT NOT NULL DEFAULT '[]'"),
+            ("excluded_inputs_json", "TEXT NOT NULL DEFAULT '[]'"),
             ("pending_reports_json", "TEXT"),
+            ("pending_exclusions_json", "TEXT"),
             ("active_input_path", "TEXT"),
             ("public_cutoff", "TEXT"), ("research_cutoff", "TEXT"),
             ("finalization_state", "TEXT NOT NULL DEFAULT 'open'"),
@@ -298,7 +304,8 @@ class QuarterlyReviewLedger:
             "public_cutoff": payload.get("public_cutoff") or payload["cutoff"],
             "research_cutoff": payload.get("research_cutoff") or payload["cutoff"],
             "input_fingerprint": payload.get("input_fingerprint"),
-            "reports": json.loads(payload.get("accepted_reports_json") or "[]")}
+            "reports": json.loads(payload.get("accepted_reports_json") or "[]"),
+            "exclusions": json.loads(payload.get("excluded_inputs_json") or "[]")}
         digest = sha256_bytes(canonical_json(boundary))
         path = base / "inputs" / f"{digest}.json"
         if path.exists():
@@ -317,15 +324,17 @@ class QuarterlyReviewLedger:
         return relative
 
     def begin_revision(self, scope_id: str, input_fingerprint: str, cutoff: str, *,
-                       round_id: str | None = None, accepted_reports: list[dict[str, Any]] | None = None) -> bool:
+                       round_id: str | None = None, accepted_reports: list[dict[str, Any]] | None = None,
+                       excluded_inputs: list[dict[str, Any]] | None = None) -> bool:
         row = self.db.execute("SELECT * FROM quarterly_scopes WHERE scope_id=?", (scope_id,)).fetchone()
         if not row: raise ValueError("quarterly scope missing")
         round_key = round_id or f"cutoff:{cutoff}"
         reports_json = json.dumps(accepted_reports or [], ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        exclusions_json = json.dumps(excluded_inputs or [], ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         if not row["input_fingerprint"]:
             self.db.execute("""UPDATE quarterly_scopes SET input_fingerprint=?,active_round_id=?,
-              accepted_reports_json=?,research_cutoff=?,updated_at=? WHERE scope_id=?""",
-              (input_fingerprint, round_key, reports_json, cutoff, utc_now(), scope_id))
+              accepted_reports_json=?,excluded_inputs_json=?,research_cutoff=?,updated_at=? WHERE scope_id=?""",
+              (input_fingerprint, round_key, reports_json, exclusions_json, cutoff, utc_now(), scope_id))
             self.db.execute("INSERT OR REPLACE INTO quarterly_input_boundaries VALUES(?,?,?,?,?,?,?,?,?,?)",
               (scope_id, round_key, row["revision"], cutoff, input_fingerprint, reports_json,
                None, None, "accepted_initial", utc_now()))
@@ -339,9 +348,9 @@ class QuarterlyReviewLedger:
               AND stage IN ('gap_review','industry','challenge','synthesis','publication','checker','cloud')
               AND state NOT IN ('completed','blocked') LIMIT 1""", (scope_id,)).fetchone()
             if started and incomplete:
-                self.db.execute("""UPDATE quarterly_scopes SET pending_fingerprint=?,pending_reports_json=?,
+                self.db.execute("""UPDATE quarterly_scopes SET pending_fingerprint=?,pending_reports_json=?,pending_exclusions_json=?,
                   pending_round_id=?,pending_cutoff=?,updated_at=? WHERE scope_id=?""",
-                  (input_fingerprint, reports_json, round_key, cutoff, utc_now(), scope_id))
+                  (input_fingerprint, reports_json, exclusions_json, round_key, cutoff, utc_now(), scope_id))
                 self.db.execute("INSERT OR REPLACE INTO quarterly_input_boundaries VALUES(?,?,?,?,?,?,?,?,?,?)",
                   (scope_id, round_key, row["revision"], row["cutoff"], row["input_fingerprint"],
                    row["accepted_reports_json"] or "[]", input_fingerprint, reports_json,
@@ -350,8 +359,8 @@ class QuarterlyReviewLedger:
         if row["active_round_id"] == round_key:
             if row["input_fingerprint"] == input_fingerprint:
                 if not json.loads(row["accepted_reports_json"] or "[]") and accepted_reports:
-                    self.db.execute("UPDATE quarterly_scopes SET accepted_reports_json=?,updated_at=? WHERE scope_id=?",
-                                    (reports_json, utc_now(), scope_id)); self.db.commit()
+                    self.db.execute("UPDATE quarterly_scopes SET accepted_reports_json=?,excluded_inputs_json=?,updated_at=? WHERE scope_id=?",
+                                    (reports_json, exclusions_json, utc_now(), scope_id)); self.db.commit()
                     current = dict(self.db.execute("SELECT * FROM quarterly_scopes WHERE scope_id=?", (scope_id,)).fetchone())
                     current["cutoff"] = cutoff
                     self._write_accepted_input(current)
@@ -365,9 +374,9 @@ class QuarterlyReviewLedger:
                   AND state NOT IN ('completed','blocked') LIMIT 1""",
                   (scope_id,)).fetchone()
                 if incomplete:
-                    self.db.execute("""UPDATE quarterly_scopes SET pending_fingerprint=?,pending_reports_json=?,
+                    self.db.execute("""UPDATE quarterly_scopes SET pending_fingerprint=?,pending_reports_json=?,pending_exclusions_json=?,
                       pending_round_id=?,pending_cutoff=?,updated_at=?
-                      WHERE scope_id=?""", (input_fingerprint, reports_json, round_key, cutoff, utc_now(), scope_id))
+                      WHERE scope_id=?""", (input_fingerprint, reports_json, exclusions_json, round_key, cutoff, utc_now(), scope_id))
                     self.db.execute("INSERT OR REPLACE INTO quarterly_input_boundaries VALUES(?,?,?,?,?,?,?,?,?,?)",
                       (scope_id, round_key, row["revision"], row["cutoff"], row["input_fingerprint"],
                        row["accepted_reports_json"] or "[]", input_fingerprint, reports_json,
@@ -377,10 +386,10 @@ class QuarterlyReviewLedger:
                 # the next immutable revision even when the public cutoff/round is unchanged.
                 row = self.db.execute("SELECT * FROM quarterly_scopes WHERE scope_id=?", (scope_id,)).fetchone()
             else:
-                self.db.execute("""UPDATE quarterly_scopes SET input_fingerprint=?,accepted_reports_json=?,
-                  pending_fingerprint=NULL,pending_reports_json=NULL,pending_round_id=NULL,pending_cutoff=NULL,
+                self.db.execute("""UPDATE quarterly_scopes SET input_fingerprint=?,accepted_reports_json=?,excluded_inputs_json=?,
+                  pending_fingerprint=NULL,pending_reports_json=NULL,pending_exclusions_json=NULL,pending_round_id=NULL,pending_cutoff=NULL,
                   research_cutoff=?,updated_at=? WHERE scope_id=?""",
-                  (input_fingerprint, reports_json, cutoff, utc_now(), scope_id))
+                  (input_fingerprint, reports_json, exclusions_json, cutoff, utc_now(), scope_id))
                 self.db.execute("INSERT OR REPLACE INTO quarterly_input_boundaries VALUES(?,?,?,?,?,?,?,?,?,?)",
                   (scope_id, round_key, row["revision"], row["cutoff"], input_fingerprint, reports_json,
                    None, None, "expanded_before_dag_start", utc_now()))
@@ -389,10 +398,11 @@ class QuarterlyReviewLedger:
         if row["input_fingerprint"] == input_fingerprint:
             legacy_unbound = not json.loads(row["accepted_reports_json"] or "[]") and bool(accepted_reports)
             self.db.execute("""UPDATE quarterly_scopes SET active_round_id=?,pending_fingerprint=NULL,
-              pending_reports_json=NULL,pending_round_id=NULL,pending_cutoff=NULL,
+              pending_reports_json=NULL,pending_exclusions_json=NULL,pending_round_id=NULL,pending_cutoff=NULL,
               accepted_reports_json=CASE WHEN ? THEN ? ELSE accepted_reports_json END,
+              excluded_inputs_json=?,
               research_cutoff=?,updated_at=? WHERE scope_id=?""",
-              (round_key, int(legacy_unbound), reports_json, cutoff, utc_now(), scope_id))
+              (round_key, int(legacy_unbound), reports_json, exclusions_json, cutoff, utc_now(), scope_id))
             current = self.db.execute("SELECT * FROM quarterly_scopes WHERE scope_id=?", (scope_id,)).fetchone()
             self.db.execute("INSERT OR REPLACE INTO quarterly_input_boundaries VALUES(?,?,?,?,?,?,?,?,?,?)",
               (scope_id, round_key, current["revision"], cutoff, input_fingerprint,
@@ -414,10 +424,10 @@ class QuarterlyReviewLedger:
         new_revision = revision + 1
         self.db.execute("""UPDATE quarterly_scopes SET revision=?,input_fingerprint=?,cutoff=?,public_cutoff=?,
           research_cutoff=?,edition='revision',
-          active_round_id=?,accepted_reports_json=?,pending_fingerprint=NULL,pending_reports_json=NULL,
+          active_round_id=?,accepted_reports_json=?,excluded_inputs_json=?,pending_fingerprint=NULL,pending_reports_json=NULL,pending_exclusions_json=NULL,
           pending_round_id=NULL,pending_cutoff=NULL,
           finalization_state='open',finalized_revision=NULL,finalization_reason='material input revision',updated_at=?
-          WHERE scope_id=?""", (new_revision, input_fingerprint, cutoff, cutoff, cutoff, round_key, reports_json,
+          WHERE scope_id=?""", (new_revision, input_fingerprint, cutoff, cutoff, cutoff, round_key, reports_json, exclusions_json,
                                  utc_now(), scope_id))
         self.db.execute("""UPDATE quarterly_stages SET state='pending',input_hash=NULL,artifact_path=NULL,
             artifact_sha256=NULL,attempts=0,error=NULL,updated_at=? WHERE scope_id=?""", (utc_now(), scope_id))
@@ -550,6 +560,11 @@ def _period_member_audit(state: EarningsState, issuer_ids: list[str], quarter_id
             ORDER BY a.rowid DESC""", event_ids).fetchall()
         for raw in reports:
             row = dict(raw); report_path = root / row["path"]
+            exclusion = state.task_blocked_by_exclusion(row["task_id"])
+            if exclusion:
+                reasons[issuer_id].append(
+                    f"current company input explicitly excluded: {exclusion['failed_task_id']}")
+                continue
             if accepted_report_hashes is not None and row["sha256"] not in accepted_report_hashes:
                 continue
             if not report_path.is_file() or sha256_file(report_path) != row["sha256"]:
@@ -571,6 +586,7 @@ def _period_member_audit(state: EarningsState, issuer_ids: list[str], quarter_id
                 reasons[issuer_id].append(f"current-quarter research evidence invalid: {evidence_error}")
                 continue
             eligible_reports.append((row, report, resolved_period))
+            break
         documents = state.db.execute("""SELECT d.* FROM documents d WHERE issuer_id=? AND source_mode='live'
             AND version=(SELECT MAX(x.version) FROM documents x WHERE x.document_id=d.document_id)""", (issuer_id,)).fetchall()
         for raw in documents:
@@ -598,24 +614,31 @@ def _period_member_audit(state: EarningsState, issuer_ids: list[str], quarter_id
         if eligible_reports and issuer_id in fetched:
             researched.add(issuer_id)
         if issuer_id not in researched: reasons[issuer_id].append("no completed accepted live company research")
-        excluded = state.db.execute(f"""SELECT 1 FROM research_tasks t JOIN dependency_exclusion_audit x
-          ON x.failed_task_id=t.task_id WHERE t.subject_id IN ({placeholders}) LIMIT 1""", event_ids).fetchone()
-        if excluded and eligible_reports:
-            reasons[issuer_id].append("current company input explicitly excluded from full eligibility")
     return disclosed, fetched, researched, reasons
 
 
-def _scope_input_snapshot(state: EarningsState, root: Path, scope: sqlite3.Row, cutoff: str) -> tuple[str, list[dict[str, Any]]]:
+def _scope_input_snapshot(state: EarningsState, root: Path, scope: sqlite3.Row,
+                          cutoff: str) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]]:
     industry = json.loads(scope["frozen_universe_json"])
     symbol_to_id = {row["symbol"]: row["issuer_id"] for row in state.db.execute("SELECT symbol,issuer_id FROM issuers")}
-    versions = []; accepted = []
+    versions = []; accepted = []; exclusions: list[dict[str, Any]] = []
     for issuer in industry.get("issuers", []):
         issuer_id = symbol_to_id.get(issuer["symbol"])
         if not issuer_id:
             versions.append((issuer["symbol"], "unresolved")); continue
+        issuer_exclusions: dict[str, dict[str, Any]] = {}
         for row in state.db.execute("""SELECT a.* FROM report_artifacts a JOIN research_tasks t ON t.task_id=a.task_id
             WHERE a.report_type='company' AND a.source_mode='live' AND t.state='completed' AND a.subject_id IN
             (SELECT event_id FROM earnings_events WHERE issuer_id=?) ORDER BY a.rowid DESC""", (issuer_id,)).fetchall():
+            exclusion = state.task_blocked_by_exclusion(row["task_id"])
+            if exclusion:
+                issuer_exclusions[exclusion["failed_task_id"]] = {
+                    "issuer_id": issuer_id, "event_id": exclusion["subject_id"],
+                    "period_start": exclusion["period_start"], "period_end": exclusion["period_end"],
+                    "source_mode": exclusion["source_mode"], "failed_task_id": exclusion["failed_task_id"],
+                    "reason": exclusion["reason"],
+                }
+                continue
             path = root / row["path"]
             if not path.is_file() or sha256_file(path) != row["sha256"]: continue
             report = read_json(path)
@@ -627,8 +650,11 @@ def _scope_input_snapshot(state: EarningsState, root: Path, scope: sqlite3.Row, 
                 accepted.append({"issuer_id": issuer_id, "report_id": row["report_id"], "task_id": row["task_id"],
                                  "path": row["path"], "sha256": row["sha256"]})
                 versions.append((issuer_id, row["report_id"], row["sha256"])); break
+        exclusions.extend(issuer_exclusions.values())
     accepted.sort(key=lambda row: (row["issuer_id"], row["report_id"]))
-    return sha256_bytes(canonical_json({"membership": scope["frozen_universe_hash"], "reports": versions})), accepted
+    exclusions.sort(key=lambda row: (row["issuer_id"], row["failed_task_id"]))
+    return sha256_bytes(canonical_json({"membership": scope["frozen_universe_hash"],
+        "reports": versions, "exclusions": exclusions})), accepted, exclusions
 
 
 def _quarter_payload(quarter_id: str, *, as_of: str) -> dict[str, Any]:
@@ -719,9 +745,9 @@ def inspect_due(root: Path, *, day: str, cutoff: str, config_path: str, universe
                     if current and current["state"] != "completed":
                         ledger.set_stage(matched["scope_id"], stage, "blocked", error=failed["error"])
         for registered in ledger.db.execute("SELECT * FROM quarterly_scopes ORDER BY period_end,industry_id").fetchall():
-            fingerprint, accepted = _scope_input_snapshot(state, root, registered, cutoff)
+            fingerprint, accepted, exclusions = _scope_input_snapshot(state, root, registered, cutoff)
             ledger.begin_revision(registered["scope_id"], fingerprint, cutoff,
-                                  round_id=round_id, accepted_reports=accepted)
+                                  round_id=round_id, accepted_reports=accepted, excluded_inputs=exclusions)
         # Incomplete scopes remain due after their nominal window and across quarter rollovers.
         due = ledger.db.execute("""SELECT DISTINCT q.* FROM quarterly_scopes q JOIN quarterly_stages s ON s.scope_id=q.scope_id
             WHERE (s.stage IN ('coverage','gap_review','industry','challenge','synthesis') AND s.state!='completed')
@@ -737,6 +763,7 @@ def inspect_due(root: Path, *, day: str, cutoff: str, config_path: str, universe
             keys = [symbol_to_id.get(symbol, f"unresolved:{symbol}") for symbol in frozen_industry.get("key_symbols", [])]
             resolved = [issuer_id for issuer_id in expected if not issuer_id.startswith("unresolved:")]
             accepted_reports = json.loads(scope.get("accepted_reports_json") or "[]")
+            excluded_inputs = json.loads(scope.get("excluded_inputs_json") or "[]")
             accepted_hashes = {row["sha256"] for row in accepted_reports}
             disclosed, fetched, researched, member_reasons = _period_member_audit(
                 state, resolved, scope["quarter_id"], public_cutoff=scope.get("public_cutoff") or scope["cutoff"],
@@ -795,7 +822,8 @@ def inspect_due(root: Path, *, day: str, cutoff: str, config_path: str, universe
             assessment = assess_industry_maturity(expected_issuer_ids=expected, key_issuer_ids=keys,
                 disclosed_issuer_ids=disclosed, fetched_issuer_ids=fetched, researched_issuer_ids=researched,
                 critical_gap_status=gap_status, threshold=float(config["quarterly"]["mature_coverage_ratio"]),
-                stage_threshold=float(config["quarterly"].get("stage_disclosure_ratio", 0.6)))
+                stage_threshold=float(config["quarterly"].get("stage_disclosure_ratio", 0.6)),
+                excluded_issuer_ids=[row["issuer_id"] for row in excluded_inputs])
             all_samples_complete = bool(expected and len(disclosed) == len(expected) and len(researched) == len(expected))
             finalization_deadline = _quarter_deadline(scope["quarter_id"], config["seasons"])
             deadline_due = date.fromisoformat(day) >= finalization_deadline
@@ -823,6 +851,7 @@ def inspect_due(root: Path, *, day: str, cutoff: str, config_path: str, universe
                            "input_fingerprint": scope["input_fingerprint"],
                            "accepted_company_input_path": scope.get("active_input_path") or str((ledger.path.parent / "quarterly-scopes" / scope["scope_id"] / "revisions" / f"v{scope['revision']}" / "accepted-company-input.json").relative_to(root)),
                            "pending_input_fingerprint": scope.get("pending_fingerprint"),
+                           "excluded_inputs": excluded_inputs,
                            "frozen_universe_hash": scope["frozen_universe_hash"], "frozen_industry": frozen_industry,
                            "frozen_scope_path": str(frozen_path.relative_to(root)),
                            "gap_review_input_path": str(current_input.relative_to(root)),

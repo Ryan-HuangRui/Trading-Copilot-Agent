@@ -59,7 +59,8 @@ CREATE TABLE IF NOT EXISTS dependency_reuse_audit (
   FOREIGN KEY(reused_task_id) REFERENCES research_tasks(task_id)
 );
 CREATE TABLE IF NOT EXISTS dependency_exclusion_audit (
-  failed_task_id TEXT PRIMARY KEY, proof_json TEXT NOT NULL, reason TEXT NOT NULL, created_at TEXT NOT NULL,
+  failed_task_id TEXT PRIMARY KEY, subject_id TEXT, period_start TEXT, period_end TEXT, source_mode TEXT,
+  input_hash TEXT, proof_json TEXT NOT NULL, reason TEXT NOT NULL, created_at TEXT NOT NULL,
   FOREIGN KEY(failed_task_id) REFERENCES research_tasks(task_id)
 );
 CREATE TABLE IF NOT EXISTS source_watermarks (
@@ -147,6 +148,16 @@ class EarningsState:
         self.db.execute("PRAGMA busy_timeout=30000")
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.executescript(SCHEMA)
+        exclusion_columns = {row[1] for row in self.db.execute("PRAGMA table_info(dependency_exclusion_audit)")}
+        for column in ("subject_id", "period_start", "period_end", "source_mode", "input_hash"):
+            if column not in exclusion_columns:
+                self.db.execute(f"ALTER TABLE dependency_exclusion_audit ADD COLUMN {column} TEXT")
+        self.db.execute("""UPDATE dependency_exclusion_audit SET
+          subject_id=COALESCE(subject_id,(SELECT subject_id FROM research_tasks WHERE task_id=failed_task_id)),
+          period_start=COALESCE(period_start,(SELECT period_start FROM research_tasks WHERE task_id=failed_task_id)),
+          period_end=COALESCE(period_end,(SELECT period_end FROM research_tasks WHERE task_id=failed_task_id)),
+          source_mode=COALESCE(source_mode,(SELECT source_mode FROM research_tasks WHERE task_id=failed_task_id)),
+          input_hash=COALESCE(input_hash,(SELECT input_hash FROM research_tasks WHERE task_id=failed_task_id))""")
 
     def close(self) -> None:
         self.db.close()
@@ -350,6 +361,38 @@ class EarningsState:
                  "failed_before": {key: failed[key] for key in failed.keys()}}
         return proof
 
+    def active_dependency_exclusion(self, *, subject_id: str, period_start: str | None,
+                                    period_end: str | None, source_mode: str) -> dict[str, Any] | None:
+        """Return the newest unresolved exact-lineage exclusion.
+
+        A later report-bearing completion for the same event/period/source is the only
+        thing that supersedes the barrier.  An older completion never becomes current
+        merely because the failed head was operator-excluded.
+        """
+        row = self.db.execute("""SELECT x.*,f.rowid AS failed_rowid FROM dependency_exclusion_audit x
+          JOIN research_tasks f ON f.task_id=x.failed_task_id
+          WHERE x.subject_id=? AND x.period_start IS ? AND x.period_end IS ? AND x.source_mode=?
+          AND NOT EXISTS(SELECT 1 FROM research_tasks n JOIN report_artifacts a ON a.task_id=n.task_id
+            WHERE n.rowid>f.rowid AND n.task_type=f.task_type AND n.subject_id=f.subject_id
+            AND n.period_start IS f.period_start AND n.period_end IS f.period_end
+            AND n.source_mode=f.source_mode AND n.state='completed')
+          ORDER BY f.rowid DESC LIMIT 1""", (subject_id, period_start, period_end, source_mode)).fetchone()
+        return dict(row) if row else None
+
+    def task_blocked_by_exclusion(self, task_id: str) -> dict[str, Any] | None:
+        task = self.db.execute("SELECT rowid AS task_rowid,* FROM research_tasks WHERE task_id=?", (task_id,)).fetchone()
+        if not task:
+            raise ValueError(f"unknown task_id: {task_id}")
+        # Once excluded, pre-barrier reports remain historical forever. A valid new
+        # report progresses because its task row is after the barrier; it does not
+        # make an older, now-uncertain report safe again.
+        exclusion = self.db.execute("""SELECT x.*,f.rowid AS failed_rowid
+          FROM dependency_exclusion_audit x JOIN research_tasks f ON f.task_id=x.failed_task_id
+          WHERE x.subject_id=? AND x.period_start IS ? AND x.period_end IS ? AND x.source_mode=?
+          AND f.rowid>=? ORDER BY f.rowid DESC LIMIT 1""", (task["subject_id"], task["period_start"],
+            task["period_end"], task["source_mode"], task["task_rowid"])).fetchone()
+        return dict(exclusion) if exclusion else None
+
     def apply_dependency_exclusion(self, failed_task_id: str, *, reason: str) -> dict[str, Any]:
         if not reason.strip(): raise ValueError("dependency exclusion requires an operator reason")
         proof = self.preview_dependency_exclusion(failed_task_id)
@@ -359,9 +402,11 @@ class EarningsState:
               WHERE task_id=? AND state='terminal_failed'""",
               (f"explicitly excluded from limited-stage research: {reason}", utc_now(), failed_task_id)).rowcount
             if changed != 1: raise ValueError("failed dependency changed after preview; no exclusion applied")
-            db.execute("INSERT INTO dependency_exclusion_audit VALUES(?,?,?,?)",
-                       (failed_task_id, json.dumps(proof, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
-                        reason, utc_now()))
+            db.execute("""INSERT INTO dependency_exclusion_audit
+              (failed_task_id,subject_id,period_start,period_end,source_mode,input_hash,proof_json,reason,created_at)
+              SELECT task_id,subject_id,period_start,period_end,source_mode,input_hash,?,?,? FROM research_tasks
+              WHERE task_id=?""", (json.dumps(proof, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+                        reason, utc_now(), failed_task_id))
         return {**proof, "status": "excluded", "reason": reason}
 
     def apply_dependency_reuse(self, failed_task_id: str, completed_task_id: str, *, reason: str) -> dict[str, Any]:
@@ -511,10 +556,8 @@ class EarningsState:
             SELECT 1 FROM research_tasks xn WHERE xn.rowid>x.rowid AND xn.task_type=x.task_type
             AND xn.subject_id=x.subject_id AND xn.period_start IS x.period_start AND xn.period_end IS x.period_end
             AND xn.source_mode=x.source_mode
-            AND NOT ((xn.state='superseded' AND EXISTS(SELECT 1 FROM dependency_reuse_audit a
-              WHERE a.failed_task_id=xn.task_id AND a.reused_task_id=x.task_id)) OR
-              (xn.state='excluded' AND EXISTS(SELECT 1 FROM dependency_exclusion_audit e
-              WHERE e.failed_task_id=xn.task_id)))))"""
+            AND NOT (xn.state='superseded' AND EXISTS(SELECT 1 FROM dependency_reuse_audit a
+              WHERE a.failed_task_id=xn.task_id AND a.reused_task_id=x.task_id))))"""
         depth_expr = """(SELECT COUNT(DISTINCT x.period_end) FROM research_tasks x
           JOIN earnings_events xe ON xe.event_id=x.subject_id JOIN earnings_events te ON te.event_id=t.subject_id
           WHERE x.task_type='company' AND xe.issuer_id=te.issuer_id AND x.source_mode=t.source_mode
@@ -523,10 +566,8 @@ class EarningsState:
             SELECT 1 FROM research_tasks xn WHERE xn.rowid>x.rowid AND xn.task_type=x.task_type
             AND xn.subject_id=x.subject_id AND xn.period_start IS x.period_start AND xn.period_end IS x.period_end
             AND xn.source_mode=x.source_mode
-            AND NOT ((xn.state='superseded' AND EXISTS(SELECT 1 FROM dependency_reuse_audit a
-              WHERE a.failed_task_id=xn.task_id AND a.reused_task_id=x.task_id)) OR
-              (xn.state='excluded' AND EXISTS(SELECT 1 FROM dependency_exclusion_audit e
-              WHERE e.failed_task_id=xn.task_id)))))"""
+            AND NOT (xn.state='superseded' AND EXISTS(SELECT 1 FROM dependency_reuse_audit a
+              WHERE a.failed_task_id=xn.task_id AND a.reused_task_id=x.task_id))))"""
         if company_tier not in {None, "current", "history"}:
             raise ValueError("company_tier must be current or history")
         if task_type == "company" and company_tier:
@@ -541,18 +582,14 @@ class EarningsState:
                   SELECT 1 FROM research_tasks pn WHERE pn.rowid>p.rowid AND pn.task_type=p.task_type
                   AND pn.subject_id=p.subject_id AND pn.period_start IS p.period_start
                   AND pn.period_end IS p.period_end AND pn.source_mode=p.source_mode
-                  AND NOT ((pn.state='superseded' AND EXISTS(SELECT 1 FROM dependency_reuse_audit a
-                    WHERE a.failed_task_id=pn.task_id AND a.reused_task_id=p.task_id)) OR
-                    (pn.state='excluded' AND EXISTS(SELECT 1 FROM dependency_exclusion_audit e
-                    WHERE e.failed_task_id=pn.task_id))))))
+                  AND NOT (pn.state='superseded' AND EXISTS(SELECT 1 FROM dependency_reuse_audit a
+                    WHERE a.failed_task_id=pn.task_id AND a.reused_task_id=p.task_id)))))
                 AND NOT EXISTS(SELECT 1 FROM research_tasks n WHERE n.rowid>t.rowid
                   AND n.task_type=t.task_type AND n.subject_id=t.subject_id
                   AND n.period_start IS t.period_start AND n.period_end IS t.period_end
                   AND n.source_mode=t.source_mode
-                  AND NOT ((n.state='superseded' AND EXISTS(SELECT 1 FROM dependency_reuse_audit a
-                    WHERE a.failed_task_id=n.task_id AND a.reused_task_id=t.task_id)) OR
-                    (n.state='excluded' AND EXISTS(SELECT 1 FROM dependency_exclusion_audit e
-                    WHERE e.failed_task_id=n.task_id))))
+                  AND NOT (n.state='superseded' AND EXISTS(SELECT 1 FROM dependency_reuse_audit a
+                    WHERE a.failed_task_id=n.task_id AND a.reused_task_id=t.task_id)))
                 ORDER BY t.created_at,t.task_id""",
                 params,
             ).fetchall()
@@ -569,10 +606,8 @@ class EarningsState:
                         SELECT 1 FROM research_tasks xn WHERE xn.rowid>x.rowid AND xn.task_type=x.task_type
                         AND xn.subject_id=x.subject_id AND xn.period_start IS x.period_start
                         AND xn.period_end IS x.period_end AND xn.source_mode=x.source_mode
-                        AND NOT ((xn.state='superseded' AND EXISTS(SELECT 1 FROM dependency_reuse_audit a
-                          WHERE a.failed_task_id=xn.task_id AND a.reused_task_id=x.task_id)) OR
-                          (xn.state='excluded' AND EXISTS(SELECT 1 FROM dependency_exclusion_audit e
-                          WHERE e.failed_task_id=xn.task_id))))""",
+                        AND NOT (xn.state='superseded' AND EXISTS(SELECT 1 FROM dependency_reuse_audit a
+                          WHERE a.failed_task_id=xn.task_id AND a.reused_task_id=x.task_id)))""",
                       (meta["issuer_id"], row["source_mode"], row["period_end"])).fetchone()[0]
                 return (0 if meta and meta["symbol"] in priority else 1, depth,
                         0 if int(row["attempts"]) == 0 else 1,
@@ -608,17 +643,13 @@ class EarningsState:
                   SELECT 1 FROM research_tasks pn WHERE pn.rowid>p.rowid AND pn.task_type=p.task_type
                   AND pn.subject_id=p.subject_id AND pn.period_start IS p.period_start
                   AND pn.period_end IS p.period_end AND pn.source_mode=p.source_mode
-                  AND NOT ((pn.state='superseded' AND EXISTS(SELECT 1 FROM dependency_reuse_audit a
-                    WHERE a.failed_task_id=pn.task_id AND a.reused_task_id=p.task_id)) OR
-                    (pn.state='excluded' AND EXISTS(SELECT 1 FROM dependency_exclusion_audit e
-                    WHERE e.failed_task_id=pn.task_id)))))""", (task_id,),
+                  AND NOT (pn.state='superseded' AND EXISTS(SELECT 1 FROM dependency_reuse_audit a
+                    WHERE a.failed_task_id=pn.task_id AND a.reused_task_id=p.task_id))))""", (task_id,),
             ).fetchone()["count"]
             superseded = db.execute("""SELECT 1 FROM research_tasks n WHERE n.rowid>? AND n.task_type=?
               AND n.subject_id=? AND n.period_start IS ? AND n.period_end IS ? AND n.source_mode=?
-              AND NOT ((n.state='superseded' AND EXISTS(SELECT 1 FROM dependency_reuse_audit a
-                WHERE a.failed_task_id=n.task_id AND a.reused_task_id=?)) OR
-                (n.state='excluded' AND EXISTS(SELECT 1 FROM dependency_exclusion_audit e
-                WHERE e.failed_task_id=n.task_id)))""",
+              AND NOT (n.state='superseded' AND EXISTS(SELECT 1 FROM dependency_reuse_audit a
+                WHERE a.failed_task_id=n.task_id AND a.reused_task_id=?))""",
               (row["db_rowid"], row["task_type"], row["subject_id"],
                row["period_start"], row["period_end"], row["source_mode"], task_id)).fetchone()
             if not eligible_state or blocked or superseded or row["attempts"] >= row["max_attempts"]:

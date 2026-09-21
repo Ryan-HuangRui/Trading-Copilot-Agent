@@ -272,10 +272,8 @@ def unresolved_terminal_count(state: EarningsState, cutoff: str | None = None) -
         SELECT 1 FROM research_tasks n WHERE n.rowid>t.rowid AND n.source_mode=t.source_mode
       AND n.task_type=t.task_type AND n.subject_id=t.subject_id
         AND n.period_start IS t.period_start AND n.period_end IS t.period_end
-        AND NOT ((n.state='superseded' AND EXISTS(SELECT 1 FROM dependency_reuse_audit a
-          WHERE a.failed_task_id=n.task_id AND a.reused_task_id=t.task_id)) OR
-          (n.state='excluded' AND EXISTS(SELECT 1 FROM dependency_exclusion_audit e
-          WHERE e.failed_task_id=n.task_id))))
+        AND NOT (n.state='superseded' AND EXISTS(SELECT 1 FROM dependency_reuse_audit a
+          WHERE a.failed_task_id=n.task_id AND a.reused_task_id=t.task_id)))
       {terminal_cutoff}
       AND (t.task_type!='company' OR t.period_end IS (SELECT MAX(x.period_end)
         FROM research_tasks x JOIN earnings_events xe ON xe.event_id=x.subject_id
@@ -977,16 +975,20 @@ def round_progress(root: Path, state: EarningsState, config: dict, cutoff: str |
         AND n.task_type=t.task_type AND n.subject_id=t.subject_id
         AND n.period_start IS t.period_start AND n.period_end IS t.period_end
         AND n.source_mode=t.source_mode
-        AND NOT ((n.state='superseded' AND EXISTS(SELECT 1 FROM dependency_reuse_audit a
-          WHERE a.failed_task_id=n.task_id AND a.reused_task_id=t.task_id)) OR
-          (n.state='excluded' AND EXISTS(SELECT 1 FROM dependency_exclusion_audit e
-          WHERE e.failed_task_id=n.task_id))))
+        AND NOT (n.state='superseded' AND EXISTS(SELECT 1 FROM dependency_reuse_audit a
+          WHERE a.failed_task_id=n.task_id AND a.reused_task_id=t.task_id)))
       AND t.period_end IS (SELECT MAX(x.period_end) FROM research_tasks x
         JOIN earnings_events xe ON xe.event_id=x.subject_id WHERE x.task_type='company'
         AND xe.issuer_id=e.issuer_id AND x.source_mode=t.source_mode
         {cutoff_max_clause}
         AND x.state IN ('queued','running','completed','retryable_failed','terminal_failed'))"""
     current_pending = state.db.execute(current_sql, (cutoff, cutoff) if cutoff else ()).fetchone()[0]
+    excluded_company_inputs = state.db.execute("""SELECT COUNT(*) FROM dependency_exclusion_audit x
+      JOIN research_tasks f ON f.task_id=x.failed_task_id WHERE f.task_type='company'
+      AND NOT EXISTS(SELECT 1 FROM research_tasks n JOIN report_artifacts a ON a.task_id=n.task_id
+        WHERE n.rowid>f.rowid AND n.task_type=f.task_type AND n.subject_id=f.subject_id
+        AND n.period_start IS f.period_start AND n.period_end IS f.period_end
+        AND n.source_mode=f.source_mode AND n.state='completed')""").fetchone()[0]
     publication_states = {'local_pending','checker_pending','cloud_pending','retryable_failed','readback_failed'}
     if config.get("delivery", {}).get("lark_documents_enabled") is True:
         publication_states.add("archived")
@@ -1072,7 +1074,8 @@ def round_progress(root: Path, state: EarningsState, config: dict, cutoff: str |
             ledger.db.close()
     blockers["progress_audit_error"] = progress_error
     blockers["quarterly_blocked"] = quarterly_blocked
-    pending = {"current_company": current_pending, "daily_industry": daily_industry_pending,
+    pending = {"current_company": current_pending, "excluded_company_inputs": excluded_company_inputs,
+               "daily_industry": daily_industry_pending,
                "quarterly_scopes": quarterly_pending,
                "quarterly_waiting": quarterly_waiting,
                "quarterly_market": quarterly_market,

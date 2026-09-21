@@ -239,6 +239,15 @@ class EarningsPeriodReviewTests(unittest.TestCase):
         self.assertEqual(triggered["stage_trigger"], "disclosure_ratio")
         self.assertFalse(triggered["eligible_full"])
 
+    def test_active_exclusion_is_a_deterministic_full_gate_even_if_gap_model_resolves(self):
+        assessment = assess_industry_maturity(expected_issuer_ids=["a", "b"], key_issuer_ids=["a"],
+            disclosed_issuer_ids=["a", "b"], fetched_issuer_ids=["a", "b"],
+            researched_issuer_ids=["a", "b"], excluded_issuer_ids=["b"],
+            critical_gap_status="resolved", threshold=1.0)
+        self.assertFalse(assessment["eligible_full"])
+        self.assertTrue(assessment["deterministic_exclusion_block"])
+        self.assertEqual(assessment["excluded_input_issuers"], ["b"])
+
     def test_key_disclosure_triggers_limited_stage_but_two_non_keys_do_not(self):
         expected = [f"i{i}" for i in range(6)]
         key = assess_industry_maturity(
@@ -561,6 +570,55 @@ class EarningsPeriodReviewTests(unittest.TestCase):
                 "2026-08-02T00:00:00Z", "2026-Q2")
             self.assertEqual(researched, ["issuer-a"])
             self.assertEqual(artifacts[0]["report_id"], "r")
+            state.close()
+
+    def test_exact_exclusion_removes_old_report_until_later_verified_revision(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); state = EarningsState(root / "runtime/earnings/state.sqlite")
+            self._register_disclosure(state, root, "A", 1, "2026-04-01", "2026-06-30", "2026-07-20T00:00:00Z")
+            old, _ = state.enqueue_task(task_type="company", subject_id="event-a", period_start="2026-04-01",
+                period_end="2026-06-30", input_hash="old", method_version="v1", source_mode="live",
+                profile="daily", model="m", effort="e")
+            state.db.execute("UPDATE research_tasks SET state='completed' WHERE task_id=?", (old,))
+            old_path = root / "report/earnings/old.json"
+            payload = {"cutoff": "2026-07-21T00:00:00Z", "scope": {"issuer_id": "issuer-a",
+                "reporting_start": "2026-04-01", "reporting_end": "2026-06-30"}, "thesis_state": "emerging",
+                "evidence": [{"evidence_id": "e", "document_id": "doc-A", "document_version": 1,
+                    "document_hash": sha256_file(root / "raw_data/earnings/A.txt")}]}
+            atomic_write_json(old_path, payload)
+            state.db.execute("INSERT INTO report_artifacts VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", ("old-report", old,
+                "company", "event-a", "2026-04-01", "2026-06-30", str(old_path.relative_to(root)),
+                sha256_file(old_path), "m", "live", "partial", "2026-07-21T00:00:00Z"))
+            failed, _ = state.enqueue_task(task_type="company", subject_id="event-a", period_start="2026-04-01",
+                period_end="2026-06-30", input_hash="revised-source", method_version="v1", source_mode="live",
+                profile="daily", model="m", effort="e")
+            state.db.execute("UPDATE research_tasks SET state='terminal_failed' WHERE task_id=?", (failed,))
+            state.apply_dependency_exclusion(failed, reason="revised source could not be researched")
+            disclosed, fetched, researched, reasons = _period_member_audit(state, ["issuer-a"], "2026-Q2",
+                cutoff="2026-07-22T00:00:00Z")
+            self.assertEqual((disclosed, fetched, researched), ({"issuer-a"}, {"issuer-a"}, set()))
+            self.assertTrue(any("explicitly excluded" in value for value in reasons["issuer-a"]))
+            self.assertEqual(_company_inputs(state, root, ["issuer-a"], "2026-04-01", "2026-06-30",
+                "2026-07-22T00:00:00Z", "2026-Q2"), ([], []))
+
+            replacement, _ = state.enqueue_task(task_type="company", subject_id="event-a", period_start="2026-04-01",
+                period_end="2026-06-30", input_hash="verified-replacement", method_version="v1", source_mode="live",
+                profile="daily", model="m", effort="e")
+            state.db.execute("UPDATE research_tasks SET state='completed' WHERE task_id=?", (replacement,))
+            replacement_path = root / "report/earnings/replacement.json"; atomic_write_json(replacement_path, payload)
+            state.db.execute("INSERT INTO report_artifacts VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", ("replacement-report",
+                replacement, "company", "event-a", "2026-04-01", "2026-06-30",
+                str(replacement_path.relative_to(root)), sha256_file(replacement_path), "m", "live", "partial",
+                "2026-07-22T00:00:00Z"))
+            self.assertIsNone(state.active_dependency_exclusion(subject_id="event-a", period_start="2026-04-01",
+                period_end="2026-06-30", source_mode="live"))
+            self.assertEqual(state.task_blocked_by_exclusion(old)["failed_task_id"], failed)
+            self.assertIsNone(state.task_blocked_by_exclusion(replacement))
+            self.assertEqual(_period_member_audit(state, ["issuer-a"], "2026-Q2",
+                cutoff="2026-07-23T00:00:00Z")[2], {"issuer-a"})
+            artifacts, researched = _company_inputs(state, root, ["issuer-a"], "2026-04-01", "2026-06-30",
+                "2026-07-23T00:00:00Z", "2026-Q2")
+            self.assertEqual((researched, artifacts[0]["report_id"]), (["issuer-a"], "replacement-report"))
             state.close()
 
 

@@ -56,6 +56,8 @@ def _company_inputs(state: EarningsState, root: Path, issuer_ids: list[str], per
         if rows:
             eligible = []
             for candidate in rows:
+                if state.task_blocked_by_exclusion(candidate["task_id"]):
+                    continue
                 if accepted_reports is not None and not any(
                         row.get("path") == candidate["path"] and row.get("sha256") == candidate["sha256"]
                         for row in accepted_reports):
@@ -94,7 +96,7 @@ def _validated_accepted_boundary(root: Path, path: Path, frozen_scope: dict[str,
         raise ValueError("accepted company input content address mismatch")
     registry = sqlite3.connect(root / "runtime/earnings/quarterly.sqlite"); registry.row_factory = sqlite3.Row
     try:
-        row = registry.execute("""SELECT revision,input_fingerprint,accepted_reports_json,active_input_path
+        row = registry.execute("""SELECT revision,input_fingerprint,accepted_reports_json,excluded_inputs_json,active_input_path
             FROM quarterly_scopes WHERE scope_id=?""", (boundary["scope_id"],)).fetchone()
     finally:
         registry.close()
@@ -102,6 +104,7 @@ def _validated_accepted_boundary(root: Path, path: Path, frozen_scope: dict[str,
     if (not row or int(row["revision"]) != int(boundary["revision"]) or
             row["input_fingerprint"] != boundary.get("input_fingerprint") or
             json.loads(row["accepted_reports_json"] or "[]") != boundary.get("reports") or
+            json.loads(row["excluded_inputs_json"] or "[]") != boundary.get("exclusions", []) or
             row["active_input_path"] != relative):
         raise ValueError("accepted company input file differs from active quarterly registry boundary")
     return boundary
@@ -200,6 +203,7 @@ def main() -> None:
         unresolved_symbols = [symbol for symbol in expected_symbols if symbol not in issuer_by_symbol]
         end = date.fromisoformat(args.period_end); research_quarter = f"{end.year}-Q{(end.month - 1)//3 + 1}" if args.mode == "quarterly" else None
         accepted_reports = None
+        excluded_issuer_ids: set[str] = set()
         if args.accepted_company_input:
             accepted_path = ensure_inside(resolve_path(root, args.accepted_company_input),
                                           [root / "runtime" / "earnings" / "quarterly-scopes"])
@@ -207,6 +211,7 @@ def main() -> None:
                 raise ValueError("accepted company input requires a frozen quarterly scope")
             accepted_payload = _validated_accepted_boundary(root, accepted_path, frozen_scope)
             accepted_reports = accepted_payload.get("reports") or []
+            excluded_issuer_ids = {row["issuer_id"] for row in accepted_payload.get("exclusions", [])}
         company_artifacts, researched_ids = _company_inputs(state, root, issuer_ids, args.period_start,
             args.period_end, cutoff.isoformat(), research_quarter, accepted_reports)
         predecessor_reports: list[dict[str, Any]] = []
@@ -236,7 +241,7 @@ def main() -> None:
                     if evidence.get("document_id") and evidence.get("document_version") is not None and evidence.get("document_hash"):
                         bound_document_keys.add((str(evidence["document_id"]), int(evidence["document_version"]),
                                                  str(evidence["document_hash"])))
-        sources = _source_documents(state, root, issuer_ids, cutoff.isoformat(), args.period_start, args.period_end,
+        sources = _source_documents(state, root, [issuer_id for issuer_id in issuer_ids if issuer_id not in excluded_issuer_ids], cutoff.isoformat(), args.period_start, args.period_end,
                                     research_quarter, bound_document_keys)
         modes = {row.get("source_mode") for row in company_artifacts + predecessor_rows + sources if row.get("source_mode")}
         if len(modes) > 1:
@@ -280,8 +285,10 @@ def main() -> None:
             "key_issuers_complete": not key_missing,
             "company_research_complete": researched_count >= disclosed_count,
             "critical_gap_status": args.critical_gap_status,
+            "excluded_input_issuers": sorted(excluded_issuer_ids),
         }
-        maturity["eligible_full"] = bool(maturity["coverage_ratio"] >= threshold and maturity["key_issuers_complete"]
+        maturity["deterministic_exclusion_block"] = bool(excluded_issuer_ids)
+        maturity["eligible_full"] = bool(not excluded_issuer_ids and maturity["coverage_ratio"] >= threshold and maturity["key_issuers_complete"]
                                           and maturity["company_research_complete"] and args.critical_gap_status in {"resolved", "disclosed"})
         coverage = {"expected_issuers": expected_count, "disclosed_issuers": disclosed_count,
                     "fetched_issuers": min(fetched_count, disclosed_count), "researched_issuers": min(researched_count, fetched_count, disclosed_count),
@@ -296,6 +303,7 @@ def main() -> None:
             "documents": [(row["document_id"], row["version"], row["content_sha256"]) for row in sources],
             "configuration_hash": config_hash, "source_mode": source_mode, "coverage": coverage,
             "critical_gap_status": args.critical_gap_status,
+            "excluded_inputs": accepted_payload.get("exclusions", []) if args.accepted_company_input else [],
         }
         frozen_task_input = {**input_basis, "company_artifacts": company_artifacts,
                              "previous_artifacts": [{"report_id": row["report_id"], "task_id": row["task_id"], "path": row["path"],
@@ -339,6 +347,7 @@ def main() -> None:
             "coverage_audit": {"expected_symbols": expected_symbols, "resolved_issuer_ids": issuer_ids, "researched_issuer_ids": researched_ids,
                                "missing_issuer_ids": missing_ids, "unresolved_symbols": unresolved_symbols,
                                "counts": coverage, "key_issuer_ids": key_tokens, "maturity": maturity,
+                               "excluded_inputs": accepted_payload.get("exclusions", []) if args.accepted_company_input else [],
                                "negative_or_flat_samples": [row for row in company_artifacts if row.get("thesis_state") in {"weakening", "invalidated", "insufficient_data"}],
                                "unselected_samples": missing_ids + [f"unresolved:{s}" for s in unresolved_symbols]},
             "documents": sources, "company_artifacts": company_artifacts,
