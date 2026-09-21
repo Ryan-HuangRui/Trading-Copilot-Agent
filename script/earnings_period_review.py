@@ -553,8 +553,14 @@ def _period_member_audit(state: EarningsState, issuer_ids: list[str], quarter_id
             if accepted_report_hashes is not None and row["sha256"] not in accepted_report_hashes:
                 continue
             if not report_path.is_file() or sha256_file(report_path) != row["sha256"]:
-                reasons[issuer_id].append(f"research file/hash invalid: {row['report_id']}"); continue
+                continue
             report = read_json(report_path)
+            try: resolved_period = resolve_report_period(report)
+            except ValueError:
+                continue
+            if resolved_period["research_quarter"] != quarter_id: continue
+            # Null-period source metadata is bound only after the accepted report's
+            # actual standalone fact period matches this requested quarter.
             for evidence in report.get("evidence", []):
                 if evidence.get("document_id") and evidence.get("document_version") is not None and evidence.get("document_hash"):
                     evidence_document_keys.add((str(evidence["document_id"]), int(evidence["document_version"]),
@@ -562,18 +568,13 @@ def _period_member_audit(state: EarningsState, issuer_ids: list[str], quarter_id
             evidence_legal, evidence_error = validate_report_public_evidence(
                 state, root, report, public_cutoff or utc_now())
             if not evidence_legal:
-                reasons[issuer_id].append(f"research evidence invalid: {row['report_id']}: {evidence_error}"); continue
-            try: resolved_period = resolve_report_period(report)
-            except ValueError:
-                reasons[issuer_id].append(f"research period unresolved: {row['report_id']}"); continue
-            if resolved_period["research_quarter"] != quarter_id: continue
+                reasons[issuer_id].append(f"current-quarter research evidence invalid: {evidence_error}")
+                continue
             eligible_reports.append((row, report, resolved_period))
         documents = state.db.execute("""SELECT d.* FROM documents d WHERE issuer_id=? AND source_mode='live'
             AND version=(SELECT MAX(x.version) FROM documents x WHERE x.document_id=d.document_id)""", (issuer_id,)).fetchall()
         for raw in documents:
             row = dict(raw); public = row.get("accepted_at") or row.get("published_at")
-            if not public or parse_time(public) > public_cutoff_dt:
-                reasons[issuer_id].append(f"document unavailable at cutoff: {row['document_id']}"); continue
             mapped_quarter = None
             if row.get("reporting_start") and row.get("reporting_end"):
                 try: mapped_quarter = map_fiscal_period(row["reporting_start"], row["reporting_end"], form=row.get("form"))["research_quarter"]
@@ -582,17 +583,25 @@ def _period_member_audit(state: EarningsState, issuer_ids: list[str], quarter_id
             if mapped_quarter is None and binding in evidence_document_keys:
                 mapped_quarter = quarter_id
             if mapped_quarter != quarter_id:
-                reasons[issuer_id].append(f"document period not bound to quarter: {row['document_id']}"); continue
+                continue
+            if not public or parse_time(public) > public_cutoff_dt:
+                continue
             disclosed.add(issuer_id)
             original = root / row["original_path"]
             if not original.is_file() or sha256_file(original) != row["content_sha256"]:
-                reasons[issuer_id].append(f"disclosed but document file/hash invalid: {row['document_id']}"); continue
+                continue
             fetched.add(issuer_id)
         if issuer_id not in disclosed:
             reasons[issuer_id].append("no accepted live quarter document")
+        elif issuer_id not in fetched:
+            reasons[issuer_id].append("accepted live quarter document file/hash invalid")
         if eligible_reports and issuer_id in fetched:
             researched.add(issuer_id)
         if issuer_id not in researched: reasons[issuer_id].append("no completed accepted live company research")
+        excluded = state.db.execute(f"""SELECT 1 FROM research_tasks t JOIN dependency_exclusion_audit x
+          ON x.failed_task_id=t.task_id WHERE t.subject_id IN ({placeholders}) LIMIT 1""", event_ids).fetchone()
+        if excluded and eligible_reports:
+            reasons[issuer_id].append("current company input explicitly excluded from full eligibility")
     return disclosed, fetched, researched, reasons
 
 

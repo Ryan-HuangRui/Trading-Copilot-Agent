@@ -13,11 +13,18 @@ from earnings_state import EarningsState
 
 class EarningsMarketContextTests(unittest.TestCase):
     def test_full_market_requires_every_frozen_industry(self):
-        rows = [{"industry_id": "a", "edition": "full", "checker_status": "passed"},
-                {"industry_id": "b", "edition": "stage", "checker_status": "passed"}]
+        rows = [{"industry_id": "a", "edition": "full", "checker_status": "passed",
+                 "finalization_state": "finalized_full"},
+                {"industry_id": "b", "edition": "stage", "checker_status": "passed",
+                 "finalization_state": "finalized_stage_with_gaps"}]
         result = assess_market_dependencies(["a", "b"], rows, requested_edition="full")
         self.assertFalse(result["eligible"]); self.assertEqual(result["missing_or_ineligible"], ["b"])
         self.assertTrue(assess_market_dependencies(["a", "b"], rows, requested_edition="stage")["eligible"])
+
+    def test_unsealed_stage_snapshot_cannot_enter_stage_market(self):
+        rows = [{"industry_id": "a", "edition": "stage", "checker_status": "passed",
+                 "finalization_state": "open"}]
+        self.assertFalse(assess_market_dependencies(["a"], rows, requested_edition="stage")["eligible"])
 
     def test_duplicate_industry_does_not_satisfy_missing_dependency(self):
         rows = [{"industry_id": "a", "edition": "full", "checker_status": "passed"}] * 2

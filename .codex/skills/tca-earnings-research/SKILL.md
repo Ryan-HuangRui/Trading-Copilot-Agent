@@ -48,8 +48,14 @@ scope with insufficient accepted facts waits for the necessary company research,
 same stage DAG; it never fabricates coverage. Later material accepted inputs enter a new immutable
 revision after the in-flight revision finishes. Quarter-end/tail is a finalization and gap checkpoint,
 not an initial-start gate; a finalized report with gaps remains a stage final, never full.
+Do not start the gap-review model before the stage trigger or tail checkpoint. A cross-industry stage
+report is allowed only after every frozen industry is durably delivered and finalized as full or
+stage-with-gaps; carry those limitations forward and never relabel that route as full.
 
 Operational recovery stays exact-target and preview-first. A failed newer company dependency may
 reuse an older completed result only when frozen source versions/hashes, subject/period, method,
 model profile and semantic configuration are equivalent. Apply through `earnings-recovery
 --action reuse-dependency` with an explicit reason; retain failed attempts and the audit record.
+Legacy raw configuration hashes require matching immutable semantic proofs for both tasks. If proof
+is unavailable, use the separately audited `exclude-dependency` recovery only to continue a limited
+stage with a critical exclusion gap; it never grants full eligibility.

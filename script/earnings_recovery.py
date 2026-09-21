@@ -83,6 +83,15 @@ def recover(root: Path, *, action: str, job_id: str | None = None, task_id: str 
                 raise ValueError(f"dependency tasks are not equivalent: {', '.join(mutation['differences'])}")
             if not (reason or "").strip():
                 raise ValueError("dependency reuse requires --reason")
+        elif action == "exclude-dependency":
+            if not task_id or reuse_task_id or job_id:
+                raise ValueError("dependency exclusion requires exactly --task-id")
+            before_row = state.db.execute("SELECT * FROM research_tasks WHERE task_id=?", (task_id,)).fetchone()
+            if not before_row: raise ValueError("unknown failed dependency task")
+            before = dict(before_row); mutation = state.preview_dependency_exclusion(task_id)
+            if not mutation["eligible"]:
+                raise ValueError(f"dependency task is not excludable: {', '.join(mutation['differences'])}")
+            if not (reason or "").strip(): raise ValueError("dependency exclusion requires --reason")
         elif action == "release-expired-task":
             if not task_id or job_id:
                 raise ValueError("task recovery requires exactly --task-id")
@@ -136,6 +145,8 @@ def recover(root: Path, *, action: str, job_id: str | None = None, task_id: str 
                f"operator bounded recovery: {action}", utc_now(), job_id))
         elif action == "reuse-dependency":
             state.apply_dependency_reuse(task_id, reuse_task_id, reason=reason or "")
+        elif action == "exclude-dependency":
+            state.apply_dependency_exclusion(task_id, reason=reason or "")
         else:
             cursor = state.db.execute("""UPDATE research_tasks SET state=?,error=?,lease_owner=NULL,
               lease_expires_at=NULL,updated_at=? WHERE task_id=? AND state='running'
@@ -158,7 +169,7 @@ def main() -> None:
     parser.add_argument("--repo-root", default=str(ROOT))
     parser.add_argument("--action", required=True,
                         choices=["resume-checker", "schedule-repair", "recheck-publication",
-                                 "release-expired-task", "reuse-dependency"])
+                                 "release-expired-task", "reuse-dependency", "exclude-dependency"])
     parser.add_argument("--job-id")
     parser.add_argument("--task-id")
     parser.add_argument("--reuse-task-id")

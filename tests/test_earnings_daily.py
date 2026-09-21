@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'script'))
 from earnings_common import atomic_write_json, sha256_file
 from earnings_daily import (DailyLedger, _latest_company_publication_heads, _publication_matches_current_head,
-    fail_owned_attempt, finalize, notification_material, render_publication_entries, run, run_gap_review_step,
+    _quarterly_market_readiness, fail_owned_attempt, finalize, notification_material, render_publication_entries, run, run_gap_review_step,
     run_publication_work, round_progress, season_limit, unresolved_terminal_count)
 from earnings_period_review import QuarterlyReviewLedger
 from earnings_state import EarningsState
@@ -99,6 +99,82 @@ class EarningsDailyTests(unittest.TestCase):
             context.assert_not_called(); gap.assert_not_called()
             self.assertEqual(ledger.used('2026-09-20', 'quarterly'), 0)
             state.close(); ledger.db.close()
+
+    def test_ineligible_rolling_scope_does_not_spend_gap_review_call(self):
+        import time
+        from earnings_daily import run_quarterly_step
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); state = EarningsState(root / 'runtime/earnings/state.sqlite'); ledger = DailyLedger(root)
+            config = json.loads((ROOT / 'config/earnings_research.json').read_text()); config['quarterly']['automatic_trigger_enabled'] = True
+            scope = {'scope_id': 'q3-cloud', 'industry_id': 'cloud-software', 'period_start': '2026-07-01',
+                'period_end': '2026-09-30', 'quarter_id': '2026-Q3', 'revision': 1,
+                'cutoff': '2026-09-20T00:00:00Z', 'frozen_scope_path': 'frozen.json',
+                'frozen_industry': {'industry_id': 'cloud-software', 'issuers': [], 'key_symbols': []},
+                'input_fingerprint': 'one-of-six', 'eligible_stage': False, 'deadline_stage_allowed': False,
+                'maturity': {'counts': {'researched_issuers': 1}, 'critical_gap_status': 'unresolved'}}
+            with patch('earnings_daily.inspect_due', return_value={'scopes': [scope], 'quarter': '2026-Q3'}), \
+                 patch('earnings_daily.run_gap_review_step') as gap, patch('earnings_daily.command') as command:
+                outcomes = run_quarterly_step(root, config, {}, state, ledger, {}, '2026-09-20',
+                    '2026-09-20T00:00:00Z', 'q3', root / 'runtime/earnings/logs', time.monotonic() + 1800)
+            gap.assert_not_called(); command.assert_not_called()
+            self.assertEqual(outcomes[0]['reason'], 'quarterly stage trigger has not been reached')
+            self.assertEqual(ledger.used('2026-09-20', 'review'), 0)
+            state.close(); ledger.db.close()
+
+    def test_sealed_stage_with_gaps_selects_stage_market_not_full(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); state = EarningsState(root / 'runtime/earnings/state.sqlite')
+            ledger = QuarterlyReviewLedger(root / 'runtime/earnings/quarterly.sqlite')
+            scope = ledger.freeze({'quarter_id': '2026-Q2', 'period_start': '2026-04-01', 'period_end': '2026-06-30'},
+                {'industry_id': 'limited', 'issuers': [], 'key_symbols': []}, '2026-08-31T00:00:00Z', edition='stage')
+            task, _ = state.enqueue_task(task_type='synthesis', subject_id='limited', period_start='2026-04-01',
+                period_end='2026-06-30', input_hash='s', method_version='v1', source_mode='live', profile='quarterly',
+                model='m', effort='e')
+            state.db.execute("UPDATE research_tasks SET state='completed' WHERE task_id=?", (task,))
+            source = root / 'report/earnings/industries/limited/synthesis.json'
+            atomic_write_json(source, {'report_id': 's', 'report_type': 'synthesis', 'task_id': task, 'source_mode': 'live'})
+            digest = sha256_file(source)
+            state.db.execute('INSERT INTO report_artifacts VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
+                ('s', task, 'synthesis', 'limited', '2026-04-01', '2026-06-30', str(source.relative_to(root)),
+                 digest, 'm', 'live', 'partial', '2026-08-31T00:00:00Z'))
+            manifest = root / 'report/earnings/publications/industry/limited/2026-Q2/v1/publication-manifest.json'
+            atomic_write_json(manifest, {'publication_id': 'p', 'publishable': True, 'edition': 'stage',
+                'checker': {'status': 'passed', 'errors': []}, 'sources': [{'sha256': digest}]})
+            state.db.execute('INSERT INTO publication_artifacts VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
+                ('p', 'series', 'industry', 'limited', '2026-Q2', 'stage', 1, str(manifest.relative_to(root)),
+                 sha256_file(manifest), 'body', 'passed', '2026-08-31T00:00:00Z'))
+            ledger.set_stage(scope['scope_id'], 'synthesis', 'completed', artifact_path=str(source.relative_to(root)), artifact_sha256=digest)
+            ledger.db.execute("UPDATE quarterly_scopes SET finalization_state='finalized_stage_with_gaps' WHERE scope_id=?", (scope['scope_id'],)); ledger.db.commit()
+            readiness = _quarterly_market_readiness(root, state, ledger.db)
+            self.assertEqual(readiness['actionable'][0]['edition'], 'stage')
+            self.assertEqual(readiness['actionable'][0]['dependencies'][0]['finalization_state'], 'finalized_stage_with_gaps')
+            state.close(); ledger.close()
+
+    def test_quarterly_runner_passes_stage_edition_to_market_context(self):
+        import time
+        from earnings_daily import run_quarterly_step
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); state = EarningsState(root / 'runtime/earnings/state.sqlite'); daily = DailyLedger(root)
+            qledger = QuarterlyReviewLedger(root / 'runtime/earnings/quarterly.sqlite')
+            scope = qledger.freeze({'quarter_id': '2026-Q2', 'period_start': '2026-04-01', 'period_end': '2026-06-30'},
+                {'industry_id': 'limited', 'issuers': [], 'key_symbols': []}, '2026-08-31T00:00:00Z', edition='stage')
+            report = root / 'report/earnings/limited.json'; atomic_write_json(report, {'report_id': 'limited'})
+            digest = sha256_file(report)
+            qledger.set_stage(scope['scope_id'], 'synthesis', 'completed', artifact_path=str(report.relative_to(root)), artifact_sha256=digest)
+            qledger.close()
+            config = json.loads((ROOT / 'config/earnings_research.json').read_text()); config['quarterly']['automatic_trigger_enabled'] = True
+            ready = {'quarter_id': '2026-Q2', 'period_start': '2026-04-01', 'period_end': '2026-06-30',
+                     'edition': 'stage', 'reasons': [], 'dependencies': []}
+            artifact = {'path': str(report.relative_to(root)), 'sha256': digest, 'report': {}}
+            with patch('earnings_daily.inspect_due', return_value={'scopes': [], 'quarter': '2026-Q2'}), \
+                 patch('earnings_daily._quarterly_market_readiness', return_value={'actionable': [ready], 'waiting': []}), \
+                 patch('earnings_daily._latest_role_artifact', return_value=artifact), \
+                 patch('earnings_daily.command', return_value={'status': 'skipped', 'model_execution_required': False}) as context:
+                run_quarterly_step(root, config, {}, state, daily, {}, '2026-09-20', '2026-08-31T00:00:00Z',
+                    'stage-market', root / 'runtime/earnings/logs', time.monotonic() + 1800)
+            args = context.call_args.args[2]
+            self.assertEqual(args[args.index('--edition') + 1], 'stage')
+            state.close(); daily.db.close()
 
     def test_gap_quota_stops_later_quarterly_scopes_and_market_work(self):
         import time

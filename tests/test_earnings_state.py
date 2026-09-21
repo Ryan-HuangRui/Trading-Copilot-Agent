@@ -140,6 +140,45 @@ class EarningsStateTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "not equivalent"):
             self.state.apply_dependency_reuse(failed, old, reason="must not fall back")
 
+    def test_legacy_config_hashes_require_two_matching_immutable_semantic_proofs(self):
+        root = Path(self.temp.name); history = root / "runtime/earnings/config-history"; history.mkdir(parents=True)
+        base = {"schema_version": 1, "sources": {"primary": ["sec"]},
+                "profiles": {"daily": {"model": "m", "reasoning_effort": "e"}},
+                "budgets": {"max_task_attempts": 2, "initialization_lookback_quarters": 8}}
+        paths = [history / "one.json", history / "two.json"]
+        paths[0].write_text(__import__("json").dumps(base, sort_keys=True), encoding="utf-8")
+        paths[1].write_text(__import__("json").dumps(base, sort_keys=True, indent=2), encoding="utf-8")
+        hashes = [sha256_file(path) for path in paths]
+        for path, digest in zip(paths, hashes): path.rename(history / f"{digest}.json")
+        tasks = []
+        for index, digest in enumerate(hashes):
+            task, _ = self.state.enqueue_task(task_type="company", subject_id="legacy", period_start=None,
+                period_end="2026-06-30", input_hash=f"legacy-{index}", method_version="v1", source_mode="live",
+                profile="daily", model="m", effort="e")
+            self.state.freeze_task_input(task, {"documents": [], "configuration_hash": digest}, f"legacy-{index}")
+            tasks.append(task)
+        self.state.db.execute("UPDATE research_tasks SET state='completed',output_manifest='old' WHERE task_id=?", (tasks[1],))
+        report = root / "report/earnings/legacy.json"; atomic_write_json(report, {"report_id": "legacy"})
+        self.state.db.execute("INSERT INTO report_artifacts VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            ("legacy", tasks[1], "company", "legacy", None, "2026-06-30", str(report.relative_to(root)),
+             sha256_file(report), "m", "live", "partial", "now"))
+        self.state.db.execute("UPDATE research_tasks SET state='terminal_failed' WHERE task_id=?", (tasks[0],))
+        proof = self.state.preview_dependency_reuse(tasks[0], tasks[1])
+        self.assertTrue(proof["eligible"]); self.assertTrue(proof["configuration_proofs"]["equivalent"])
+
+    def test_explicit_dependency_exclusion_releases_limited_stage_but_preserves_failure(self):
+        old = self.enqueue("excluded")
+        self.state.complete_task(old, "old.json")
+        failed, _ = self.state.enqueue_task(task_type="company", subject_id="excluded", period_start="2026-01-01",
+            period_end="2026-03-31", input_hash="new", method_version="v1", source_mode="fixture", profile="daily",
+            model="gpt-5.6-sol", effort="medium")
+        self.state.db.execute("UPDATE research_tasks SET state='terminal_failed',attempts=2,error='original' WHERE task_id=?", (failed,))
+        child = self.enqueue("child-excluded", [old])
+        self.assertIsNone(self.state.claim_task(child, owner="before", lease_seconds=60))
+        applied = self.state.apply_dependency_exclusion(failed, reason="semantic config proof unavailable")
+        self.assertEqual(applied["failed_before"]["error"], "original")
+        self.assertEqual(self.state.claim_task(child, owner="after", lease_seconds=60)["task_id"], child)
+
     def test_company_queue_round_robins_issuers_before_deeper_history(self):
         for issuer in ("issuer-a", "issuer-b"):
             self.state.upsert_issuer(issuer_id=issuer, cik=None, symbol=issuer[-1].upper(),

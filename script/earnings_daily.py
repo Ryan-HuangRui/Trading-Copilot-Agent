@@ -272,8 +272,10 @@ def unresolved_terminal_count(state: EarningsState, cutoff: str | None = None) -
         SELECT 1 FROM research_tasks n WHERE n.rowid>t.rowid AND n.source_mode=t.source_mode
       AND n.task_type=t.task_type AND n.subject_id=t.subject_id
         AND n.period_start IS t.period_start AND n.period_end IS t.period_end
-        AND NOT (n.state='superseded' AND EXISTS(SELECT 1 FROM dependency_reuse_audit a
-          WHERE a.failed_task_id=n.task_id AND a.reused_task_id=t.task_id)))
+        AND NOT ((n.state='superseded' AND EXISTS(SELECT 1 FROM dependency_reuse_audit a
+          WHERE a.failed_task_id=n.task_id AND a.reused_task_id=t.task_id)) OR
+          (n.state='excluded' AND EXISTS(SELECT 1 FROM dependency_exclusion_audit e
+          WHERE e.failed_task_id=n.task_id))))
       {terminal_cutoff}
       AND (t.task_type!='company' OR t.period_end IS (SELECT MAX(x.period_end)
         FROM research_tasks x JOIN earnings_events xe ON xe.event_id=x.subject_id
@@ -310,26 +312,32 @@ def _quarterly_market_readiness(root: Path, state: EarningsState, qdb: sqlite3.C
         for quarter in quarters:
             scopes = qdb.execute("SELECT * FROM quarterly_scopes WHERE quarter_id=? AND edition!='monitor' ORDER BY industry_id",
                                  (quarter["quarter_id"],)).fetchall()
-            reasons = []
+            full_reasons = []; sealed_reasons = []; dependencies = []
             for scope in scopes:
+                dependency = {"industry_id": scope["industry_id"],
+                              "finalization_state": scope["finalization_state"], "publication_edition": None}
                 stage = qdb.execute("""SELECT state,artifact_path,artifact_sha256 FROM quarterly_stages
                     WHERE scope_id=? AND stage='synthesis'""", (scope["scope_id"],)).fetchone()
                 if not stage or stage["state"] != "completed" or not stage["artifact_path"] or not stage["artifact_sha256"]:
-                    reasons.append(f"{scope['industry_id']}:synthesis-waiting"); continue
+                    reason = f"{scope['industry_id']}:synthesis-waiting"
+                    full_reasons.append(reason); sealed_reasons.append(reason); dependencies.append(dependency); continue
                 source = root / stage["artifact_path"]
                 if not source.is_file() or sha256_file(source) != stage["artifact_sha256"]:
-                    reasons.append(f"{scope['industry_id']}:synthesis-invalid"); continue
+                    reason = f"{scope['industry_id']}:synthesis-invalid"
+                    full_reasons.append(reason); sealed_reasons.append(reason); dependencies.append(dependency); continue
                 artifact = state.db.execute("SELECT 1 FROM report_artifacts WHERE path=? AND sha256=? AND source_mode='live'",
                                             (stage["artifact_path"], stage["artifact_sha256"])).fetchone()
                 publication = state.db.execute("""SELECT * FROM publication_artifacts WHERE publication_type='industry'
                     AND scope_id=? AND quarter_id=? ORDER BY version DESC LIMIT 1""",
                     (scope["industry_id"], scope["quarter_id"])).fetchone()
                 if not artifact or not publication:
-                    reasons.append(f"{scope['industry_id']}:publication-waiting"); continue
+                    reason = f"{scope['industry_id']}:publication-waiting"
+                    full_reasons.append(reason); sealed_reasons.append(reason); dependencies.append(dependency); continue
                 publication = dict(publication); manifest_path = root / publication["manifest_path"]
-                if (publication["edition"] != "full" or not manifest_path.is_file() or
-                        sha256_file(manifest_path) != publication["manifest_sha256"]):
-                    reasons.append(f"{scope['industry_id']}:publication-ineligible"); continue
+                dependency["publication_edition"] = publication["edition"]
+                if not manifest_path.is_file() or sha256_file(manifest_path) != publication["manifest_sha256"]:
+                    reason = f"{scope['industry_id']}:publication-ineligible"
+                    full_reasons.append(reason); sealed_reasons.append(reason); dependencies.append(dependency); continue
                 manifest = read_json(manifest_path)
                 source_hashes = {row.get("sha256") for row in manifest.get("sources", [])}
                 newer = state.db.execute("""SELECT 1 FROM publication_jobs WHERE series_key IN
@@ -338,10 +346,21 @@ def _quarterly_market_readiness(root: Path, state: EarningsState, qdb: sqlite3.C
                     AND state!='superseded'""", (publication["manifest_path"], publication["manifest_path"])).fetchone()
                 if (manifest.get("publishable") is not True or manifest.get("checker", {}).get("status") != "passed" or
                         manifest.get("checker", {}).get("errors") or stage["artifact_sha256"] not in source_hashes or newer):
-                    reasons.append(f"{scope['industry_id']}:publication-gate-waiting")
+                    reason = f"{scope['industry_id']}:publication-gate-waiting"
+                    full_reasons.append(reason); sealed_reasons.append(reason); dependencies.append(dependency); continue
+                if publication["edition"] != "full":
+                    full_reasons.append(f"{scope['industry_id']}:full-publication-required")
+                expected_final_edition = ("full" if scope["finalization_state"] == "finalized_full" else
+                                          "stage" if scope["finalization_state"] == "finalized_stage_with_gaps" else None)
+                if expected_final_edition is None or publication["edition"] != expected_final_edition:
+                    sealed_reasons.append(f"{scope['industry_id']}:delivered-final-required")
+                dependencies.append(dependency)
+            edition = "full" if not full_reasons else ("stage" if not sealed_reasons else None)
             target = {"quarter_id": quarter["quarter_id"], "period_start": quarter["period_start"],
-                      "period_end": quarter["period_end"], "reasons": reasons}
-            (waiting if reasons else actionable).append(target)
+                      "period_end": quarter["period_end"], "edition": edition,
+                      "dependencies": dependencies,
+                      "reasons": [] if edition else sorted(set(full_reasons + sealed_reasons))}
+            (actionable if edition else waiting).append(target)
     finally:
         qdb.row_factory = prior_factory
     return {"actionable": actionable, "waiting": waiting}
@@ -456,6 +475,12 @@ def run_quarterly_step(root: Path, config: dict, universe: dict, state: Earnings
                 continue
             qledger.set_stage(scope["scope_id"], "coverage", "completed",
                               input_hash=hashlib.sha256(json.dumps(scope["maturity"], sort_keys=True).encode()).hexdigest())
+            # Gap review is part of an eligible stage/final DAG, not a speculative
+            # model call for every mapped issuer fragment.
+            if not (scope["eligible_stage"] or scope["deadline_stage_allowed"]):
+                outcomes.append({"status": "skipped", "scope_id": scope["scope_id"],
+                                 "reason": "quarterly stage trigger has not been reached"})
+                continue
             if scope["maturity"]["critical_gap_status"] == "unresolved":
                 gap = run_gap_review_step(root, config, ledger, qledger, deployed, day, scope, deadline)
                 outcomes.append(gap)
@@ -470,8 +495,6 @@ def run_quarterly_step(root: Path, config: dict, universe: dict, state: Earnings
                 elif gap["status"] not in {"completed"}:
                     continue
             if ledger.used(day, "quarterly") >= cap:
-                continue
-            if not (scope["eligible_stage"] or scope["deadline_stage_allowed"]):
                 continue
             role = None; predecessors = []
             industry_config = scope["frozen_industry"]
@@ -560,7 +583,7 @@ def run_quarterly_step(root: Path, config: dict, universe: dict, state: Earnings
                 market_key = f"market:{first['quarter_id']}"
                 # Formality is decided by authoritative accepted publication gates in market_context,
                 # never by an LLM-authored completeness string.
-                market_edition = "full"
+                market_edition = first["edition"]
                 if ledger.reserve(day, market_key, "quarterly", cap):
                     market_signature = hashlib.sha256(json.dumps(sorted(reports)).encode()).hexdigest()
                     request = ledger.db.execute("SELECT input_signature,cutoff FROM quarterly_requests WHERE scope=? AND stage='market'",
@@ -954,8 +977,10 @@ def round_progress(root: Path, state: EarningsState, config: dict, cutoff: str |
         AND n.task_type=t.task_type AND n.subject_id=t.subject_id
         AND n.period_start IS t.period_start AND n.period_end IS t.period_end
         AND n.source_mode=t.source_mode
-        AND NOT (n.state='superseded' AND EXISTS(SELECT 1 FROM dependency_reuse_audit a
-          WHERE a.failed_task_id=n.task_id AND a.reused_task_id=t.task_id)))
+        AND NOT ((n.state='superseded' AND EXISTS(SELECT 1 FROM dependency_reuse_audit a
+          WHERE a.failed_task_id=n.task_id AND a.reused_task_id=t.task_id)) OR
+          (n.state='excluded' AND EXISTS(SELECT 1 FROM dependency_exclusion_audit e
+          WHERE e.failed_task_id=n.task_id))))
       AND t.period_end IS (SELECT MAX(x.period_end) FROM research_tasks x
         JOIN earnings_events xe ON xe.event_id=x.subject_id WHERE x.task_type='company'
         AND xe.issuer_id=e.issuer_id AND x.source_mode=t.source_mode

@@ -58,7 +58,7 @@ adapter 的参数形状按官方 lark-cli 文档：它把 cwd 固定到准备目
 1. 运行语法和 earnings 全部单测，确认旧日报/通知回归。
 2. 隔离状态目录运行真实公司 research → writer → checker → cloud readback；检查数字、期间、表格和引用。
 3. 对材料充分行业运行 coverage → industry → challenge → synthesis → publication；不足则应保持 stage。
-4. 只有五个冻结行业均为 full 且核对通过，才允许正式“美股重点行业季度研究”；revision 只表示版本更新，stage revision 仍不得进入 full market。
+4. 只有五个冻结行业均为 full 且核对通过，才允许 full“美股重点行业季度研究”；若全部行业已交付并封板为 finalized_full 或 finalized_stage_with_gaps，可生成明确标注缺口的 stage market。任意未封板 stage、partial revision 仍不得进入 full 或 stage market。
 5. 开启 tracked/runtime 的季度和文档开关后，仍只保留现有 10:00 muted cron。检查 daily-result、quarterly.sqlite、publication manifest、cloud state 和 outbox decision。
 
 回滚只需关闭四个 activation flags；不删除 SQLite、不可变报告或远端文档。需要重新处理时修正缺口/身份后触发新输入或显式 reconcile，禁止删除状态后盲目重建。

@@ -19,7 +19,11 @@ def assess_market_dependencies(expected_industry_ids: list[str], rows: list[dict
     for row in rows:
         if row.get("industry_id") not in expected_industry_ids or row.get("checker_status") != "passed": continue
         complete = row.get("completeness_status", "full" if row.get("edition") == "full" else None) == "full"
-        if requested_edition == "stage" or (row.get("edition") == "full" and complete):
+        sealed = row.get("finalization_state") in {"finalized_full", "finalized_stage_with_gaps"}
+        final_edition = (row.get("edition") == "full" if row.get("finalization_state") == "finalized_full"
+                         else row.get("edition") == "stage")
+        if (requested_edition == "stage" and sealed and final_edition) or \
+                (requested_edition == "full" and row.get("edition") == "full" and complete):
             eligible.add(row["industry_id"])
     missing = sorted(set(expected_industry_ids) - eligible)
     return {"expected_industries": len(expected_industry_ids), "eligible_industries": len(eligible),
@@ -63,12 +67,13 @@ def build_context(root: Path, *, source_paths: list[Path], period_start: str, pe
                     state, root, report, frozen_scope.get("public_cutoff") or frozen_scope["cutoff"])
                 if not legal:
                     raise ValueError(f"industry synthesis evidence exceeds its frozen public boundary: {reason}")
-            quarterly_db = root / "runtime/earnings/quarterly.sqlite"
+            quarterly_db = root / "runtime/earnings/quarterly.sqlite"; scope_registry = None
             if quarterly_db.is_file():
                 import sqlite3
                 registry = sqlite3.connect(quarterly_db); registry.row_factory = sqlite3.Row
                 try:
-                    current = registry.execute("SELECT revision FROM quarterly_scopes WHERE scope_id=?",
+                    current = registry.execute("""SELECT revision,public_cutoff,research_cutoff,
+                                               finalization_state,finalization_reason FROM quarterly_scopes WHERE scope_id=?""",
                                                (frozen_scope["scope_id"],)).fetchone()
                     stage = registry.execute("SELECT state,artifact_path,artifact_sha256 FROM quarterly_stages WHERE scope_id=? AND stage='synthesis'",
                                              (frozen_scope["scope_id"],)).fetchone()
@@ -77,6 +82,7 @@ def build_context(root: Path, *, source_paths: list[Path], period_start: str, pe
                         or stage["state"] != "completed" or stage["artifact_path"] != relative_to_root(root, path)
                         or stage["artifact_sha256"] != digest):
                     raise ValueError("market input is not the completed synthesis for the current scope revision")
+                scope_registry = dict(current)
             row = state.db.execute("""SELECT a.* FROM report_artifacts a JOIN research_tasks t ON t.task_id=a.task_id
                 WHERE a.path=? AND a.sha256=? AND a.source_mode='live' AND t.state='completed'""",
                 (relative_to_root(root, path), digest)).fetchone()
@@ -101,7 +107,11 @@ def build_context(root: Path, *, source_paths: list[Path], period_start: str, pe
             reports.append({"industry_id": industry_id, "edition": report_edition, "checker_status": checker_status,
                             "completeness_status": publication_manifest.get("completeness_status",
                                 "full" if report_edition == "full" else "partial") if publication else None,
-                            "version_kind": publication_manifest.get("version_kind") if publication else None})
+                            "version_kind": publication_manifest.get("version_kind") if publication else None,
+                            "finalization_state": (scope_registry or {}).get("finalization_state"),
+                            "finalization_reason": (scope_registry or {}).get("finalization_reason"),
+                            "limitations": report.get("limitations", []),
+                            "missing_inputs": (report.get("completeness") or {}).get("missing_inputs", [])})
             predecessors.append({"report_id": report["report_id"], "task_id": report["task_id"], "path": relative_to_root(root, path),
                                  "sha256": digest, "report_type": "synthesis", "industry_id": industry_id})
         gate = assess_market_dependencies(expected_industries, reports, requested_edition=edition)
@@ -126,6 +136,10 @@ def build_context(root: Path, *, source_paths: list[Path], period_start: str, pe
                 "public_time_precision", "original_path", "content_sha256", "source_mode", "supersedes")})
         input_basis = {"edition": edition, "period_start": period_start, "period_end": period_end, "cutoff": cutoff,
                        "industries": [(r["industry_id"], r["sha256"]) for r in predecessors],
+                       "industry_finalization": sorted(({key: row.get(key) for key in (
+                           "industry_id", "edition", "completeness_status", "finalization_state", "finalization_reason",
+                           "limitations", "missing_inputs")}
+                           for row in reports), key=lambda row: row["industry_id"]),
                        "industry_cutoffs": sorted((row["industry"]["industry_id"], row["cutoff"]) for row in frozen_scopes),
                        "universe_hash": sha256_bytes(canonical_json([(row["scope_id"], row["frozen_universe_hash"]) for row in frozen_scopes]))}
         input_hash = sha256_bytes(canonical_json(input_basis)); profile = config["profiles"]["quarterly"]
@@ -156,7 +170,7 @@ def build_context(root: Path, *, source_paths: list[Path], period_start: str, pe
             "scope": {"industry_id": "cross-industry", "market_label": "美股重点行业季度研究", "reporting_start": period_start,
                       "reporting_end": period_end, "universe_version": sha256_file(root / universe_path), "expected_issuer_ids": expected_issuer_ids,
                       "expected_industry_ids": expected_industries, "industry_cutoffs": dict(input_basis["industry_cutoffs"]),
-                      "edition": edition},
+                      "edition": edition, "industry_finalization": input_basis["industry_finalization"]},
             "coverage_audit": {"counts": coverage, "industry_dependency_gate": gate, "frozen_industry_ids": expected_industries,
                                "maturity": {"eligible_full": edition == "full" and gate["eligible"],
                                             "all_industries_accepted": gate["eligible"]}},

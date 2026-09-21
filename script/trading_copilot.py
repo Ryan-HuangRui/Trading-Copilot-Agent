@@ -3970,7 +3970,7 @@ def build_parser() -> argparse.ArgumentParser:
     earnings_recovery.add_argument("--repo-root", default=str(ROOT))
     earnings_recovery.add_argument("--action", required=True,
         choices=["resume-checker", "schedule-repair", "recheck-publication",
-                 "release-expired-task", "reuse-dependency"])
+                 "release-expired-task", "reuse-dependency", "exclude-dependency"])
     earnings_recovery.add_argument("--job-id")
     earnings_recovery.add_argument("--task-id")
     earnings_recovery.add_argument("--reuse-task-id")

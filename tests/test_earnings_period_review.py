@@ -413,8 +413,26 @@ class EarningsPeriodReviewTests(unittest.TestCase):
             state.db.execute("INSERT INTO report_artifacts VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                 ("report", task, "company", "event", None, "2026-07-26", str(report.relative_to(root)), sha256_file(report),
                  "manifest", "live", "partial", "2026-08-02T00:00:00Z"))
+            historical = root / "raw_data/earnings/historical.txt"; historical.write_text("old filing")
+            state.register_document({"document_id": "historical", "issuer_id": "issuer", "event_id": "event", "form": "10-K",
+                "source_type": "sec_filing", "source_url": "https://example.com/old", "provider": "sec", "backend": "test",
+                "reporting_start": "2024-01-01", "reporting_end": "2024-12-31", "published_at": "2025-02-01T00:00:00Z",
+                "accepted_at": "2025-02-01T00:00:00Z", "fetched_at": "2025-02-01T00:00:00Z",
+                "public_time_precision": "second", "original_path": str(historical.relative_to(root)),
+                "content_sha256": sha256_file(historical), "source_mode": "live", "metadata_json": "{}"})
+            aggregate = root / "raw_data/earnings/companyfacts.json"; aggregate.write_text("{}")
+            state.register_document({"document_id": "companyfacts", "issuer_id": "issuer", "event_id": "event", "form": None,
+                "source_type": "sec_companyfacts", "source_url": "https://example.com/facts", "provider": "sec", "backend": "test",
+                "reporting_start": None, "reporting_end": None, "published_at": "2026-08-04T00:00:00Z",
+                "accepted_at": "2026-08-04T00:00:00Z", "fetched_at": "2026-08-04T00:00:00Z",
+                "public_time_precision": "second", "original_path": str(aggregate.relative_to(root)),
+                "content_sha256": sha256_file(aggregate), "source_mode": "live", "metadata_json": "{}"})
             self.assertEqual(_period_members(state, ["issuer"], "2026-Q2", "2026-08-03T00:00:00Z"),
                              ({"issuer"}, {"issuer"}, {"issuer"}))
+            self.assertEqual(_period_member_audit(state, ["issuer"], "2026-Q2",
+                public_cutoff="2026-08-03T00:00:00Z", research_cutoff="2026-08-03T00:00:00Z")[3]["issuer"], [])
+            self.assertEqual(_period_members(state, ["issuer"], "2026-Q3", "2026-08-03T00:00:00Z"),
+                             (set(), set(), set()))
             original.unlink()
             self.assertEqual(_period_members(state, ["issuer"], "2026-Q2", "2026-08-03T00:00:00Z"),
                              ({"issuer"}, set(), set()))

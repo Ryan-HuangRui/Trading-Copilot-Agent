@@ -94,6 +94,30 @@ class EarningsRecoveryTests(unittest.TestCase):
             self.assertEqual(rows[task_ids[1]], "running")
             state.close()
 
+    def test_dependency_exclusion_is_preview_first_backed_up_and_releases_older_head(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); state = EarningsState(root / "runtime/earnings/state.sqlite")
+            old, _ = state.enqueue_task(task_type="company", subject_id="amat", period_start=None, period_end="2026-07-26",
+                input_hash="old", method_version="v1", source_mode="live", profile="daily", model="m", effort="e")
+            state.db.execute("UPDATE research_tasks SET state='completed',output_manifest='old' WHERE task_id=?", (old,))
+            failed, _ = state.enqueue_task(task_type="company", subject_id="amat", period_start=None, period_end="2026-07-26",
+                input_hash="new", method_version="v1", source_mode="live", profile="daily", model="m", effort="e")
+            state.db.execute("UPDATE research_tasks SET state='terminal_failed',attempts=2,error='original' WHERE task_id=?", (failed,))
+            child, _ = state.enqueue_task(task_type="industry", subject_id="semi", period_start="2026-04-01",
+                period_end="2026-06-30", input_hash="industry", method_version="v1", source_mode="live",
+                profile="quarterly", model="q", effort="h", dependencies=[old])
+            state.close()
+            preview = recover(root, action="exclude-dependency", task_id=failed, reason="legacy proof unavailable")
+            self.assertEqual((preview["status"], preview["planned"]["failed_before"]["error"]), ("preview", "original"))
+            result = recover(root, action="exclude-dependency", task_id=failed,
+                             reason="legacy proof unavailable", execute=True)
+            self.assertTrue((root / result["backup_path"]).is_file())
+            state = EarningsState(root / "runtime/earnings/state.sqlite")
+            self.assertEqual(state.db.execute("SELECT state FROM research_tasks WHERE task_id=?", (failed,)).fetchone()[0],
+                             "excluded")
+            self.assertEqual(state.claim_task(child, owner="limited", lease_seconds=60)["task_id"], child)
+            state.close()
+
     def test_exact_checker_recovery_previews_then_backs_up_and_executes_once(self):
         with TemporaryDirectory() as temp:
             root = Path(temp).resolve()

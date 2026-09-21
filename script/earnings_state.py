@@ -11,7 +11,8 @@ from pathlib import Path
 import sqlite3
 from typing import Any, Iterator, Sequence
 
-from earnings_common import ROOT, confined_path, emit, envelope, parse_time, sha256_file, stable_id, utc_now
+from earnings_common import (ROOT, canonical_json, confined_path, emit, envelope, parse_time, read_json,
+                             sha256_bytes, sha256_file, stable_id, utc_now)
 
 
 SCHEMA = """
@@ -56,6 +57,10 @@ CREATE TABLE IF NOT EXISTS dependency_reuse_audit (
   reason TEXT NOT NULL, created_at TEXT NOT NULL,
   FOREIGN KEY(failed_task_id) REFERENCES research_tasks(task_id),
   FOREIGN KEY(reused_task_id) REFERENCES research_tasks(task_id)
+);
+CREATE TABLE IF NOT EXISTS dependency_exclusion_audit (
+  failed_task_id TEXT PRIMARY KEY, proof_json TEXT NOT NULL, reason TEXT NOT NULL, created_at TEXT NOT NULL,
+  FOREIGN KEY(failed_task_id) REFERENCES research_tasks(task_id)
 );
 CREATE TABLE IF NOT EXISTS source_watermarks (
   source TEXT NOT NULL, scope TEXT NOT NULL, watermark TEXT, status TEXT NOT NULL,
@@ -289,15 +294,75 @@ class EarningsState:
             failed_input = completed_input = None
             differences.append("frozen_input")
         if failed_input is not None and completed_input is not None:
+            configuration_proofs = self._configuration_equivalence_proofs(
+                repo_root, failed_input, completed_input)
             for field in ("documents", "companyfacts", "calculation_inputs", "event", "issuer",
-                          "configuration_hash", "configuration_basis", "semantic_configuration", "source_mode"):
+                          "semantic_configuration", "source_mode"):
                 if failed_input.get(field) != completed_input.get(field): differences.append(field)
+            if ((failed_input.get("configuration_hash") != completed_input.get("configuration_hash") or
+                 failed_input.get("configuration_basis") != completed_input.get("configuration_basis"))
+                    and not configuration_proofs["equivalent"]):
+                differences.append("configuration_hash")
+        else:
+            configuration_proofs = {"equivalent": False, "reason": "frozen input missing", "inputs": []}
         proof = {"failed_task_id": failed_task_id, "reused_task_id": completed_task_id,
                  "eligible": not differences, "differences": sorted(set(differences)),
                  "output_manifest": completed["output_manifest"],
                  "failed_before": {key: failed[key] for key in failed.keys()},
-                 "completed_before": {key: completed[key] for key in completed.keys()}}
+                 "completed_before": {key: completed[key] for key in completed.keys()},
+                 "configuration_proofs": configuration_proofs}
         return proof
+
+    @staticmethod
+    def _configuration_equivalence_proofs(repo_root: Path, *inputs: dict[str, Any]) -> dict[str, Any]:
+        """Resolve semantic config identity only from immutable, hash-verified evidence."""
+        from earnings_common import company_research_configuration_basis, company_research_configuration_hash
+        proofs = []
+        for frozen in inputs:
+            raw_hash = frozen.get("configuration_hash"); basis = frozen.get("configuration_basis")
+            proof = {"raw_configuration_hash": raw_hash, "status": "missing", "semantic_hash": None,
+                     "source": None}
+            if isinstance(basis, dict):
+                proof.update(status="verified", semantic_hash=sha256_bytes(canonical_json(basis)),
+                             source="frozen_configuration_basis")
+            elif isinstance(raw_hash, str):
+                history = repo_root / "runtime/earnings/config-history" / f"{raw_hash}.json"
+                if history.is_file() and sha256_file(history) == raw_hash:
+                    config = read_json(history)
+                    proof.update(status="verified", semantic_hash=company_research_configuration_hash(config),
+                                 semantic_basis=company_research_configuration_basis(config),
+                                 source=str(history.relative_to(repo_root)))
+            proofs.append(proof)
+        hashes = {row["semantic_hash"] for row in proofs if row["status"] == "verified"}
+        equivalent = len(proofs) > 0 and all(row["status"] == "verified" for row in proofs) and len(hashes) == 1
+        return {"equivalent": equivalent, "reason": None if equivalent else "both frozen configs need matching immutable semantic proofs",
+                "inputs": proofs}
+
+    def preview_dependency_exclusion(self, failed_task_id: str) -> dict[str, Any]:
+        failed = self.db.execute("SELECT * FROM research_tasks WHERE task_id=?", (failed_task_id,)).fetchone()
+        if not failed: raise ValueError("dependency exclusion task is missing")
+        dependents = [row[0] for row in self.db.execute(
+            "SELECT task_id FROM task_dependencies WHERE dependency_task_id=? ORDER BY task_id", (failed_task_id,))]
+        differences = [] if failed["state"] == "terminal_failed" else ["failed_state"]
+        if dependents: differences.append("direct_dependents")
+        proof = {"failed_task_id": failed_task_id, "eligible": not differences,
+                 "differences": differences, "direct_dependents": dependents,
+                 "failed_before": {key: failed[key] for key in failed.keys()}}
+        return proof
+
+    def apply_dependency_exclusion(self, failed_task_id: str, *, reason: str) -> dict[str, Any]:
+        if not reason.strip(): raise ValueError("dependency exclusion requires an operator reason")
+        proof = self.preview_dependency_exclusion(failed_task_id)
+        if not proof["eligible"]: raise ValueError("failed dependency is not excludable")
+        with self.immediate() as db:
+            changed = db.execute("""UPDATE research_tasks SET state='excluded',error=?,updated_at=?
+              WHERE task_id=? AND state='terminal_failed'""",
+              (f"explicitly excluded from limited-stage research: {reason}", utc_now(), failed_task_id)).rowcount
+            if changed != 1: raise ValueError("failed dependency changed after preview; no exclusion applied")
+            db.execute("INSERT INTO dependency_exclusion_audit VALUES(?,?,?,?)",
+                       (failed_task_id, json.dumps(proof, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+                        reason, utc_now()))
+        return {**proof, "status": "excluded", "reason": reason}
 
     def apply_dependency_reuse(self, failed_task_id: str, completed_task_id: str, *, reason: str) -> dict[str, Any]:
         """Apply one previewed equivalence without deleting the failure or its attempts."""
@@ -446,8 +511,10 @@ class EarningsState:
             SELECT 1 FROM research_tasks xn WHERE xn.rowid>x.rowid AND xn.task_type=x.task_type
             AND xn.subject_id=x.subject_id AND xn.period_start IS x.period_start AND xn.period_end IS x.period_end
             AND xn.source_mode=x.source_mode
-            AND NOT (xn.state='superseded' AND EXISTS(SELECT 1 FROM dependency_reuse_audit a
-              WHERE a.failed_task_id=xn.task_id AND a.reused_task_id=x.task_id))))"""
+            AND NOT ((xn.state='superseded' AND EXISTS(SELECT 1 FROM dependency_reuse_audit a
+              WHERE a.failed_task_id=xn.task_id AND a.reused_task_id=x.task_id)) OR
+              (xn.state='excluded' AND EXISTS(SELECT 1 FROM dependency_exclusion_audit e
+              WHERE e.failed_task_id=xn.task_id)))))"""
         depth_expr = """(SELECT COUNT(DISTINCT x.period_end) FROM research_tasks x
           JOIN earnings_events xe ON xe.event_id=x.subject_id JOIN earnings_events te ON te.event_id=t.subject_id
           WHERE x.task_type='company' AND xe.issuer_id=te.issuer_id AND x.source_mode=t.source_mode
@@ -456,8 +523,10 @@ class EarningsState:
             SELECT 1 FROM research_tasks xn WHERE xn.rowid>x.rowid AND xn.task_type=x.task_type
             AND xn.subject_id=x.subject_id AND xn.period_start IS x.period_start AND xn.period_end IS x.period_end
             AND xn.source_mode=x.source_mode
-            AND NOT (xn.state='superseded' AND EXISTS(SELECT 1 FROM dependency_reuse_audit a
-              WHERE a.failed_task_id=xn.task_id AND a.reused_task_id=x.task_id))))"""
+            AND NOT ((xn.state='superseded' AND EXISTS(SELECT 1 FROM dependency_reuse_audit a
+              WHERE a.failed_task_id=xn.task_id AND a.reused_task_id=x.task_id)) OR
+              (xn.state='excluded' AND EXISTS(SELECT 1 FROM dependency_exclusion_audit e
+              WHERE e.failed_task_id=xn.task_id)))))"""
         if company_tier not in {None, "current", "history"}:
             raise ValueError("company_tier must be current or history")
         if task_type == "company" and company_tier:
@@ -472,14 +541,18 @@ class EarningsState:
                   SELECT 1 FROM research_tasks pn WHERE pn.rowid>p.rowid AND pn.task_type=p.task_type
                   AND pn.subject_id=p.subject_id AND pn.period_start IS p.period_start
                   AND pn.period_end IS p.period_end AND pn.source_mode=p.source_mode
-                  AND NOT (pn.state='superseded' AND EXISTS(SELECT 1 FROM dependency_reuse_audit a
-                    WHERE a.failed_task_id=pn.task_id AND a.reused_task_id=p.task_id)))))
+                  AND NOT ((pn.state='superseded' AND EXISTS(SELECT 1 FROM dependency_reuse_audit a
+                    WHERE a.failed_task_id=pn.task_id AND a.reused_task_id=p.task_id)) OR
+                    (pn.state='excluded' AND EXISTS(SELECT 1 FROM dependency_exclusion_audit e
+                    WHERE e.failed_task_id=pn.task_id))))))
                 AND NOT EXISTS(SELECT 1 FROM research_tasks n WHERE n.rowid>t.rowid
                   AND n.task_type=t.task_type AND n.subject_id=t.subject_id
                   AND n.period_start IS t.period_start AND n.period_end IS t.period_end
                   AND n.source_mode=t.source_mode
-                  AND NOT (n.state='superseded' AND EXISTS(SELECT 1 FROM dependency_reuse_audit a
-                    WHERE a.failed_task_id=n.task_id AND a.reused_task_id=t.task_id)))
+                  AND NOT ((n.state='superseded' AND EXISTS(SELECT 1 FROM dependency_reuse_audit a
+                    WHERE a.failed_task_id=n.task_id AND a.reused_task_id=t.task_id)) OR
+                    (n.state='excluded' AND EXISTS(SELECT 1 FROM dependency_exclusion_audit e
+                    WHERE e.failed_task_id=n.task_id))))
                 ORDER BY t.created_at,t.task_id""",
                 params,
             ).fetchall()
@@ -496,8 +569,10 @@ class EarningsState:
                         SELECT 1 FROM research_tasks xn WHERE xn.rowid>x.rowid AND xn.task_type=x.task_type
                         AND xn.subject_id=x.subject_id AND xn.period_start IS x.period_start
                         AND xn.period_end IS x.period_end AND xn.source_mode=x.source_mode
-                        AND NOT (xn.state='superseded' AND EXISTS(SELECT 1 FROM dependency_reuse_audit a
-                          WHERE a.failed_task_id=xn.task_id AND a.reused_task_id=x.task_id)))""",
+                        AND NOT ((xn.state='superseded' AND EXISTS(SELECT 1 FROM dependency_reuse_audit a
+                          WHERE a.failed_task_id=xn.task_id AND a.reused_task_id=x.task_id)) OR
+                          (xn.state='excluded' AND EXISTS(SELECT 1 FROM dependency_exclusion_audit e
+                          WHERE e.failed_task_id=xn.task_id))))""",
                       (meta["issuer_id"], row["source_mode"], row["period_end"])).fetchone()[0]
                 return (0 if meta and meta["symbol"] in priority else 1, depth,
                         0 if int(row["attempts"]) == 0 else 1,
@@ -533,13 +608,17 @@ class EarningsState:
                   SELECT 1 FROM research_tasks pn WHERE pn.rowid>p.rowid AND pn.task_type=p.task_type
                   AND pn.subject_id=p.subject_id AND pn.period_start IS p.period_start
                   AND pn.period_end IS p.period_end AND pn.source_mode=p.source_mode
-                  AND NOT (pn.state='superseded' AND EXISTS(SELECT 1 FROM dependency_reuse_audit a
-                    WHERE a.failed_task_id=pn.task_id AND a.reused_task_id=p.task_id))))""", (task_id,),
+                  AND NOT ((pn.state='superseded' AND EXISTS(SELECT 1 FROM dependency_reuse_audit a
+                    WHERE a.failed_task_id=pn.task_id AND a.reused_task_id=p.task_id)) OR
+                    (pn.state='excluded' AND EXISTS(SELECT 1 FROM dependency_exclusion_audit e
+                    WHERE e.failed_task_id=pn.task_id)))))""", (task_id,),
             ).fetchone()["count"]
             superseded = db.execute("""SELECT 1 FROM research_tasks n WHERE n.rowid>? AND n.task_type=?
               AND n.subject_id=? AND n.period_start IS ? AND n.period_end IS ? AND n.source_mode=?
-              AND NOT (n.state='superseded' AND EXISTS(SELECT 1 FROM dependency_reuse_audit a
-                WHERE a.failed_task_id=n.task_id AND a.reused_task_id=?))""",
+              AND NOT ((n.state='superseded' AND EXISTS(SELECT 1 FROM dependency_reuse_audit a
+                WHERE a.failed_task_id=n.task_id AND a.reused_task_id=?)) OR
+                (n.state='excluded' AND EXISTS(SELECT 1 FROM dependency_exclusion_audit e
+                WHERE e.failed_task_id=n.task_id)))""",
               (row["db_rowid"], row["task_type"], row["subject_id"],
                row["period_start"], row["period_end"], row["source_mode"], task_id)).fetchone()
             if not eligible_state or blocked or superseded or row["attempts"] >= row["max_attempts"]:
