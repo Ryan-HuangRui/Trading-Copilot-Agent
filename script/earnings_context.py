@@ -166,7 +166,9 @@ def _manifest_for_task(root: Path, state: EarningsState, task: dict[str, Any], c
         AND a.task_id!=? AND t.state='completed' AND NOT EXISTS(
           SELECT 1 FROM research_tasks n WHERE n.rowid>t.rowid AND n.task_type=t.task_type
           AND n.subject_id=t.subject_id AND n.period_start IS t.period_start AND n.period_end IS t.period_end
-          AND n.source_mode=t.source_mode AND n.task_id!=? AND n.state IN ('queued','running','completed','retryable_failed'))
+          AND n.source_mode=t.source_mode AND n.task_id!=? AND n.state IN ('queued','running','completed','retryable_failed')
+          AND NOT (n.state='superseded' AND EXISTS(SELECT 1 FROM dependency_reuse_audit a
+            WHERE a.failed_task_id=n.task_id AND a.reused_task_id=t.task_id)))
         ORDER BY a.period_end DESC,a.created_at DESC LIMIT 4""", (event["issuer_id"], task["task_id"], task["task_id"]),
     ):
         artifact = dict(artifact)
