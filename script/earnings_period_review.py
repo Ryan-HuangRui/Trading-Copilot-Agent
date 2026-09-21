@@ -560,13 +560,6 @@ def _period_member_audit(state: EarningsState, issuer_ids: list[str], quarter_id
             ORDER BY a.rowid DESC""", event_ids).fetchall()
         for raw in reports:
             row = dict(raw); report_path = root / row["path"]
-            exclusion = state.task_blocked_by_exclusion(row["task_id"])
-            if exclusion:
-                reasons[issuer_id].append(
-                    f"current company input explicitly excluded: {exclusion['failed_task_id']}")
-                continue
-            if accepted_report_hashes is not None and row["sha256"] not in accepted_report_hashes:
-                continue
             if not report_path.is_file() or sha256_file(report_path) != row["sha256"]:
                 continue
             report = read_json(report_path)
@@ -574,16 +567,32 @@ def _period_member_audit(state: EarningsState, issuer_ids: list[str], quarter_id
             except ValueError:
                 continue
             if resolved_period["research_quarter"] != quarter_id: continue
-            # Null-period source metadata is bound only after the accepted report's
-            # actual standalone fact period matches this requested quarter.
+            # Bind a null-metadata original only after the report's actual period
+            # maps here and the cited document identity/hash/public time is valid.
+            # File presence is checked separately below so disclosed can remain true
+            # while fetched becomes false when the registered original is missing.
             for evidence in report.get("evidence", []):
-                if evidence.get("document_id") and evidence.get("document_version") is not None and evidence.get("document_hash"):
-                    evidence_document_keys.add((str(evidence["document_id"]), int(evidence["document_version"]),
-                                                str(evidence["document_hash"])))
+                document_id = evidence.get("document_id"); version = evidence.get("document_version")
+                document_hash = evidence.get("document_hash")
+                if not document_id or version is None or not document_hash:
+                    continue
+                source = state.db.execute("""SELECT accepted_at,published_at FROM documents
+                  WHERE document_id=? AND version=? AND content_sha256=?""",
+                  (str(document_id), int(version), str(document_hash))).fetchone()
+                public = (source["accepted_at"] or source["published_at"]) if source else None
+                if source and public and parse_time(public) <= public_cutoff_dt:
+                    evidence_document_keys.add((str(document_id), int(version), str(document_hash)))
             evidence_legal, evidence_error = validate_report_public_evidence(
                 state, root, report, public_cutoff or utc_now())
             if not evidence_legal:
                 reasons[issuer_id].append(f"current-quarter research evidence invalid: {evidence_error}")
+                continue
+            exclusion = state.task_blocked_by_exclusion(row["task_id"])
+            if exclusion:
+                reasons[issuer_id].append(
+                    f"current company input explicitly excluded: {exclusion['failed_task_id']}")
+                continue
+            if accepted_report_hashes is not None and row["sha256"] not in accepted_report_hashes:
                 continue
             eligible_reports.append((row, report, resolved_period))
             break
@@ -630,15 +639,6 @@ def _scope_input_snapshot(state: EarningsState, root: Path, scope: sqlite3.Row,
         for row in state.db.execute("""SELECT a.* FROM report_artifacts a JOIN research_tasks t ON t.task_id=a.task_id
             WHERE a.report_type='company' AND a.source_mode='live' AND t.state='completed' AND a.subject_id IN
             (SELECT event_id FROM earnings_events WHERE issuer_id=?) ORDER BY a.rowid DESC""", (issuer_id,)).fetchall():
-            exclusion = state.task_blocked_by_exclusion(row["task_id"])
-            if exclusion:
-                issuer_exclusions[exclusion["failed_task_id"]] = {
-                    "issuer_id": issuer_id, "event_id": exclusion["subject_id"],
-                    "period_start": exclusion["period_start"], "period_end": exclusion["period_end"],
-                    "source_mode": exclusion["source_mode"], "failed_task_id": exclusion["failed_task_id"],
-                    "reason": exclusion["reason"],
-                }
-                continue
             path = root / row["path"]
             if not path.is_file() or sha256_file(path) != row["sha256"]: continue
             report = read_json(path)
@@ -647,6 +647,15 @@ def _scope_input_snapshot(state: EarningsState, root: Path, scope: sqlite3.Row,
             try: period = resolve_report_period(report)
             except ValueError: continue
             if period["research_quarter"] == scope["quarter_id"]:
+                exclusion = state.task_blocked_by_exclusion(row["task_id"])
+                if exclusion:
+                    issuer_exclusions[exclusion["failed_task_id"]] = {
+                        "issuer_id": issuer_id, "event_id": exclusion["subject_id"],
+                        "period_start": exclusion["period_start"], "period_end": exclusion["period_end"],
+                        "source_mode": exclusion["source_mode"], "failed_task_id": exclusion["failed_task_id"],
+                        "reason": exclusion["reason"],
+                    }
+                    continue
                 accepted.append({"issuer_id": issuer_id, "report_id": row["report_id"], "task_id": row["task_id"],
                                  "path": row["path"], "sha256": row["sha256"]})
                 versions.append((issuer_id, row["report_id"], row["sha256"])); break

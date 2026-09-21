@@ -16,6 +16,7 @@ from earnings_period_review import (
     inspect_due,
     _period_members,
     _period_member_audit,
+    _scope_input_snapshot,
     record_gap_review,
 )
 from earnings_industry_context import _company_inputs
@@ -442,6 +443,28 @@ class EarningsPeriodReviewTests(unittest.TestCase):
                 public_cutoff="2026-08-03T00:00:00Z", research_cutoff="2026-08-03T00:00:00Z")[3]["issuer"], [])
             self.assertEqual(_period_members(state, ["issuer"], "2026-Q3", "2026-08-03T00:00:00Z"),
                              (set(), set(), set()))
+            failed, _ = state.enqueue_task(task_type="company", subject_id="event", period_start=None,
+                period_end="2026-07-26", input_hash="revised", method_version="v1", source_mode="live",
+                profile="daily", model="gpt-5.6-sol", effort="medium")
+            state.db.execute("UPDATE research_tasks SET state='terminal_failed' WHERE task_id=?", (failed,))
+            state.apply_dependency_exclusion(failed, reason="unverified revised source")
+            q2 = _period_member_audit(state, ["issuer"], "2026-Q2", cutoff="2026-08-03T00:00:00Z",
+                accepted_report_hashes=set())
+            self.assertEqual(q2[:3], ({"issuer"}, {"issuer"}, set()))
+            self.assertTrue(any("explicitly excluded" in reason for reason in q2[3]["issuer"]))
+            ledger = QuarterlyReviewLedger(root / "runtime/earnings/quarterly.sqlite")
+            industry = {"industry_id": "test", "issuers": [{"symbol": "TEST"}], "key_symbols": []}
+            q2_scope = ledger.freeze({"quarter_id": "2026-Q2", "period_start": "2026-04-01",
+                "period_end": "2026-06-30"}, industry, "2026-08-03T00:00:00Z", edition="stage")
+            q3_scope = ledger.freeze({"quarter_id": "2026-Q3", "period_start": "2026-07-01",
+                "period_end": "2026-09-30"}, industry, "2026-08-03T00:00:00Z", edition="stage")
+            self.assertEqual(_scope_input_snapshot(state, root,
+                ledger.db.execute("SELECT * FROM quarterly_scopes WHERE scope_id=?", (q2_scope["scope_id"],)).fetchone(),
+                "2026-08-03T00:00:00Z")[2][0]["failed_task_id"], failed)
+            self.assertEqual(_scope_input_snapshot(state, root,
+                ledger.db.execute("SELECT * FROM quarterly_scopes WHERE scope_id=?", (q3_scope["scope_id"],)).fetchone(),
+                "2026-08-03T00:00:00Z")[2], [])
+            ledger.close()
             original.unlink()
             self.assertEqual(_period_members(state, ["issuer"], "2026-Q2", "2026-08-03T00:00:00Z"),
                              ({"issuer"}, set(), set()))
