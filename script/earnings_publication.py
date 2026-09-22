@@ -308,8 +308,10 @@ def _claims(markdown: str) -> list[dict[str, Any]]:
         value = match.group(1).replace(",", "")
         # Chinese prose normally expresses a negative ratio as “下降11%”; retain
         # the visible text/offset while normalizing the deterministic quantity.
-        direction = clean[max(0, match.start() - 4):match.start()]
-        if not value.startswith("-") and re.search(r"(?:下降|下滑)$", direction):
+        direction = clean[max(0, match.start() - 8):match.start()]
+        directional_units = {"%", "％", "个百分点", "percentage points", "bps", "个基点"}
+        if (match.group(2) in directional_units and not value.startswith(("-", "+"))
+                and re.search(r"(?:下降|下滑)\s*$", direction)):
             value = "-" + value
         rows.append({"value": value, "unit": match.group(2), "display": match.group(0).strip(),
                      "decimals": len(value.split(".", 1)[1]) if "." in value else 0,
@@ -350,22 +352,42 @@ def _markdown_urls(text: str) -> set[str]:
 
 
 def _sentence_at(text: str, start: int, end: int) -> str:
-    left = max(text.rfind(mark, 0, start) for mark in ("。", "！", "？", "\n")) + 1
-    stops = [index for mark in ("。", "！", "？", "\n") if (index := text.find(mark, end)) >= 0]
-    right = min(stops) + 1 if stops else len(text)
+    left, right = _sentence_span(text, start, end)
     return text[left:right]
 
 
-def _explicitly_negates_certainty(sentence: str, risky: str) -> bool:
-    term = re.escape(risky)
+def _sentence_span(text: str, start: int, end: int) -> tuple[int, int]:
+    left = max(text.rfind(mark, 0, start) for mark in ("。", "！", "？", "\n")) + 1
+    stops = [index for mark in ("。", "！", "？", "\n") if (index := text.find(mark, end)) >= 0]
+    right = min(stops) + 1 if stops else len(text)
+    return left, right
+
+
+def _explicitly_negates_certainty(sentence: str, risky: str, occurrence_start: int | None = None) -> bool:
+    occurrences = list(re.finditer(re.escape(risky), sentence))
+    if occurrence_start is None:
+        return bool(occurrences) and all(
+            _explicitly_negates_certainty(sentence, risky, match.start()) for match in occurrences)
+    occurrence = next((match for match in occurrences if match.start() == occurrence_start), None)
+    if occurrence is None:
+        return False
+    left = max(sentence.rfind(mark, 0, occurrence.start()) for mark in ("，", ",", "；", ";", "。", "！", "？", "\n")) + 1
+    stops = [index for mark in ("，", ",", "；", ";", "。", "！", "？", "\n")
+             if (index := sentence.find(mark, occurrence.end())) >= 0]
+    right = min(stops) if stops else len(sentence)
+    clause = sentence[left:right]
+    local_start = occurrence.start() - left; local_end = occurrence.end() - left
+    prefix, suffix = clause[:local_start], clause[local_end:]
     action = r"(?:判断|认定|声称|给出|提供|形成|得出|推出|证明|支持|写出|写成)"
     modal = rf"(?:不能|不可|不应|不宜|无法|无从)\s*(?:据此|因此|直接|基于此|据此直接|因此直接)?\s*{action}"
     direct = r"(?:不作|不予|不提供|不给出|不形成|不构成)"
     negative_action = rf"(?:{modal}|{direct})"
-    before = re.search(rf"{negative_action}[^。！？\n]{{0,36}}{term}", sentence)
-    after = re.search(rf"{term}[^。！？\n]{{0,36}}{negative_action}", sentence)
+    before = re.search(rf"{negative_action}[^，,；;。！？\n]{{0,36}}$", prefix)
+    after = re.match(rf"[^，,；;。！？\n]{{0,36}}{negative_action}", suffix)
     match = before or after
-    unknown_question = re.search(rf"是否\s*{term}[^。！？\n]{{0,24}}(?:未知|不明|无法判断|不能判断)", sentence)
+    unknown_question = bool(re.search(r"是否\s*$", prefix)
+        and re.match(r"[^，,；;。！？\n]{0,24}(?:未知|不明|无法判断|不能判断)", suffix)
+        and not re.match(r"[^，,；;。！？\n]{0,24}(?:并非|不是|并不|不再|绝非)\s*(?:仍属|属于|为)?\s*(?:未知|不明)", suffix))
     if unknown_question:
         return True
     if not match:
@@ -501,8 +523,9 @@ def validate_reader_markdown(markdown: str, reports: list[dict[str, Any]], *, pu
     if missing_consensus:
         for risky in ("超市场预期", "超预期", "被低估", "目标价"):
             for match in re.finditer(risky, markdown):
-                sentence = _sentence_at(markdown, match.start(), match.end())
-                if not _explicitly_negates_certainty(sentence, risky):
+                sentence_left, sentence_right = _sentence_span(markdown, match.start(), match.end())
+                sentence = markdown[sentence_left:sentence_right]
+                if not _explicitly_negates_certainty(sentence, risky, match.start() - sentence_left):
                     errors.append(f"unsupported market-expectation certainty: {risky}")
     if publication_type in {"company", "industry"}:
         alternatives = [str(claim.get("alternative_explanation") or "") for report in reports for claim in report.get("claims", [])]

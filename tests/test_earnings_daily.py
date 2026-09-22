@@ -14,6 +14,7 @@ from earnings_daily import (DailyLedger, _latest_company_publication_heads, _pub
     _quarterly_market_readiness, fail_owned_attempt, finalize, notification_material, render_publication_entries, run, run_gap_review_step,
     reconcile_quarterly_publication, run_publication_work, round_progress, season_limit, unresolved_terminal_count)
 from earnings_period_review import QuarterlyReviewLedger
+from earnings_lark import publication_delivery_route_key
 from earnings_state import EarningsState
 from earnings_role_runner import run_role
 
@@ -46,6 +47,9 @@ class EarningsDailyTests(unittest.TestCase):
                 'artifacts': {'markdown': {'path': str(reader.relative_to(root)), 'sha256': reader_sha},
                               'html': {'path': str((base / 'reader-report.html').relative_to(root)), 'sha256': html_sha}}})
             manifest_path = str(manifest.relative_to(root)); now = '2026-09-21T00:00:00Z'
+            lark_documents = {'enabled': True, 'profile': 'test-profile', 'user_route': 'test-user',
+                              'as': 'user', 'parent_token': 'test-folder'}
+            route_key = publication_delivery_route_key(lark_documents)
             state.db.execute('INSERT INTO publication_artifacts VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
                 ('publication', 'series', 'industry', 'managed-care', '2026-Q2', 'stage', 1,
                  manifest_path, sha256_file(manifest), reader_sha, 'passed', now))
@@ -54,35 +58,60 @@ class EarningsDailyTests(unittest.TestCase):
               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", ('job', 'job-series', str(source.relative_to(root)), source_sha,
               'industry', 'managed-care', '2026-Q2', 'stage', 1, 'complete', 'frozen.json', manifest_path, None, 2, now, now))
             state.db.execute('INSERT INTO publication_delivery_routes VALUES(?,?,?,?,?,?,?,?,?,?,?)',
-                ('route', 'series', 'publication', 'verified', 'doc', 'https://example.test/doc', reader_sha,
+                (route_key, 'series', 'publication', 'verified', 'doc', 'https://example.test/doc', reader_sha,
                  'remote-sha', 1, None, now)); state.db.commit()
             preview = reconcile_quarterly_publication(root, state, dict(state.db.execute(
                 "SELECT * FROM publication_jobs WHERE job_id='job'").fetchone()), apply=False,
-                local_archive_allowed=False)
+                local_archive_allowed=False, expected_route_key=route_key)
             self.assertEqual(preview['planned_stages'], ['publication', 'checker', 'cloud'])
             state.db.execute("DELETE FROM publication_delivery_routes")
             state.db.execute("UPDATE publication_jobs SET state='archived' WHERE job_id='job'"); state.db.commit()
             no_route = reconcile_quarterly_publication(root, state, dict(state.db.execute(
                 "SELECT * FROM publication_jobs WHERE job_id='job'").fetchone()), apply=False,
-                local_archive_allowed=False)
+                local_archive_allowed=False, expected_route_key=route_key)
             self.assertEqual((no_route['cloud_evidence'], no_route['planned_stages']),
                              (None, ['publication', 'checker']))
             archive_preview = reconcile_quarterly_publication(root, state, dict(state.db.execute(
                 "SELECT * FROM publication_jobs WHERE job_id='job'").fetchone()), apply=False,
-                local_archive_allowed=True)
+                local_archive_allowed=True, expected_route_key=None)
             self.assertEqual((archive_preview['cloud_evidence'], archive_preview['planned_stages']),
                              ('local_archive', ['publication', 'checker', 'cloud']))
             state.db.execute("UPDATE publication_jobs SET state='complete' WHERE job_id='job'")
+            qledger.set_stage(scope['scope_id'], 'cloud', 'completed', artifact_path='old-manifest.json',
+                              artifact_sha256='old-manifest-sha')
+            qledger.db.execute("UPDATE quarterly_scopes SET finalization_state='finalized_stage_with_gaps',finalized_revision=1 WHERE scope_id=?",
+                               (scope['scope_id'],)); qledger.db.commit()
             state.db.execute('INSERT INTO publication_delivery_routes VALUES(?,?,?,?,?,?,?,?,?,?,?)',
-                ('route', 'series', 'publication', 'verified', 'doc', 'https://example.test/doc', reader_sha,
+                ('wrong-route', 'series', 'publication', 'verified', 'doc', 'https://example.test/wrong', reader_sha,
+                 'remote-sha', 1, None, now))
+            state.db.execute('INSERT INTO publication_delivery VALUES(?,?,?,?,?,?,?,?,?,?)',
+                ('series', 'publication', 'verified', 'legacy-doc', 'https://example.test/legacy', reader_sha,
+                 'legacy-remote', 1, None, now)); state.db.commit()
+            stale_cloud = reconcile_quarterly_publication(root, state, dict(state.db.execute(
+                "SELECT * FROM publication_jobs WHERE job_id='job'").fetchone()), apply=False,
+                local_archive_allowed=False, expected_route_key=route_key)
+            self.assertEqual(stale_cloud['planned_invalidations'], ['cloud'])
+            self.assertIsNone(stale_cloud['cloud_evidence'])
+            stale_applied = reconcile_quarterly_publication(root, state, dict(state.db.execute(
+                "SELECT * FROM publication_jobs WHERE job_id='job'").fetchone()), apply=True,
+                local_archive_allowed=False, expected_route_key=route_key)
+            self.assertFalse(stale_applied['finalized'])
+            self.assertEqual(qledger.db.execute("SELECT state FROM quarterly_stages WHERE scope_id=? AND stage='cloud'",
+                                                (scope['scope_id'],)).fetchone()[0], 'blocked')
+            self.assertEqual(qledger.db.execute("SELECT finalization_state FROM quarterly_scopes WHERE scope_id=?",
+                                                (scope['scope_id'],)).fetchone()[0], 'ready_stage_with_gaps')
+            state.db.execute("DELETE FROM publication_delivery_routes")
+            state.db.execute("DELETE FROM publication_delivery")
+            state.db.execute('INSERT INTO publication_delivery_routes VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+                (route_key, 'series', 'publication', 'verified', 'doc', 'https://example.test/doc', reader_sha,
                  'remote-sha', 1, None, now)); state.db.commit()
             self.assertEqual(qledger.db.execute("SELECT state FROM quarterly_stages WHERE scope_id=? AND stage='publication'",
-                                                (scope['scope_id'],)).fetchone()[0], 'pending')
+                                                (scope['scope_id'],)).fetchone()[0], 'completed')
             import time
             config = json.loads((ROOT / 'config/earnings_research.json').read_text())
             config['delivery']['lark_documents_enabled'] = True
             daily = DailyLedger(root)
-            outcomes = run_publication_work(root, config, state, daily, {}, '2026-09-22',
+            outcomes = run_publication_work(root, config, state, daily, {'lark_documents': lark_documents}, '2026-09-22',
                                             time.monotonic() + 5, discover=False)
             applied = next(row for row in outcomes if row.get('status') == 'reconciled')
             self.assertTrue(applied['finalized'])
@@ -92,8 +121,20 @@ class EarningsDailyTests(unittest.TestCase):
             self.assertEqual(state.db.execute("SELECT attempts FROM publication_jobs WHERE job_id='job'").fetchone()[0], 2)
             again = reconcile_quarterly_publication(root, state, dict(state.db.execute(
                 "SELECT * FROM publication_jobs WHERE job_id='job'").fetchone()), apply=True,
-                local_archive_allowed=False)
+                local_archive_allowed=False, expected_route_key=route_key)
             self.assertEqual(again['planned_stages'], [])
+            original_reader = reader.read_text(); reader.write_text(original_reader + 'tampered')
+            tampered_reader = reconcile_quarterly_publication(root, state, dict(state.db.execute(
+                "SELECT * FROM publication_jobs WHERE job_id='job'").fetchone()), apply=False,
+                local_archive_allowed=False, expected_route_key=route_key)
+            self.assertFalse(tampered_reader['eligible']); self.assertIn('reader file/hash', tampered_reader['reason'])
+            reader.write_text(original_reader)
+            original_manifest = manifest.read_text(); manifest.write_text(original_manifest + '\n')
+            tampered_manifest = reconcile_quarterly_publication(root, state, dict(state.db.execute(
+                "SELECT * FROM publication_jobs WHERE job_id='job'").fetchone()), apply=False,
+                local_archive_allowed=False, expected_route_key=route_key)
+            self.assertFalse(tampered_manifest['eligible']); self.assertIn('not registered', tampered_manifest['reason'])
+            manifest.write_text(original_manifest)
             daily.db.close(); qledger.close(); state.close()
 
     def test_publication_reconciliation_rejects_stale_synthesis_binding(self):
@@ -106,7 +147,7 @@ class EarningsDailyTests(unittest.TestCase):
             result = reconcile_quarterly_publication(root, state, {'job_id': 'old', 'publication_type': 'industry',
                 'scope_id': 'managed-care', 'quarter_id': '2026-Q2', 'edition': 'stage', 'revision': 1,
                 'source_path': 'old.json', 'source_sha256': 'old', 'publication_manifest_path': 'missing.json',
-                'state': 'complete'}, apply=False, local_archive_allowed=False)
+                'state': 'complete'}, apply=False, local_archive_allowed=False, expected_route_key='route')
             self.assertFalse(result['eligible']); self.assertIn('current synthesis', result['reason'])
             qledger.close(); state.close()
 

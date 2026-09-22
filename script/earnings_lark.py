@@ -24,6 +24,18 @@ class LarkReadError(RuntimeError):
     pass
 
 
+def publication_delivery_route_key(config: dict[str, Any]) -> str:
+    """Return the durable route identity without initializing lark-cli or credentials."""
+    if config.get("enabled") is not True:
+        raise ValueError("lark document publishing is disabled")
+    if not config.get("profile") or not config.get("user_route") or config.get("as") != "user" \
+            or not any(config.get(key) for key in ("parent_token", "parent_position", "folder_token")):
+        raise ValueError("explicit lark profile, user_route, --as user and parent target are required")
+    route = {key: config.get(key) for key in
+             ("profile", "user_route", "parent_token", "parent_position", "folder_token")}
+    return hashlib.sha256(json.dumps(route, sort_keys=True).encode()).hexdigest()
+
+
 def _content(payload: dict[str, Any]) -> str | None:
     data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
     for key in ("content", "markdown", "text"):
@@ -74,8 +86,7 @@ class LarkDocumentPublisher:
         if config.get("enabled") is not True: raise ValueError("lark document publishing is disabled")
         if not binary.is_absolute() or not binary.is_file() or not os.access(binary, os.X_OK):
             raise ValueError("absolute executable lark_cli_bin is required")
-        if not config.get("profile") or not config.get("user_route") or config.get("as") != "user" or not any(config.get(k) for k in ("parent_token", "parent_position", "folder_token")):
-            raise ValueError("explicit lark profile, user_route, --as user and parent target are required")
+        publication_delivery_route_key(config)
         self.binary = binary
         self.base = [str(binary), "--profile", str(config["profile"]), "--as", "user"]
         self.route = {key: config.get(key) for key in ("profile", "user_route", "parent_token", "parent_position", "folder_token")}
@@ -129,7 +140,7 @@ class LarkDocumentPublisher:
         from earnings_state import EarningsState
         ledger = EarningsState(state_db)
         try:
-            route_key = hashlib.sha256(json.dumps(self.route, sort_keys=True).encode()).hexdigest()
+            route_key = publication_delivery_route_key(self.config)
             ledger.db.execute("""INSERT INTO publication_delivery_routes VALUES(?,?,?,?,?,?,?,?,?,?,?)
               ON CONFLICT(route_key,series_id) DO UPDATE SET publication_id=excluded.publication_id,state=excluded.state,
               document_id=excluded.document_id,url=excluded.url,local_sha256=excluded.local_sha256,

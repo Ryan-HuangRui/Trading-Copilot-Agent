@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT / "script"))
 from earnings_common import atomic_write_json, sha256_file
 from earnings_recovery import recover
 from earnings_period_review import QuarterlyReviewLedger
+from earnings_lark import publication_delivery_route_key
 from earnings_state import EarningsState
 
 
@@ -21,7 +22,14 @@ class EarningsRecoveryTests(unittest.TestCase):
             root = Path(temp).resolve(); (root / 'config').mkdir(parents=True)
             config = json.loads((ROOT / 'config/earnings_research.json').read_text())
             config['delivery']['lark_documents_enabled'] = True
-            atomic_write_json(root / 'config/earnings_research.json', config)
+            config_path = 'runtime/earnings/p4-config.json'
+            atomic_write_json(root / config_path, config)
+            lark_documents = {'enabled': True, 'profile': 'nas-user', 'user_route': 'primary',
+                              'as': 'user', 'parent_token': 'folder'}
+            deployment_path = 'runtime/earnings/deployment.json'
+            atomic_write_json(root / deployment_path, {'schema_version': 1, 'verified_repo': str(root),
+                'project': 'test', 'session': 'test', 'cc_connect_bin': '/bin/false', 'verified_at': 'now',
+                'verified_from_cron_id': 'test', 'lark_documents': lark_documents})
             state = EarningsState(root / 'runtime/earnings/state.sqlite')
             now = '2026-09-21T00:00:00Z'
             state.db.execute("""INSERT INTO publication_jobs(job_id,series_key,source_path,source_sha256,publication_type,
@@ -29,19 +37,28 @@ class EarningsRecoveryTests(unittest.TestCase):
               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", ('job', 'series', 'source.json', 'sha', 'industry',
               'managed-care', '2026-Q2', 'stage', 1, 'complete', 'input.json', 'publication.json', None, 2, now, now))
             state.close(); QuarterlyReviewLedger(root / 'runtime/earnings/quarterly.sqlite').close()
+            with self.assertRaisesRegex(ValueError, 'explicit --config'):
+                recover(root, action='reconcile-publication', job_id='job')
             preview_value = {'eligible': True, 'planned_stages': ['publication', 'checker', 'cloud']}
             applied_value = {'eligible': True, 'planned_stages': ['publication', 'checker', 'cloud'],
                              'applied_stages': ['publication', 'checker', 'cloud'], 'finalized': True}
             with patch('earnings_recovery.reconcile_quarterly_publication', side_effect=[preview_value]) as reconcile:
-                preview = recover(root, action='reconcile-publication', job_id='job')
+                preview = recover(root, action='reconcile-publication', job_id='job', config_path=config_path,
+                                  deployment_path=deployment_path)
             self.assertEqual((preview['model_calls'], preview['cloud_operations'], preview['executed']), (0, 0, False))
+            self.assertEqual(preview['configuration']['path'], config_path)
+            self.assertEqual(reconcile.call_args.kwargs['expected_route_key'],
+                             publication_delivery_route_key(lark_documents))
+            self.assertFalse(reconcile.call_args.kwargs['local_archive_allowed'])
             with patch('earnings_recovery.reconcile_quarterly_publication', side_effect=[preview_value, applied_value]):
-                result = recover(root, action='reconcile-publication', job_id='job', execute=True)
+                result = recover(root, action='reconcile-publication', job_id='job', execute=True,
+                                 config_path=config_path, deployment_path=deployment_path)
             self.assertEqual(result['reconciliation']['applied_stages'], ['publication', 'checker', 'cloud'])
             with patch('earnings_recovery.reconcile_quarterly_publication', side_effect=[
                     {'eligible': True, 'planned_stages': []},
                     {'eligible': True, 'planned_stages': [], 'applied_stages': [], 'finalized': True}]):
-                repeated = recover(root, action='reconcile-publication', job_id='job', execute=True)
+                repeated = recover(root, action='reconcile-publication', job_id='job', execute=True,
+                                   config_path=config_path, deployment_path=deployment_path)
             self.assertEqual(repeated['reconciliation']['applied_stages'], [])
             state = EarningsState(root / 'runtime/earnings/state.sqlite')
             self.assertEqual(tuple(state.db.execute('SELECT state,attempts FROM publication_jobs').fetchone()),

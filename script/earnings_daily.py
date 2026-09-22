@@ -18,7 +18,7 @@ from zoneinfo import ZoneInfo
 from earnings_common import ROOT, atomic_write_json, load_config, parse_time, read_json, sha256_file, utc_now
 from earnings_delivery import destination, deliver, exclusive_lock, prepare_notification, runtime_path
 from earnings_gap_review_runner import run_gap_review
-from earnings_lark import LarkDocumentPublisher
+from earnings_lark import LarkDocumentPublisher, publication_delivery_route_key
 from earnings_period_review import (QuarterlyReviewLedger, _period_member_audit, _quarter_deadline,
                                     assess_industry_maturity, inspect_due, map_fiscal_period,
                                     resolve_report_period)
@@ -658,7 +658,7 @@ def _registered_quarterly_scope_readiness(state: EarningsState, scope: dict, con
 
 
 def reconcile_quarterly_publication(root: Path, state: EarningsState, job: dict, *, apply: bool,
-                                    local_archive_allowed: bool) -> dict:
+                                    local_archive_allowed: bool, expected_route_key: str | None) -> dict:
     """Bind a registered publication to its exact current quarterly synthesis and delivery."""
     result = {"job_id": job.get("job_id"), "eligible": False, "planned_stages": [],
               "applied_stages": [], "finalized": False}
@@ -712,15 +712,12 @@ def reconcile_quarterly_publication(root: Path, state: EarningsState, job: dict,
         reader_sha = artifacts["markdown"]["sha256"]
         if artifact.get("content_sha256") != reader_sha:
             return {**result, "reason": "registered reader hash differs from publication content hash"}
-        route = state.db.execute("""SELECT * FROM publication_delivery_routes WHERE series_id=?
+        route = None
+        if expected_route_key:
+            route = state.db.execute("""SELECT * FROM publication_delivery_routes WHERE route_key=? AND series_id=?
           AND publication_id=? AND state='verified' AND local_sha256=?
           AND verified_remote_sha256 IS NOT NULL AND document_id IS NOT NULL AND url IS NOT NULL""",
-          (artifact["series_id"], artifact["publication_id"], reader_sha)).fetchone()
-        if not route:
-            route = state.db.execute("""SELECT * FROM publication_delivery WHERE series_id=?
-              AND publication_id=? AND state='verified' AND local_sha256=?
-              AND verified_remote_sha256 IS NOT NULL AND document_id IS NOT NULL AND url IS NOT NULL""",
-              (artifact["series_id"], artifact["publication_id"], reader_sha)).fetchone()
+          (expected_route_key, artifact["series_id"], artifact["publication_id"], reader_sha)).fetchone()
         cloud_valid = bool(route) or bool(local_archive_allowed and job.get("state") == "archived")
         stages = {row["stage"]: dict(row) for row in qledger.db.execute(
             "SELECT stage,state,artifact_path,artifact_sha256 FROM quarterly_stages WHERE scope_id=?",
@@ -732,18 +729,33 @@ def reconcile_quarterly_publication(root: Path, state: EarningsState, job: dict,
         planned = [stage for stage in ("publication", "checker") if not exact_stage(stage)]
         if cloud_valid and not exact_stage("cloud"):
             planned.append("cloud")
+        invalidations = (["cloud"] if not cloud_valid
+                         and (stages.get("cloud") or {}).get("state") == "completed" else [])
         result.update(eligible=True, scope_id=qscope["scope_id"], manifest_path=manifest_text,
                       manifest_sha256=manifest_sha, reader_sha256=reader_sha,
                       cloud_evidence="verified_route" if route else ("local_archive" if cloud_valid else None),
-                      planned_stages=planned)
+                      expected_route_key=expected_route_key, planned_stages=planned,
+                      planned_invalidations=invalidations)
         if not apply:
             return result
         for stage in planned:
             qledger.set_stage(qscope["scope_id"], stage, "completed",
                               artifact_path=manifest_text, artifact_sha256=manifest_sha)
+        for stage in invalidations:
+            qledger.set_stage(qscope["scope_id"], stage, "blocked",
+                              error="completed cloud stage lacks current configured route evidence")
+        if invalidations:
+            qledger.db.execute("""UPDATE quarterly_scopes SET finalization_state=CASE finalization_state
+              WHEN 'finalized_full' THEN 'ready_full'
+              WHEN 'finalized_stage_with_gaps' THEN 'ready_stage_with_gaps'
+              ELSE finalization_state END,
+              finalization_reason='reopened: current cloud route evidence is missing',updated_at=?
+              WHERE scope_id=?""", (utc_now(), qscope["scope_id"]))
+            qledger.db.commit()
         result["applied_stages"] = planned
-        result["finalized"] = qledger.finalize_if_ready(qscope["scope_id"])
-        if not result["finalized"]:
+        result["applied_invalidations"] = invalidations
+        result["finalized"] = bool(cloud_valid and qledger.finalize_if_ready(qscope["scope_id"]))
+        if cloud_valid and not result["finalized"]:
             current = qledger.db.execute("SELECT finalization_state FROM quarterly_scopes WHERE scope_id=?",
                                          (qscope["scope_id"],)).fetchone()
             result["finalized"] = bool(current and current[0].startswith("finalized_"))
@@ -753,16 +765,23 @@ def reconcile_quarterly_publication(root: Path, state: EarningsState, job: dict,
 
 
 def _reconcile_registered_industry_publications(root: Path, state: EarningsState, config: dict,
-                                                 cutoff: str | None) -> list[dict]:
+                                                 deployed: dict, cutoff: str | None) -> list[dict]:
     outcomes = []
+    local_archive_allowed = config.get("delivery", {}).get("lark_documents_enabled") is not True
+    expected_route_key = None
+    if not local_archive_allowed:
+        try:
+            expected_route_key = publication_delivery_route_key(deployed["lark_documents"])
+        except (KeyError, ValueError):
+            expected_route_key = None
     for raw in state.db.execute("""SELECT * FROM publication_jobs WHERE publication_type='industry'
       AND publication_manifest_path IS NOT NULL AND state NOT IN ('superseded','terminal_failed')""").fetchall():
         job = dict(raw)
         if not _publication_job_within_cutoff(root, job, cutoff):
             continue
         result = reconcile_quarterly_publication(root, state, job, apply=True,
-            local_archive_allowed=config.get("delivery", {}).get("lark_documents_enabled") is not True)
-        if result.get("applied_stages"):
+            local_archive_allowed=local_archive_allowed, expected_route_key=expected_route_key)
+        if result.get("applied_stages") or result.get("applied_invalidations"):
             outcomes.append({"status": "reconciled", **result})
     return outcomes
 
@@ -773,7 +792,7 @@ def run_publication_work(root: Path, config: dict, state: EarningsState, ledger:
                          cutoff: str | None = None) -> list[dict]:
     """Persist and drain publication work; cloud recovery is independent of discovery/writer budgets."""
     outcomes: list[dict] = []
-    outcomes.extend(_reconcile_registered_industry_publications(root, state, config, cutoff))
+    outcomes.extend(_reconcile_registered_industry_publications(root, state, config, deployed, cutoff))
     writer_cap = int(config["budgets"].get("publication_writers_per_day", 0))
     checker_cap = int(config["budgets"].get("publication_checkers_per_day", 0))
     repair_cap = int(config["budgets"].get("publication_repairs_per_day", 1))
@@ -1018,7 +1037,7 @@ def run_publication_work(root: Path, config: dict, state: EarningsState, ledger:
             state.db.execute("UPDATE publication_jobs SET state='retryable_failed',error=?,updated_at=? WHERE job_id=?", (str(exc), utc_now(), job["job_id"]))
             outcomes.append({"status": "failed", "job_id": job["job_id"], "reason": str(exc)})
     state.db.commit()
-    outcomes.extend(_reconcile_registered_industry_publications(root, state, config, cutoff))
+    outcomes.extend(_reconcile_registered_industry_publications(root, state, config, deployed, cutoff))
     return outcomes
 
 

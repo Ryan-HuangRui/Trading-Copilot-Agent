@@ -314,6 +314,23 @@ class EarningsPublicationTests(unittest.TestCase):
             self.assertTrue(any("unsupported market-expectation certainty: 目标价" in row
                                 for row in validate_reader_markdown(unsafe, [SOURCE])["errors"]), assertion)
 
+    def test_market_certainty_unknown_is_occurrence_and_clause_scoped(self):
+        for assertion in (
+                "业绩是否超预期尚未知，但我们确认已经超预期。",
+                "业绩是否超预期并非未知。"):
+            unsafe = markdown().replace("缺少公告前一致预期，因此不能判断超预期或低估。", assertion)
+            result = validate_reader_markdown(unsafe, [SOURCE])
+            self.assertEqual(result["status"], "failed", assertion)
+            self.assertTrue(any("unsupported market-expectation certainty: 超预期" == row
+                                for row in result["errors"]), assertion)
+
+    def test_decline_sign_normalization_is_whitespace_safe_and_ratio_only(self):
+        claims = claim_occurrence_inventory("有机收入下降 11%，明确写作下降+11%，金额下降 100百万美元。")['claims']
+        by_display = {row['display']: row['value'] for row in claims}
+        self.assertEqual(by_display['11%'], '-11')
+        self.assertEqual(by_display['+11%'], '+11')
+        self.assertEqual(by_display['100百万美元'], '100')
+
     def test_decline_direction_and_unknown_surprise_are_not_false_positive_failures(self):
         report = json.loads(json.dumps(SOURCE))
         report['limitations'].append('缺少公告前一致预期')

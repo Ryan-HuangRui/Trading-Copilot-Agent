@@ -12,7 +12,8 @@ import sqlite3
 from earnings_common import ROOT, atomic_write_json, load_config, read_json, safe_segment, utc_now
 from earnings_daily import reconcile_quarterly_publication
 from earnings_publication_runner import prepare_repair_input, recheck_publication
-from earnings_delivery import exclusive_lock
+from earnings_delivery import destination, exclusive_lock, runtime_path
+from earnings_lark import publication_delivery_route_key
 from earnings_state import EarningsState
 
 
@@ -69,7 +70,8 @@ def _close_affected_quarterly_scopes(root: Path, affected: list[dict], task_id: 
 
 
 def recover(root: Path, *, action: str, job_id: str | None = None, task_id: str | None = None,
-            reuse_task_id: str | None = None, reason: str | None = None, execute: bool = False) -> dict:
+            reuse_task_id: str | None = None, reason: str | None = None, execute: bool = False,
+            config_path: str | None = None, deployment_path: str | None = None) -> dict:
     root = root.resolve()
     target_id = safe_segment(job_id or task_id or "", "recovery target")
     audit_dir = root / "runtime/earnings/recovery"
@@ -83,16 +85,29 @@ def recover(root: Path, *, action: str, job_id: str | None = None, task_id: str 
             raise ValueError("this exact bounded recovery was already executed")
         before: dict
         mutation: dict
+        reconciliation_configuration = None
         if action == "reconcile-publication":
             if not job_id or task_id:
                 raise ValueError("publication reconciliation requires exactly --job-id")
+            if not config_path:
+                raise ValueError("publication reconciliation requires explicit --config")
             row = state.db.execute("SELECT * FROM publication_jobs WHERE job_id=?", (job_id,)).fetchone()
             if not row:
                 raise ValueError("unknown publication job")
             before = dict(row)
-            config, _ = load_config(root)
+            config, config_sha256 = load_config(root, config_path)
+            local_archive_allowed = config.get("delivery", {}).get("lark_documents_enabled") is not True
+            expected_route_key = None
+            if not local_archive_allowed:
+                if not deployment_path:
+                    raise ValueError("cloud publication reconciliation requires explicit --deployment")
+                deployed = destination(root, runtime_path(root, deployment_path))
+                expected_route_key = publication_delivery_route_key(deployed.get("lark_documents") or {})
+            reconciliation_configuration = {"path": config_path, "sha256": config_sha256,
+                "mode": "local_archive" if local_archive_allowed else "cloud",
+                "deployment_path": deployment_path, "expected_route_key": expected_route_key}
             mutation = reconcile_quarterly_publication(root, state, before, apply=False,
-                local_archive_allowed=config.get("delivery", {}).get("lark_documents_enabled") is not True)
+                local_archive_allowed=local_archive_allowed, expected_route_key=expected_route_key)
             if not mutation.get("eligible"):
                 raise ValueError(f"publication reconciliation rejected: {mutation.get('reason')}")
         elif action in {"resume-checker", "schedule-repair", "recheck-publication"}:
@@ -182,6 +197,8 @@ def recover(root: Path, *, action: str, job_id: str | None = None, task_id: str 
         result = {"schema_version": 1, "workflow": "earnings-recovery", "status": "preview",
                   "action": action, "target_id": target_id, "before": before, "planned": mutation,
                   "executed": False, "model_calls": 0, "cloud_operations": 0, "notifications": 0}
+        if reconciliation_configuration is not None:
+            result["configuration"] = reconciliation_configuration
         if not execute:
             return result
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
@@ -191,19 +208,18 @@ def recover(root: Path, *, action: str, job_id: str | None = None, task_id: str 
         if action == "reconcile-publication":
             quarterly_backup = audit_dir / "backups" / f"quarterly-{timestamp}-{target_id}.sqlite"
             source = sqlite3.connect(root / "runtime/earnings/quarterly.sqlite")
-            destination = sqlite3.connect(quarterly_backup)
-            try: source.backup(destination)
-            finally: source.close(); destination.close()
+            backup_db = sqlite3.connect(quarterly_backup)
+            try: source.backup(backup_db)
+            finally: source.close(); backup_db.close()
         elif action == "exclude-dependency" and mutation.get("affected_quarterly_scopes"):
             quarterly_backup = audit_dir / "backups" / f"quarterly-{timestamp}-{target_id}.sqlite"
             source = sqlite3.connect(root / "runtime/earnings/quarterly.sqlite")
-            destination = sqlite3.connect(quarterly_backup)
-            try: source.backup(destination)
-            finally: source.close(); destination.close()
+            backup_db = sqlite3.connect(quarterly_backup)
+            try: source.backup(backup_db)
+            finally: source.close(); backup_db.close()
         if action == "reconcile-publication":
-            config, _ = load_config(root)
             reconciliation = reconcile_quarterly_publication(root, state, before, apply=True,
-                local_archive_allowed=config.get("delivery", {}).get("lark_documents_enabled") is not True)
+                local_archive_allowed=local_archive_allowed, expected_route_key=expected_route_key)
             if not reconciliation.get("eligible"):
                 raise ValueError(f"publication reconciliation changed after preview: {reconciliation.get('reason')}")
             result["reconciliation"] = reconciliation
@@ -254,6 +270,8 @@ def recover(root: Path, *, action: str, job_id: str | None = None, task_id: str 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", default=str(ROOT))
+    parser.add_argument("--config")
+    parser.add_argument("--deployment")
     parser.add_argument("--action", required=True,
                         choices=["resume-checker", "schedule-repair", "recheck-publication", "reconcile-publication",
                                  "release-expired-task", "reuse-dependency", "exclude-dependency"])
@@ -266,7 +284,8 @@ def main() -> None:
     try:
         result = recover(Path(args.repo_root), action=args.action, job_id=args.job_id,
                          task_id=args.task_id, reuse_task_id=args.reuse_task_id,
-                         reason=args.reason, execute=args.execute)
+                         reason=args.reason, execute=args.execute, config_path=args.config,
+                         deployment_path=args.deployment)
     except (ValueError, OSError, sqlite3.Error, KeyError, json.JSONDecodeError) as exc:
         result = {"workflow": "earnings-recovery", "status": "failed", "reason": str(exc)}
     print(json.dumps(result, ensure_ascii=False))
