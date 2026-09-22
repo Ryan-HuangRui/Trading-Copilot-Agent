@@ -306,6 +306,11 @@ def _claims(markdown: str) -> list[dict[str, Any]]:
         context = clean[max(0, match.start() - 40):match.end() + 15]
         basis = "non-GAAP" if re.search(r"non[- ]?GAAP|非GAAP", context, re.I) else ("GAAP" if re.search(r"\bGAAP\b", context, re.I) else None)
         value = match.group(1).replace(",", "")
+        # Chinese prose normally expresses a negative ratio as “下降11%”; retain
+        # the visible text/offset while normalizing the deterministic quantity.
+        direction = clean[max(0, match.start() - 4):match.start()]
+        if not value.startswith("-") and re.search(r"(?:下降|下滑)$", direction):
+            value = "-" + value
         rows.append({"value": value, "unit": match.group(2), "display": match.group(0).strip(),
                      "decimals": len(value.split(".", 1)[1]) if "." in value else 0,
                      "accounting_basis": basis, "period": _explicit_period(clean, match.start(), match.end()),
@@ -360,6 +365,9 @@ def _explicitly_negates_certainty(sentence: str, risky: str) -> bool:
     before = re.search(rf"{negative_action}[^。！？\n]{{0,36}}{term}", sentence)
     after = re.search(rf"{term}[^。！？\n]{{0,36}}{negative_action}", sentence)
     match = before or after
+    unknown_question = re.search(rf"是否\s*{term}[^。！？\n]{{0,24}}(?:未知|不明|无法判断|不能判断)", sentence)
+    if unknown_question:
+        return True
     if not match:
         return False
     prefix = sentence[max(0, match.start() - 4):match.start()]

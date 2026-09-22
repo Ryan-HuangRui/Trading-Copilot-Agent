@@ -314,6 +314,26 @@ class EarningsPublicationTests(unittest.TestCase):
             self.assertTrue(any("unsupported market-expectation certainty: 目标价" in row
                                 for row in validate_reader_markdown(unsafe, [SOURCE])["errors"]), assertion)
 
+    def test_decline_direction_and_unknown_surprise_are_not_false_positive_failures(self):
+        report = json.loads(json.dumps(SOURCE))
+        report['limitations'].append('缺少公告前一致预期')
+        report['evidence'][0]['numeric_facts'] = [{
+            'metric': 'organic_growth', 'value': '-11', 'unit': 'percent',
+            'period': {'kind': 'duration', 'start': '2026-04-01', 'end': '2026-06-30'},
+            'accounting_basis': 'company-defined'}]
+        body = markdown().replace('收入为 100 百万美元', '本季有机收入下降11%').replace(
+            '缺少公告前一致预期，因此不能判断超预期或低估。',
+            '资料没有可比的一致预期，因此业绩是否超预期仍属未知。')
+        fact = financial_fact_catalog([report])['facts'][0]
+        claim = next(row for row in claim_occurrence_inventory(body)['claims'] if row['display'] == '11%')
+        bindings = [{'display': claim['display'], 'occurrence': claim['occurrence'], 'fact_id': fact['fact_id'],
+                     'metric': fact['metric'], 'period': fact['period'],
+                     'accounting_basis': fact['accounting_basis']}]
+        result = validate_reader_markdown(body, [report], publication_type='company',
+                                          explicit_fact_bindings=bindings)
+        self.assertFalse(any('catalog fact does not match displayed quantity: 11%' == row for row in result['errors']))
+        self.assertFalse(any('unsupported market-expectation certainty: 超预期' == row for row in result['errors']))
+
     def test_real_v4_inventory_does_not_inherit_quarter_period(self):
         path = Path("/Users/cenxiangxiang/hr/repo/Trading-Copilot-Agent/runtime/earnings/p4-v4-debug.json")
         if not path.exists(): self.skipTest("real p4-v4 debug fixture unavailable")

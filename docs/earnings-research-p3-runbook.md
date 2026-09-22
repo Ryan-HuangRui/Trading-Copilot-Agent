@@ -47,13 +47,15 @@ python3 script/earnings_daily.py --collect-only
 python3 script/earnings_daily.py --resume-only
 python3 script/trading_copilot.py earnings-recovery --action resume-checker --job-id <EXACT_JOB_ID>
 python3 script/trading_copilot.py earnings-recovery --action resume-checker --job-id <EXACT_JOB_ID> --execute
+python3 script/trading_copilot.py earnings-recovery --action reconcile-publication --job-id <EXACT_JOB_ID>
+python3 script/trading_copilot.py earnings-recovery --action reconcile-publication --job-id <EXACT_JOB_ID> --execute
 python3 script/earnings_delivery.py --decision runtime/earnings/outbox/<ID>/decision.json
 python3 script/earnings_delivery.py --decision runtime/earnings/outbox/<ID>/decision.json --execute
 ```
 
 默认 daily CLI 不发送，只有 `--send` 或 NAS wrapper 会触发已开启的交付；delivery CLI 默认 preview。上述占位路径须替换成已生成文件。统一 CLI 已注册 earnings-daily 与 earnings-deliver，参数与对应脚本一致。
 
-`earnings-recovery` 同样默认 preview，必须精确指定一个 job/task；`--execute` 前程序以 SQLite backup API 写入 `runtime/earnings/recovery/backups/`，并留下单次恢复审计，禁止对同一目标重复扩张尝试。`resume-checker` 只复用已冻结 writer，`schedule-repair` 只对已有 checker/validator 失败创建唯一修稿，`release-expired-task` 只处理已过期租约。不要删除 SQLite、清空 publication 目录或全量重跑。
+`earnings-recovery` 同样默认 preview，必须精确指定一个 job/task；`--execute` 前程序以 SQLite backup API 写入 `runtime/earnings/recovery/backups/`，并留下恢复审计，禁止对同一目标重复扩张尝试。`resume-checker` 只复用已冻结 writer，`schedule-repair` 只对已有 checker/validator 失败创建唯一修稿，`release-expired-task` 只处理已过期租约。`reconcile-publication` 不调用模型、不执行云操作、不改变 attempts；它只在 manifest/hash、clean checker、当前 synthesis 路径/hash、reader hash、job scope/version 以及 verified route（或本地 archive 模式）全部精确匹配时补齐季度阶段，可安全重复执行。不要删除 SQLite、清空 publication 目录或全量重跑。
 
 若 publication repair 的 semantic checker 已通过、仅因确定性解析器缺陷而终止，部署修复后先对精确 job 执行 `recheck-publication` preview，再加 `--execute`。该动作调用冻结 manifest 的零模型重检，成功后保留原 attempts 和失败记录，只把 job 推进到 `cloud_pending`；重检仍失败则不改变 job。
 

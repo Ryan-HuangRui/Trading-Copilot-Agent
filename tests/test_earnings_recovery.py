@@ -1,3 +1,4 @@
+import json
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -15,6 +16,38 @@ from earnings_state import EarningsState
 
 
 class EarningsRecoveryTests(unittest.TestCase):
+    def test_completed_publication_reconciliation_is_zero_model_and_idempotent(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); (root / 'config').mkdir(parents=True)
+            config = json.loads((ROOT / 'config/earnings_research.json').read_text())
+            config['delivery']['lark_documents_enabled'] = True
+            atomic_write_json(root / 'config/earnings_research.json', config)
+            state = EarningsState(root / 'runtime/earnings/state.sqlite')
+            now = '2026-09-21T00:00:00Z'
+            state.db.execute("""INSERT INTO publication_jobs(job_id,series_key,source_path,source_sha256,publication_type,
+              scope_id,quarter_id,edition,revision,state,input_manifest_path,publication_manifest_path,error,attempts,created_at,updated_at)
+              VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", ('job', 'series', 'source.json', 'sha', 'industry',
+              'managed-care', '2026-Q2', 'stage', 1, 'complete', 'input.json', 'publication.json', None, 2, now, now))
+            state.close(); QuarterlyReviewLedger(root / 'runtime/earnings/quarterly.sqlite').close()
+            preview_value = {'eligible': True, 'planned_stages': ['publication', 'checker', 'cloud']}
+            applied_value = {'eligible': True, 'planned_stages': ['publication', 'checker', 'cloud'],
+                             'applied_stages': ['publication', 'checker', 'cloud'], 'finalized': True}
+            with patch('earnings_recovery.reconcile_quarterly_publication', side_effect=[preview_value]) as reconcile:
+                preview = recover(root, action='reconcile-publication', job_id='job')
+            self.assertEqual((preview['model_calls'], preview['cloud_operations'], preview['executed']), (0, 0, False))
+            with patch('earnings_recovery.reconcile_quarterly_publication', side_effect=[preview_value, applied_value]):
+                result = recover(root, action='reconcile-publication', job_id='job', execute=True)
+            self.assertEqual(result['reconciliation']['applied_stages'], ['publication', 'checker', 'cloud'])
+            with patch('earnings_recovery.reconcile_quarterly_publication', side_effect=[
+                    {'eligible': True, 'planned_stages': []},
+                    {'eligible': True, 'planned_stages': [], 'applied_stages': [], 'finalized': True}]):
+                repeated = recover(root, action='reconcile-publication', job_id='job', execute=True)
+            self.assertEqual(repeated['reconciliation']['applied_stages'], [])
+            state = EarningsState(root / 'runtime/earnings/state.sqlite')
+            self.assertEqual(tuple(state.db.execute('SELECT state,attempts FROM publication_jobs').fetchone()),
+                             ('complete', 2))
+            state.close()
+
     def test_terminal_publication_can_be_deterministically_rechecked_without_resetting_attempts(self):
         with TemporaryDirectory() as temp:
             root = Path(temp).resolve(); state = EarningsState(root / "runtime/earnings/state.sqlite")

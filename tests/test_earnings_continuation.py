@@ -159,6 +159,28 @@ class EarningsContinuationTests(unittest.TestCase):
                 next_round = start(root, args)
             self.assertNotEqual(next_round["round_id"], round_row["round_id"])
 
+    def test_start_retires_yielded_round_when_only_below_trigger_work_remains(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); round_row, args = self.prepare(root)
+            ledger = ContinuationLedger(root)
+            ledger.db.execute("UPDATE rounds SET state='yielded',stop_reason='no durable progress across bounded windows' WHERE round_id=?",
+                              (round_row['round_id'],))
+            ledger.db.execute("UPDATE workers SET state='completed'"); ledger.db.commit(); ledger.close()
+            waiting = {'fingerprint': 'below-trigger', 'actionable_count': 0, 'waiting_count': 1,
+                       'blocker_count': 0, 'pending': {'quarterly_scopes': 0, 'quarterly_waiting': 1},
+                       'blockers': {}}
+            with patch('earnings_continuation.round_progress', return_value=waiting), \
+                 patch('earnings_continuation.spawn_worker', return_value=9):
+                started = start(root, args)
+            self.assertNotEqual(started['round_id'], round_row['round_id'])
+            self.assertGreater(started['cutoff'], round_row['cutoff'])
+            ledger = ContinuationLedger(root)
+            old = ledger.db.execute('SELECT state,stop_reason FROM rounds WHERE round_id=?',
+                                    (round_row['round_id'],)).fetchone()
+            self.assertEqual(old['state'], 'waiting')
+            self.assertIn('no executable evidence', old['stop_reason'])
+            ledger.close()
+
     def test_cleanup_kills_registered_detached_model_session(self):
         with TemporaryDirectory() as temp:
             root = Path(temp).resolve(); attempt = root / "runtime/earnings/runs/w/attempt"; attempt.mkdir(parents=True)

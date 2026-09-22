@@ -281,7 +281,21 @@ def _start_locked(root: Path, args: argparse.Namespace) -> dict:
         if active_worker:
             ledger.db.execute("UPDATE workers SET state='orphaned',completed_at=?,reason=? WHERE worker_id=?",
                               (utc_now(), "pid missing or worker heartbeat age exceeded", active_worker["worker_id"]))
-        round_row = ledger.active_round() or ledger.create_round(datetime.now(timezone.utc))
+        round_row = ledger.active_round()
+        if round_row and round_row["state"] == "yielded":
+            config, _ = load_config(root, args.config)
+            state = EarningsState(root / config["paths"]["state"])
+            try:
+                progress = round_progress(root, state, config, cutoff=round_row["cutoff"])
+            finally:
+                state.close()
+            if int(progress.get("actionable_count", 0)) == 0 and int(progress.get("waiting_count", 0)):
+                ledger.db.execute("""UPDATE rounds SET state='waiting',research_outcome='waiting',stop_reason=?,
+                  updated_at=?,completed_at=? WHERE round_id=? AND state='yielded'""",
+                  ("frozen cutoff has no executable evidence; next trigger may admit new disclosures",
+                   utc_now(), utc_now(), round_row["round_id"]))
+                ledger.db.commit(); round_row = None
+        round_row = round_row or ledger.create_round(datetime.now(timezone.utc))
         generation = ledger.db.execute("SELECT COALESCE(MAX(generation),0)+1 FROM workers WHERE round_id=?",
                                        (round_row["round_id"],)).fetchone()[0]
         pid = spawn_worker(root, args, round_row["round_id"], generation)

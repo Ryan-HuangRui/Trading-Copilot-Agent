@@ -12,13 +12,123 @@ sys.path.insert(0, str(ROOT / 'script'))
 from earnings_common import atomic_write_json, sha256_file
 from earnings_daily import (DailyLedger, _latest_company_publication_heads, _publication_matches_current_head,
     _quarterly_market_readiness, fail_owned_attempt, finalize, notification_material, render_publication_entries, run, run_gap_review_step,
-    run_publication_work, round_progress, season_limit, unresolved_terminal_count)
+    reconcile_quarterly_publication, run_publication_work, round_progress, season_limit, unresolved_terminal_count)
 from earnings_period_review import QuarterlyReviewLedger
 from earnings_state import EarningsState
 from earnings_role_runner import run_role
 
 
 class EarningsDailyTests(unittest.TestCase):
+    def test_completed_industry_publication_reconciles_exact_quarterly_revision_without_attempts(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); state = EarningsState(root / 'runtime/earnings/state.sqlite')
+            qledger = QuarterlyReviewLedger(root / 'runtime/earnings/quarterly.sqlite')
+            scope = qledger.freeze({'quarter_id': '2026-Q2', 'period_start': '2026-04-01', 'period_end': '2026-06-30'},
+                {'industry_id': 'managed-care', 'issuers': [], 'key_symbols': []},
+                '2026-08-31T00:00:00Z', edition='stage')
+            source = root / 'report/earnings/managed-care.json'
+            atomic_write_json(source, {'report_id': 'synthesis', 'report_type': 'synthesis'})
+            source_sha = sha256_file(source)
+            qledger.set_stage(scope['scope_id'], 'synthesis', 'completed',
+                              artifact_path=str(source.relative_to(root)), artifact_sha256=source_sha)
+            qledger.db.execute("UPDATE quarterly_scopes SET finalization_state='ready_stage_with_gaps' WHERE scope_id=?",
+                               (scope['scope_id'],)); qledger.db.commit()
+            base = root / 'report/earnings/publications/industry/managed-care/2026-Q2/v1'
+            reader = base / 'reader-report.md'; atomic_write_json(base / 'reader-report.html', {'html': True})
+            reader.parent.mkdir(parents=True, exist_ok=True); reader.write_text('# reader\n')
+            reader_sha = sha256_file(reader); html_sha = sha256_file(base / 'reader-report.html')
+            manifest = base / 'publication-manifest.json'
+            atomic_write_json(manifest, {'publication_id': 'publication', 'series_id': 'series',
+                'publication_type': 'industry', 'scope_id': 'managed-care', 'quarter_id': '2026-Q2',
+                'edition': 'stage', 'version': 1, 'publishable': True,
+                'checker': {'status': 'passed', 'errors': []},
+                'sources': [{'path': str(source.relative_to(root)), 'sha256': source_sha}],
+                'artifacts': {'markdown': {'path': str(reader.relative_to(root)), 'sha256': reader_sha},
+                              'html': {'path': str((base / 'reader-report.html').relative_to(root)), 'sha256': html_sha}}})
+            manifest_path = str(manifest.relative_to(root)); now = '2026-09-21T00:00:00Z'
+            state.db.execute('INSERT INTO publication_artifacts VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
+                ('publication', 'series', 'industry', 'managed-care', '2026-Q2', 'stage', 1,
+                 manifest_path, sha256_file(manifest), reader_sha, 'passed', now))
+            state.db.execute("""INSERT INTO publication_jobs(job_id,series_key,source_path,source_sha256,publication_type,
+              scope_id,quarter_id,edition,revision,state,input_manifest_path,publication_manifest_path,error,attempts,created_at,updated_at)
+              VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", ('job', 'job-series', str(source.relative_to(root)), source_sha,
+              'industry', 'managed-care', '2026-Q2', 'stage', 1, 'complete', 'frozen.json', manifest_path, None, 2, now, now))
+            state.db.execute('INSERT INTO publication_delivery_routes VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+                ('route', 'series', 'publication', 'verified', 'doc', 'https://example.test/doc', reader_sha,
+                 'remote-sha', 1, None, now)); state.db.commit()
+            preview = reconcile_quarterly_publication(root, state, dict(state.db.execute(
+                "SELECT * FROM publication_jobs WHERE job_id='job'").fetchone()), apply=False,
+                local_archive_allowed=False)
+            self.assertEqual(preview['planned_stages'], ['publication', 'checker', 'cloud'])
+            state.db.execute("DELETE FROM publication_delivery_routes")
+            state.db.execute("UPDATE publication_jobs SET state='archived' WHERE job_id='job'"); state.db.commit()
+            no_route = reconcile_quarterly_publication(root, state, dict(state.db.execute(
+                "SELECT * FROM publication_jobs WHERE job_id='job'").fetchone()), apply=False,
+                local_archive_allowed=False)
+            self.assertEqual((no_route['cloud_evidence'], no_route['planned_stages']),
+                             (None, ['publication', 'checker']))
+            archive_preview = reconcile_quarterly_publication(root, state, dict(state.db.execute(
+                "SELECT * FROM publication_jobs WHERE job_id='job'").fetchone()), apply=False,
+                local_archive_allowed=True)
+            self.assertEqual((archive_preview['cloud_evidence'], archive_preview['planned_stages']),
+                             ('local_archive', ['publication', 'checker', 'cloud']))
+            state.db.execute("UPDATE publication_jobs SET state='complete' WHERE job_id='job'")
+            state.db.execute('INSERT INTO publication_delivery_routes VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+                ('route', 'series', 'publication', 'verified', 'doc', 'https://example.test/doc', reader_sha,
+                 'remote-sha', 1, None, now)); state.db.commit()
+            self.assertEqual(qledger.db.execute("SELECT state FROM quarterly_stages WHERE scope_id=? AND stage='publication'",
+                                                (scope['scope_id'],)).fetchone()[0], 'pending')
+            import time
+            config = json.loads((ROOT / 'config/earnings_research.json').read_text())
+            config['delivery']['lark_documents_enabled'] = True
+            daily = DailyLedger(root)
+            outcomes = run_publication_work(root, config, state, daily, {}, '2026-09-22',
+                                            time.monotonic() + 5, discover=False)
+            applied = next(row for row in outcomes if row.get('status') == 'reconciled')
+            self.assertTrue(applied['finalized'])
+            self.assertEqual({row[0] for row in qledger.db.execute(
+                "SELECT state FROM quarterly_stages WHERE scope_id=? AND stage IN ('publication','checker','cloud')",
+                (scope['scope_id'],))}, {'completed'})
+            self.assertEqual(state.db.execute("SELECT attempts FROM publication_jobs WHERE job_id='job'").fetchone()[0], 2)
+            again = reconcile_quarterly_publication(root, state, dict(state.db.execute(
+                "SELECT * FROM publication_jobs WHERE job_id='job'").fetchone()), apply=True,
+                local_archive_allowed=False)
+            self.assertEqual(again['planned_stages'], [])
+            daily.db.close(); qledger.close(); state.close()
+
+    def test_publication_reconciliation_rejects_stale_synthesis_binding(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); state = EarningsState(root / 'runtime/earnings/state.sqlite')
+            qledger = QuarterlyReviewLedger(root / 'runtime/earnings/quarterly.sqlite')
+            scope = qledger.freeze({'quarter_id': '2026-Q2', 'period_start': '2026-04-01', 'period_end': '2026-06-30'},
+                {'industry_id': 'managed-care', 'issuers': [], 'key_symbols': []}, '2026-08-31T00:00:00Z', edition='stage')
+            qledger.set_stage(scope['scope_id'], 'synthesis', 'completed', artifact_path='new.json', artifact_sha256='new')
+            result = reconcile_quarterly_publication(root, state, {'job_id': 'old', 'publication_type': 'industry',
+                'scope_id': 'managed-care', 'quarter_id': '2026-Q2', 'edition': 'stage', 'revision': 1,
+                'source_path': 'old.json', 'source_sha256': 'old', 'publication_manifest_path': 'missing.json',
+                'state': 'complete'}, apply=False, local_archive_allowed=False)
+            self.assertFalse(result['eligible']); self.assertIn('current synthesis', result['reason'])
+            qledger.close(); state.close()
+
+    def test_round_progress_treats_below_trigger_quarterly_scope_as_waiting(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); state = EarningsState(root / 'runtime/earnings/state.sqlite')
+            ledger = DailyLedger(root); qledger = QuarterlyReviewLedger(root / 'runtime/earnings/quarterly.sqlite')
+            scope = qledger.freeze({'quarter_id': '2026-Q3', 'period_start': '2026-07-01', 'period_end': '2026-09-30'},
+                {'industry_id': 'cloud-software', 'issuers': [], 'key_symbols': []}, '2026-09-20T00:00:00Z', edition='stage')
+            qledger.db.execute("UPDATE quarterly_scopes SET accepted_reports_json='[{}]' WHERE scope_id=?", (scope['scope_id'],))
+            qledger.db.commit(); qledger.close()
+            config = json.loads((ROOT / 'config/earnings_research.json').read_text())
+            config['quarterly']['automatic_trigger_enabled'] = True
+            atomic_write_json(root / config['paths']['universe'], {'industries': []})
+            below = {'maturity': {'counts': {'researched_issuers': 1}}, 'eligible_stage': False,
+                     'deadline_stage_allowed': False}
+            with patch('earnings_daily._registered_quarterly_scope_readiness', return_value=below):
+                progress = round_progress(root, state, config, cutoff='2026-09-20T00:00:00Z', ledger=ledger)
+            self.assertEqual(progress['pending']['quarterly_scopes'], 0)
+            self.assertEqual(progress['pending']['quarterly_waiting'], 1)
+            self.assertEqual(progress['actionable_count'], 0)
+            state.close(); ledger.db.close()
     def test_cross_day_finalizer_uses_current_notification_day_and_frozen_evidence(self):
         from datetime import datetime, timezone
         with TemporaryDirectory() as temp:

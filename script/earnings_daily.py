@@ -19,7 +19,9 @@ from earnings_common import ROOT, atomic_write_json, load_config, parse_time, re
 from earnings_delivery import destination, deliver, exclusive_lock, prepare_notification, runtime_path
 from earnings_gap_review_runner import run_gap_review
 from earnings_lark import LarkDocumentPublisher
-from earnings_period_review import QuarterlyReviewLedger, inspect_due, map_fiscal_period, resolve_report_period
+from earnings_period_review import (QuarterlyReviewLedger, _period_member_audit, _quarter_deadline,
+                                    assess_industry_maturity, inspect_due, map_fiscal_period,
+                                    resolve_report_period)
 from earnings_publication_runner import (prepare_input as prepare_publication_input,
                                          prepare_repair_input, run_publication)
 from earnings_role_runner import run_role
@@ -475,7 +477,7 @@ def run_quarterly_step(root: Path, config: dict, universe: dict, state: Earnings
                               input_hash=hashlib.sha256(json.dumps(scope["maturity"], sort_keys=True).encode()).hexdigest())
             # Gap review is part of an eligible stage/final DAG, not a speculative
             # model call for every mapped issuer fragment.
-            if not (scope["eligible_stage"] or scope["deadline_stage_allowed"]):
+            if not _quarterly_scope_model_eligible(scope):
                 outcomes.append({"status": "skipped", "scope_id": scope["scope_id"],
                                  "reason": "quarterly stage trigger has not been reached"})
                 continue
@@ -621,12 +623,157 @@ def run_quarterly_step(root: Path, config: dict, universe: dict, state: Earnings
         qledger.close()
 
 
+def _quarterly_scope_model_eligible(scope: dict) -> bool:
+    """Single model-trigger predicate shared by execution and progress reporting."""
+    return bool(scope.get("maturity", {}).get("counts", {}).get("researched_issuers")) and bool(
+        scope.get("eligible_stage") or scope.get("deadline_stage_allowed"))
+
+
+def _registered_quarterly_scope_readiness(state: EarningsState, scope: dict, config: dict, *, day: str) -> dict:
+    """Recompute a frozen scope's model trigger without advancing its revision or cutoff."""
+    frozen = json.loads(scope["frozen_universe_json"])
+    symbol_to_id = {row["symbol"]: row["issuer_id"] for row in state.db.execute(
+        "SELECT symbol,issuer_id FROM issuers")}
+    expected = [symbol_to_id.get(row["symbol"], f"unresolved:{row['symbol']}") for row in frozen["issuers"]]
+    keys = [symbol_to_id.get(symbol, f"unresolved:{symbol}") for symbol in frozen.get("key_symbols", [])]
+    resolved = [issuer_id for issuer_id in expected if not issuer_id.startswith("unresolved:")]
+    accepted = json.loads(scope.get("accepted_reports_json") or "[]")
+    excluded = json.loads(scope.get("excluded_inputs_json") or "[]")
+    disclosed, fetched, researched, _ = _period_member_audit(
+        state, resolved, scope["quarter_id"],
+        public_cutoff=scope.get("public_cutoff") or scope["cutoff"],
+        research_cutoff=scope.get("research_cutoff") or scope["cutoff"],
+        accepted_report_hashes={row["sha256"] for row in accepted})
+    maturity = assess_industry_maturity(
+        expected_issuer_ids=expected, key_issuer_ids=keys, disclosed_issuer_ids=disclosed,
+        fetched_issuer_ids=fetched, researched_issuer_ids=researched, critical_gap_status="unresolved",
+        threshold=float(config["quarterly"]["mature_coverage_ratio"]),
+        stage_threshold=float(config["quarterly"].get("stage_disclosure_ratio", 0.6)),
+        excluded_issuer_ids=[row["issuer_id"] for row in excluded])
+    deadline_allowed = bool(config["quarterly"].get("deadline_partial_allowed")
+        and date.fromisoformat(day) >= _quarter_deadline(scope["quarter_id"], config["seasons"])
+        and not maturity["eligible_full"])
+    return {"maturity": maturity, "eligible_stage": bool(maturity["eligible_stage"]),
+            "deadline_stage_allowed": deadline_allowed}
+
+
+def reconcile_quarterly_publication(root: Path, state: EarningsState, job: dict, *, apply: bool,
+                                    local_archive_allowed: bool) -> dict:
+    """Bind a registered publication to its exact current quarterly synthesis and delivery."""
+    result = {"job_id": job.get("job_id"), "eligible": False, "planned_stages": [],
+              "applied_stages": [], "finalized": False}
+    if job.get("publication_type") != "industry":
+        return {**result, "reason": "not an industry publication"}
+    qpath = root / "runtime/earnings/quarterly.sqlite"
+    if not qpath.exists():
+        return {**result, "reason": "quarterly ledger is missing"}
+    qledger = QuarterlyReviewLedger(qpath)
+    try:
+        qscope = qledger.db.execute("""SELECT q.* FROM quarterly_scopes q
+          JOIN quarterly_stages s ON s.scope_id=q.scope_id AND s.stage='synthesis'
+          WHERE q.industry_id=? AND q.quarter_id=? AND s.state='completed'
+          AND s.artifact_path=? AND s.artifact_sha256=?""",
+          (job.get("scope_id"), job.get("quarter_id"), job.get("source_path"), job.get("source_sha256"))).fetchone()
+        if not qscope:
+            return {**result, "reason": "publication does not match the current synthesis path/hash"}
+        source = root / str(job.get("source_path") or "")
+        if not source.is_file() or sha256_file(source) != job.get("source_sha256"):
+            return {**result, "reason": "publication source file/hash is invalid"}
+        manifest_text = job.get("publication_manifest_path")
+        manifest_path = root / str(manifest_text or "")
+        if not manifest_text or not manifest_path.is_file():
+            return {**result, "reason": "registered publication manifest is missing"}
+        manifest_sha = sha256_file(manifest_path)
+        artifact = state.db.execute("""SELECT * FROM publication_artifacts WHERE manifest_path=?
+          AND manifest_sha256=?""", (manifest_text, manifest_sha)).fetchone()
+        if not artifact:
+            return {**result, "reason": "publication manifest/hash is not registered"}
+        artifact = dict(artifact); manifest = read_json(manifest_path)
+        exact = (("publication_type", "publication_type"), ("scope_id", "scope_id"),
+                 ("quarter_id", "quarter_id"), ("edition", "edition"), ("version", "revision"))
+        if any(manifest.get(left) != job.get(right) or artifact.get(left) != job.get(right)
+               for left, right in exact):
+            return {**result, "reason": "publication scope/quarter/edition/version differs from the job"}
+        if (manifest.get("publication_id") != artifact["publication_id"]
+                or manifest.get("series_id") != artifact["series_id"]):
+            return {**result, "reason": "publication identity differs from the registry"}
+        checker = manifest.get("checker") or {}
+        if manifest.get("publishable") is not True or checker.get("status") != "passed" \
+                or checker.get("errors") or artifact.get("checker_status") != "passed":
+            return {**result, "reason": "publication checker is not clean and passed"}
+        if not any(row.get("path") == job["source_path"] and row.get("sha256") == job["source_sha256"]
+                   for row in manifest.get("sources", [])):
+            return {**result, "reason": "publication manifest is not bound to the exact synthesis"}
+        artifacts = manifest.get("artifacts") or {}
+        for name in ("markdown", "html"):
+            registered_file = artifacts.get(name) or {}; path = root / str(registered_file.get("path") or "")
+            if not path.is_file() or sha256_file(path) != registered_file.get("sha256"):
+                return {**result, "reason": f"registered {name} reader file/hash is invalid"}
+        reader_sha = artifacts["markdown"]["sha256"]
+        if artifact.get("content_sha256") != reader_sha:
+            return {**result, "reason": "registered reader hash differs from publication content hash"}
+        route = state.db.execute("""SELECT * FROM publication_delivery_routes WHERE series_id=?
+          AND publication_id=? AND state='verified' AND local_sha256=?
+          AND verified_remote_sha256 IS NOT NULL AND document_id IS NOT NULL AND url IS NOT NULL""",
+          (artifact["series_id"], artifact["publication_id"], reader_sha)).fetchone()
+        if not route:
+            route = state.db.execute("""SELECT * FROM publication_delivery WHERE series_id=?
+              AND publication_id=? AND state='verified' AND local_sha256=?
+              AND verified_remote_sha256 IS NOT NULL AND document_id IS NOT NULL AND url IS NOT NULL""",
+              (artifact["series_id"], artifact["publication_id"], reader_sha)).fetchone()
+        cloud_valid = bool(route) or bool(local_archive_allowed and job.get("state") == "archived")
+        stages = {row["stage"]: dict(row) for row in qledger.db.execute(
+            "SELECT stage,state,artifact_path,artifact_sha256 FROM quarterly_stages WHERE scope_id=?",
+            (qscope["scope_id"],))}
+        def exact_stage(stage: str) -> bool:
+            row = stages.get(stage) or {}
+            return (row.get("state") == "completed" and row.get("artifact_path") == manifest_text
+                    and row.get("artifact_sha256") == manifest_sha)
+        planned = [stage for stage in ("publication", "checker") if not exact_stage(stage)]
+        if cloud_valid and not exact_stage("cloud"):
+            planned.append("cloud")
+        result.update(eligible=True, scope_id=qscope["scope_id"], manifest_path=manifest_text,
+                      manifest_sha256=manifest_sha, reader_sha256=reader_sha,
+                      cloud_evidence="verified_route" if route else ("local_archive" if cloud_valid else None),
+                      planned_stages=planned)
+        if not apply:
+            return result
+        for stage in planned:
+            qledger.set_stage(qscope["scope_id"], stage, "completed",
+                              artifact_path=manifest_text, artifact_sha256=manifest_sha)
+        result["applied_stages"] = planned
+        result["finalized"] = qledger.finalize_if_ready(qscope["scope_id"])
+        if not result["finalized"]:
+            current = qledger.db.execute("SELECT finalization_state FROM quarterly_scopes WHERE scope_id=?",
+                                         (qscope["scope_id"],)).fetchone()
+            result["finalized"] = bool(current and current[0].startswith("finalized_"))
+        return result
+    finally:
+        qledger.close()
+
+
+def _reconcile_registered_industry_publications(root: Path, state: EarningsState, config: dict,
+                                                 cutoff: str | None) -> list[dict]:
+    outcomes = []
+    for raw in state.db.execute("""SELECT * FROM publication_jobs WHERE publication_type='industry'
+      AND publication_manifest_path IS NOT NULL AND state NOT IN ('superseded','terminal_failed')""").fetchall():
+        job = dict(raw)
+        if not _publication_job_within_cutoff(root, job, cutoff):
+            continue
+        result = reconcile_quarterly_publication(root, state, job, apply=True,
+            local_archive_allowed=config.get("delivery", {}).get("lark_documents_enabled") is not True)
+        if result.get("applied_stages"):
+            outcomes.append({"status": "reconciled", **result})
+    return outcomes
+
+
 def run_publication_work(root: Path, config: dict, state: EarningsState, ledger: DailyLedger, deployed: dict,
                          day: str, deadline: float, *, discover: bool = True,
                          config_path: str = "config/earnings_research.json",
                          cutoff: str | None = None) -> list[dict]:
     """Persist and drain publication work; cloud recovery is independent of discovery/writer budgets."""
     outcomes: list[dict] = []
+    outcomes.extend(_reconcile_registered_industry_publications(root, state, config, cutoff))
     writer_cap = int(config["budgets"].get("publication_writers_per_day", 0))
     checker_cap = int(config["budgets"].get("publication_checkers_per_day", 0))
     repair_cap = int(config["budgets"].get("publication_repairs_per_day", 1))
@@ -871,6 +1018,7 @@ def run_publication_work(root: Path, config: dict, state: EarningsState, ledger:
             state.db.execute("UPDATE publication_jobs SET state='retryable_failed',error=?,updated_at=? WHERE job_id=?", (str(exc), utc_now(), job["job_id"]))
             outcomes.append({"status": "failed", "job_id": job["job_id"], "reason": str(exc)})
     state.db.commit()
+    outcomes.extend(_reconcile_registered_industry_publications(root, state, config, cutoff))
     return outcomes
 
 
@@ -1033,10 +1181,12 @@ def round_progress(root: Path, state: EarningsState, config: dict, cutoff: str |
     quarterly_path = root / "runtime/earnings/quarterly.sqlite"
     if config.get("quarterly", {}).get("automatic_trigger_enabled") is True and quarterly_path.exists():
         qdb = sqlite3.connect(quarterly_path)
+        qdb.row_factory = sqlite3.Row
         try:
-            for scope in qdb.execute("SELECT scope_id,accepted_reports_json FROM quarterly_scopes WHERE edition!='monitor'"):
+            for raw_scope in qdb.execute("SELECT * FROM quarterly_scopes WHERE edition!='monitor'"):
+                scope = dict(raw_scope)
                 stages = qdb.execute("""SELECT stage,state,attempts FROM quarterly_stages WHERE scope_id=?
-                    AND stage IN ('coverage','gap_review','industry','challenge','synthesis')""", (scope[0],)).fetchall()
+                    AND stage IN ('coverage','gap_review','industry','challenge','synthesis')""", (scope["scope_id"],)).fetchall()
                 incomplete = [row for row in stages if row[1] != "completed"]
                 if not incomplete:
                     continue
@@ -1044,10 +1194,15 @@ def round_progress(root: Path, state: EarningsState, config: dict, cutoff: str |
                        (row[1] == "failed" and row[2] >= int(config["budgets"].get("max_task_attempts", 2)))
                        for row in incomplete):
                     quarterly_blocked += 1
-                elif not json.loads(scope[1] or "[]"):
+                elif not json.loads(scope.get("accepted_reports_json") or "[]"):
                     quarterly_waiting += 1
                 else:
-                    quarterly_pending += 1
+                    readiness = _registered_quarterly_scope_readiness(
+                        state, scope, config, day=datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat())
+                    if _quarterly_scope_model_eligible(readiness):
+                        quarterly_pending += 1
+                    else:
+                        quarterly_waiting += 1
             quarterly_progress = [tuple(row) for row in qdb.execute("""SELECT scope_id,stage,state,
               COALESCE(input_hash,''),COALESCE(artifact_sha256,''),attempts FROM quarterly_stages
               ORDER BY scope_id,stage""").fetchall()]

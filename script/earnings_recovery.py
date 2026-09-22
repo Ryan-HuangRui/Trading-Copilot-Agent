@@ -9,7 +9,8 @@ import json
 from pathlib import Path
 import sqlite3
 
-from earnings_common import ROOT, atomic_write_json, read_json, safe_segment, utc_now
+from earnings_common import ROOT, atomic_write_json, load_config, read_json, safe_segment, utc_now
+from earnings_daily import reconcile_quarterly_publication
 from earnings_publication_runner import prepare_repair_input, recheck_publication
 from earnings_delivery import exclusive_lock
 from earnings_state import EarningsState
@@ -78,11 +79,23 @@ def recover(root: Path, *, action: str, job_id: str | None = None, task_id: str 
         stack.enter_context(exclusive_lock(root / "runtime/earnings/daily.lock"))
     state = EarningsState(root / "runtime/earnings/state.sqlite")
     try:
-        if audit_path.exists() and read_json(audit_path).get("executed"):
+        if action != "reconcile-publication" and audit_path.exists() and read_json(audit_path).get("executed"):
             raise ValueError("this exact bounded recovery was already executed")
         before: dict
         mutation: dict
-        if action in {"resume-checker", "schedule-repair", "recheck-publication"}:
+        if action == "reconcile-publication":
+            if not job_id or task_id:
+                raise ValueError("publication reconciliation requires exactly --job-id")
+            row = state.db.execute("SELECT * FROM publication_jobs WHERE job_id=?", (job_id,)).fetchone()
+            if not row:
+                raise ValueError("unknown publication job")
+            before = dict(row)
+            config, _ = load_config(root)
+            mutation = reconcile_quarterly_publication(root, state, before, apply=False,
+                local_archive_allowed=config.get("delivery", {}).get("lark_documents_enabled") is not True)
+            if not mutation.get("eligible"):
+                raise ValueError(f"publication reconciliation rejected: {mutation.get('reason')}")
+        elif action in {"resume-checker", "schedule-repair", "recheck-publication"}:
             if not job_id or task_id:
                 raise ValueError("publication recovery requires exactly --job-id")
             row = state.db.execute("SELECT * FROM publication_jobs WHERE job_id=?", (job_id,)).fetchone()
@@ -171,17 +184,30 @@ def recover(root: Path, *, action: str, job_id: str | None = None, task_id: str 
                   "executed": False, "model_calls": 0, "cloud_operations": 0, "notifications": 0}
         if not execute:
             return result
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
         backup = audit_dir / "backups" / f"state-{timestamp}-{target_id}.sqlite"
         _backup(state, backup)
         quarterly_backup = None
-        if action == "exclude-dependency" and mutation.get("affected_quarterly_scopes"):
+        if action == "reconcile-publication":
             quarterly_backup = audit_dir / "backups" / f"quarterly-{timestamp}-{target_id}.sqlite"
             source = sqlite3.connect(root / "runtime/earnings/quarterly.sqlite")
             destination = sqlite3.connect(quarterly_backup)
             try: source.backup(destination)
             finally: source.close(); destination.close()
-        if action == "recheck-publication":
+        elif action == "exclude-dependency" and mutation.get("affected_quarterly_scopes"):
+            quarterly_backup = audit_dir / "backups" / f"quarterly-{timestamp}-{target_id}.sqlite"
+            source = sqlite3.connect(root / "runtime/earnings/quarterly.sqlite")
+            destination = sqlite3.connect(quarterly_backup)
+            try: source.backup(destination)
+            finally: source.close(); destination.close()
+        if action == "reconcile-publication":
+            config, _ = load_config(root)
+            reconciliation = reconcile_quarterly_publication(root, state, before, apply=True,
+                local_archive_allowed=config.get("delivery", {}).get("lark_documents_enabled") is not True)
+            if not reconciliation.get("eligible"):
+                raise ValueError(f"publication reconciliation changed after preview: {reconciliation.get('reason')}")
+            result["reconciliation"] = reconciliation
+        elif action == "recheck-publication":
             rechecked = recheck_publication(root, root / before["input_manifest_path"])
             if rechecked.get("status") != "success" or not rechecked.get("manifest_path"):
                 raise ValueError(f"deterministic publication recheck failed: {rechecked.get('reason') or 'unknown'}")
@@ -229,7 +255,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", default=str(ROOT))
     parser.add_argument("--action", required=True,
-                        choices=["resume-checker", "schedule-repair", "recheck-publication",
+                        choices=["resume-checker", "schedule-repair", "recheck-publication", "reconcile-publication",
                                  "release-expired-task", "reuse-dependency", "exclude-dependency"])
     parser.add_argument("--job-id")
     parser.add_argument("--task-id")
