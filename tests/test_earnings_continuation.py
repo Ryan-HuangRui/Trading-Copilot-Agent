@@ -77,11 +77,82 @@ class EarningsContinuationTests(unittest.TestCase):
             args.generation = started["generation"]
             final = {"status": "success", "errors": [], "delivery": {"delivery": {"state": "sent"}},
                      "usage_summary": {"actual_model_calls": 0, "calls": []}}
-            with patch("earnings_continuation._run_daily", return_value=final) as run_daily:
+            with patch("earnings_continuation._run_daily", return_value=final) as run_daily, \
+                 patch("earnings_continuation.spawn_worker", return_value=888):
                 result = worker(root, args)
             self.assertEqual(result["state"], "blocked")
             self.assertEqual(run_daily.call_count, 1)
             self.assertTrue(run_daily.call_args.kwargs["finalize_only"])
+
+    def test_cross_day_delivery_retry_hands_off_to_real_collection_round(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); round_row, args = self.prepare(root)
+            ledger = ContinuationLedger(root)
+            ledger.db.execute("UPDATE rounds SET state='delivery_pending',research_outcome='waiting' WHERE round_id=?",
+                              (round_row["round_id"],))
+            ledger.db.execute("UPDATE workers SET started_at=?", (datetime.now(timezone.utc).isoformat(),))
+            ledger.db.commit(); ledger.close()
+            delivered = {"status": "success", "errors": [], "delivery": {"delivery": {"state": "sent"}},
+                         "usage_summary": {"actual_model_calls": 0, "calls": []}}
+            concurrent_start = {}
+            def spawn_during_handoff(spawn_root, spawn_args, spawn_round_id, generation):
+                with patch("earnings_continuation._pid_alive", return_value=True):
+                    concurrent_start.update(start(spawn_root, spawn_args))
+                return 222
+            with patch("earnings_continuation._run_daily", return_value=delivered) as delivery_run, \
+                 patch("earnings_continuation.spawn_worker", side_effect=spawn_during_handoff) as spawn:
+                old_result = worker(root, args)
+            self.assertEqual(old_result["state"], "waiting")
+            self.assertEqual(delivery_run.call_count, 1)
+            self.assertEqual((concurrent_start["state"], concurrent_start["round_id"]),
+                             ("already_running", round_row["round_id"]))
+            next_round = old_result["next_round"]
+            self.assertNotEqual(next_round["round_id"], round_row["round_id"])
+            self.assertGreater(next_round["cutoff"], round_row["cutoff"])
+            spawn.assert_called_once_with(root, args, next_round["round_id"], 1)
+
+            args.round_id = next_round["round_id"]; args.generation = 1
+            empty = {"fingerprint": "empty", "actionable_count": 0, "waiting_count": 0,
+                     "blocker_count": 0, "pending": {}, "blockers": {}}
+            collected = {"status": "success", "errors": [], "progress": empty,
+                         "collection_complete": True, "usage_summary": {"actual_model_calls": 0, "calls": []}}
+            finalized = {**collected, "delivery": {"delivery": {"state": "suppressed"}}}
+            with patch("earnings_continuation._run_daily", side_effect=[collected, finalized]) as collection_run:
+                new_result = worker(root, args)
+            self.assertEqual(new_result["state"], "complete")
+            self.assertFalse(collection_run.call_args_list[0].kwargs.get("finalize_only", False))
+            self.assertEqual(collection_run.call_args_list[0].args[2]["round_id"], next_round["round_id"])
+
+    def test_cross_day_failed_or_unknown_delivery_keeps_debt_without_starving_collection(self):
+        for delivery_state, expected_old_state in (("retryable_failed", "delivery_pending"),
+                                                   ("unknown", "delivery_unknown")):
+            with self.subTest(delivery_state=delivery_state), TemporaryDirectory() as temp:
+                root = Path(temp).resolve(); round_row, args = self.prepare(root)
+                ledger = ContinuationLedger(root)
+                ledger.db.execute("UPDATE rounds SET state='delivery_pending',research_outcome='waiting' WHERE round_id=?",
+                                  (round_row["round_id"],))
+                ledger.db.commit(); ledger.close()
+                finalized = {"status": "success", "errors": [],
+                    "delivery": {"delivery": {"state": delivery_state}},
+                    "usage_summary": {"actual_model_calls": 0, "calls": []}}
+                with patch("earnings_continuation._run_daily", return_value=finalized), \
+                     patch("earnings_continuation.spawn_worker", return_value=333) as spawn:
+                    result = worker(root, args)
+                ledger = ContinuationLedger(root)
+                old = ledger.db.execute("SELECT state FROM rounds WHERE round_id=?", (round_row["round_id"],)).fetchone()
+                current_day = ledger.db.execute("SELECT * FROM rounds WHERE revision=2").fetchone()
+                ledger.close()
+                self.assertEqual(old["state"], expected_old_state)
+                self.assertIsNotNone(current_day)
+                self.assertEqual(result["next_round"]["round_id"], current_day["round_id"])
+                spawn.assert_called_once_with(root, args, current_day["round_id"], 1)
+                if delivery_state == "retryable_failed":
+                    with patch("earnings_continuation._run_daily", return_value=finalized), \
+                         patch("earnings_continuation.spawn_worker") as duplicate_spawn:
+                        repeated = worker(root, args)
+                    self.assertEqual(repeated["next_round"]["round_id"], current_day["round_id"])
+                    self.assertEqual(repeated["next_round"]["handoff_state"], "already_exists")
+                    duplicate_spawn.assert_not_called()
 
     def test_completed_research_preserves_deferred_notification_for_next_day(self):
         with TemporaryDirectory() as temp:
@@ -98,7 +169,8 @@ class EarningsContinuationTests(unittest.TestCase):
             row = ledger.db.execute("SELECT research_outcome FROM rounds WHERE round_id=?", (args.round_id,)).fetchone()
             self.assertEqual(row[0], "complete")
             ledger.close()
-            with patch("earnings_continuation._run_daily", return_value=deferred) as run_daily:
+            with patch("earnings_continuation._run_daily", return_value=deferred) as run_daily, \
+                 patch("earnings_continuation.spawn_worker", return_value=889):
                 result = worker(root, args)
             self.assertEqual(result["state"], "delivery_pending")
             self.assertEqual(run_daily.call_count, 1)
@@ -128,7 +200,8 @@ class EarningsContinuationTests(unittest.TestCase):
                 args.generation = started["generation"]
                 final = {"status": "success", "errors": [], "delivery": {"delivery": {"state": "sent"}},
                          "usage_summary": {"actual_model_calls": 0, "calls": []}}
-                with patch("earnings_continuation._run_daily", return_value=final) as run_daily:
+                with patch("earnings_continuation._run_daily", return_value=final) as run_daily, \
+                     patch("earnings_continuation.spawn_worker", return_value=890):
                     result = worker(root, args)
                 self.assertEqual(result["state"], outcome)
                 self.assertEqual(run_daily.call_count, 1)
@@ -498,7 +571,8 @@ class EarningsContinuationTests(unittest.TestCase):
                 "delivery": {"delivery": {"state": "sent"}},
                 "usage_summary": {"actual_model_calls": 0, "calls": []}}
             with patch("earnings_continuation._run_daily", return_value=recovered) as run_daily:
-                second = worker(root, args)
+                with patch("earnings_continuation.spawn_worker", return_value=891):
+                    second = worker(root, args)
             self.assertEqual(second["state"], "complete")
             self.assertEqual(run_daily.call_count, 1)
             self.assertTrue(run_daily.call_args.kwargs["finalize_only"])

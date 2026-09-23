@@ -63,6 +63,35 @@ def _quantity_unit(value: str) -> tuple[str, Decimal] | None:
     return _unit(value)
 
 
+def _table_heading_unit(heading: str) -> str | None:
+    """Resolve one explicit table unit without mistaking calendar labels for units."""
+    aliases = tuple(sorted(set(_UNIT) | {"day", "days", "天"}, key=lambda value: (-len(value), value)))
+    pattern = re.compile("|".join(re.escape(value) for value in aliases), re.I)
+
+    def mentions(text: str) -> list[str]:
+        found: list[str] = []
+        for match in pattern.finditer(text):
+            token = match.group(0)
+            canonical = next((value for value in aliases if value.casefold() == token.casefold()), token)
+            if canonical not in found:
+                found.append(canonical)
+        return found
+
+    explicit = []
+    for group in re.findall(r"[（(]([^）)]*)[）)]", heading):
+        explicit.extend(mentions(re.sub(r"(?:19|20)\d{2}\s*年", "", group)))
+    candidates = explicit
+    if not candidates:
+        without_periods = re.sub(r"(?:19|20)\d{2}\s*年", "", heading)
+        candidates = mentions(without_periods)
+    quantities = {_quantity_unit(value) for value in candidates}
+    quantities.discard(None)
+    if len(quantities) != 1:
+        return None
+    selected = next(iter(quantities))
+    return next(value for value in candidates if _quantity_unit(value) == selected)
+
+
 def _decimal_text(value: Decimal) -> str:
     text = format(value, "f")
     return text.rstrip("0").rstrip(".") if "." in text else text
@@ -329,7 +358,7 @@ def _claims(markdown: str) -> list[dict[str, Any]]:
         for column, cell in enumerate(cells):
             if re.fullmatch(_NUMBER_PATTERN, cell):
                 heading = header[column] if column < len(header) else ""
-                found = next((name for name in sorted(set(_UNIT) | {"day", "days", "天"}, key=len, reverse=True) if name in heading), None)
+                found = _table_heading_unit(heading)
                 value = cell.replace(",", "")
                 cell_start = line.find(cell)
                 period = _explicit_period(line, cell_start, cell_start + len(cell))
@@ -378,7 +407,7 @@ def _explicitly_negates_certainty(sentence: str, risky: str, occurrence_start: i
     clause = sentence[left:right]
     local_start = occurrence.start() - left; local_end = occurrence.end() - left
     prefix, suffix = clause[:local_start], clause[local_end:]
-    action = r"(?:判断|认定|声称|给出|提供|形成|得出|推出|证明|支持|写出|写成)"
+    action = r"(?:判断|认定|声称|给出|提供|形成|得出|推出|证明|支持|写出|写成|讨论)"
     modal = rf"(?:不能|不可|不应|不宜|无法|无从)\s*(?:据此|因此|直接|基于此|据此直接|因此直接)?\s*{action}"
     direct = r"(?:不作|不予|不提供|不给出|不形成|不构成)"
     negative_action = rf"(?:{modal}|{direct})"
@@ -390,10 +419,21 @@ def _explicitly_negates_certainty(sentence: str, risky: str, occurrence_start: i
         and not re.match(r"[^，,；;。！？\n]{0,24}(?:并非|不是|并不|不再|绝非)\s*(?:仍属|属于|为)?\s*(?:未知|不明)", suffix))
     if unknown_question:
         return True
-    if not match:
+    if match:
+        match_text = prefix if before else suffix
+        double_negative = match_text[max(0, match.start() - 4):match.start()]
+        return not re.search(r"(?:并非|不是|未必)\s*$", double_negative)
+    # A single local negative action may govern an enumerated list separated by
+    # commas. Permit only known list terms/connectors between that action and this
+    # occurrence; contrast or affirmative prose therefore ends the exemption.
+    whole_prefix = sentence[:occurrence.start()]
+    list_terms = r"(?:超市场预期|超预期|被低估|低估|估值|目标价|交易方向|财报惊喜)"
+    list_match = re.search(
+        rf"(?P<action>{negative_action})(?P<tail>(?:\s|[、，,]|或|及|和|{list_terms})*)$", whole_prefix)
+    if not list_match:
         return False
-    prefix = sentence[max(0, match.start() - 4):match.start()]
-    return not re.search(r"(?:并非|不是|未必)\s*$", prefix)
+    double_negative = whole_prefix[max(0, list_match.start("action") - 4):list_match.start("action")]
+    return not re.search(r"(?:并非|不是|未必)\s*$", double_negative)
 
 
 def validate_reader_markdown(markdown: str, reports: list[dict[str, Any]], *, publication_type: str = "company",

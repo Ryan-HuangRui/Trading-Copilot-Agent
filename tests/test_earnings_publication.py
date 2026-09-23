@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -261,6 +262,31 @@ class EarningsPublicationTests(unittest.TestCase):
         self.assertEqual([(row["display"], row["value"], row["unit"]) for row in claims],
                          [("6.4年", "6.4", "年"), ("5 years", "5", "years")])
 
+    def test_table_header_unit_is_stable_across_hash_seeds(self):
+        body = """| 公司及指标 | 2026年第二季度费用率（%） | 2025年第二季度费用率（%） |
+|---|---:|---:|
+| 示例 | 84.5 | 83.2 |"""
+        code = ("import json,sys; sys.path.insert(0, 'script'); "
+                "from earnings_publication import claim_occurrence_inventory; "
+                f"print(json.dumps(claim_occurrence_inventory({body!r})['claims'], ensure_ascii=False, sort_keys=True))")
+        outputs = []
+        for seed in ("1", "2", "3", "4", "5"):
+            env = dict(os.environ); env["PYTHONHASHSEED"] = seed
+            completed = subprocess.run([sys.executable, "-c", code], cwd=Path(__file__).resolve().parents[1],
+                                       env=env, text=True, capture_output=True, check=True)
+            outputs.append(json.loads(completed.stdout))
+        self.assertTrue(all(rows == outputs[0] for rows in outputs[1:]))
+        self.assertEqual([(row["display"], row["unit"]) for row in outputs[0]],
+                         [("84.5", "%"), ("83.2", "%")])
+
+    def test_table_header_prefers_explicit_unit_and_rejects_conflicting_units(self):
+        body = """| 指标 | 2026年第二季度费用率（%） | 合同剩余期限（年） | 冲突（%/亿美元） | （2026年第二季度）费用率% |
+|---|---:|---:|---:|---:|
+| 示例 | 84.5 | 6.4 | 9.9 | 88.8 |"""
+        claims = claim_occurrence_inventory(body)["claims"]
+        self.assertEqual([(row["display"], row["unit"]) for row in claims],
+                         [("84.5", "%"), ("6.4", "年"), ("9.9", None), ("88.8", "%")])
+
     def test_period_inventory_uses_only_explicit_local_modifiers_across_mixed_rows(self):
         body = """经营期间：2026-04-27 至 2026-07-26。\n收入962.21亿美元。\n截至2026-07-26，库存315.75亿美元；库存由截至2026-01-25的214.03亿美元增至截至2026-07-26的315.75亿美元，增长47.5%。\n| 指标 | 数值（亿美元） |\n|---|---:|\n| 上半年经营现金流 | 744.21 |\n| 应收账款 | 630.59 |\n| 期后承诺 | 1050 |"""
         claims = claim_occurrence_inventory(body)["claims"]
@@ -322,6 +348,20 @@ class EarningsPublicationTests(unittest.TestCase):
             result = validate_reader_markdown(unsafe, [SOURCE])
             self.assertEqual(result["status"], "failed", assertion)
             self.assertTrue(any("unsupported market-expectation certainty: 超预期" == row
+                                for row in result["errors"]), assertion)
+
+    def test_market_certainty_allows_local_discussion_disclaimer_only(self):
+        safe = markdown().replace("缺少公告前一致预期，因此不能判断超预期或低估。",
+            "市场是否已经反映这些变化仍属未知，不能据此讨论超预期、低估、目标价或交易方向。")
+        self.assertEqual(validate_reader_markdown(safe, [SOURCE])["status"], "passed")
+        for assertion in (
+                "不能据此讨论超预期，但我们确认已经超预期。",
+                "并非不能讨论目标价。",
+                "不能讨论风险，研究仍给出目标价。"):
+            unsafe = markdown().replace("缺少公告前一致预期，因此不能判断超预期或低估。", assertion)
+            result = validate_reader_markdown(unsafe, [SOURCE])
+            self.assertEqual(result["status"], "failed", assertion)
+            self.assertTrue(any(row.startswith("unsupported market-expectation certainty:")
                                 for row in result["errors"]), assertion)
 
     def test_decline_sign_normalization_is_whitespace_safe_and_ratio_only(self):

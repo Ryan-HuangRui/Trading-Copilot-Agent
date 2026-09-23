@@ -29,6 +29,8 @@
 
 通知记录在 `runtime/earnings/outbox/<notification-id>/`：正文、冻结决策和发送回执分别存储。发送时复查目标、正文哈希和报告版本。成功后才写 sent；无法启动 sender 属 retryable_failed；已启动后超时、非零退出或进程中断均为 unknown，不自动再发。unknown 需人工核对飞书和本地回执后处理，不能重新跑研究作为发送重试。
 
+若前一日轮次只剩通知债务，worker 先按原冻结摘要执行一次 finalizer，再把当日采集交给唯一的新轮次；sent、retryable_failed 和 unknown 都不会占掉当天的新 cutoff。失败或 unknown 继续保留在旧轮次，其中 unknown 不自动重发。交接期间旧 worker 在新 worker 记录落库前保持 owner，同日重复 starter 只复用现有轮次。
+
 附件暂未启用，摘要必须自足。NAS 路径不包装成用户可直接访问的链接。
 
 ## 部署与验收顺序

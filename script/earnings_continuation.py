@@ -257,6 +257,32 @@ def spawn_worker(root: Path, args: argparse.Namespace, round_id: str, generation
     return process.pid
 
 
+def _handoff_cross_day_collection(root: Path, args: argparse.Namespace, ledger: ContinuationLedger,
+                                  completed_round: dict) -> dict | None:
+    """Start at most one current-day round after settling an older delivery debt."""
+    now = datetime.now(timezone.utc)
+    batch_date = now.astimezone(ZoneInfo("Asia/Shanghai")).date().isoformat()
+    if str(completed_round.get("batch_date") or "") >= batch_date:
+        return None
+    existing = ledger.db.execute(
+        "SELECT * FROM rounds WHERE batch_date=? AND revision>? ORDER BY revision DESC LIMIT 1",
+        (batch_date, completed_round["revision"])).fetchone()
+    if existing:
+        return {**dict(existing), "handoff_state": "already_exists"}
+    next_round = ledger.create_round(now)
+    generation = 1
+    ledger.db.execute("UPDATE rounds SET owner_generation=? WHERE round_id=?",
+                      (generation, next_round["round_id"]))
+    ledger.db.commit()
+    pid = spawn_worker(root, args, next_round["round_id"], generation)
+    worker_id = f"{next_round['round_id']}:g{generation}:{pid}"
+    ledger.db.execute("INSERT OR IGNORE INTO workers VALUES(?,?,?,?,?,?,?,?,?)",
+                      (worker_id, next_round["round_id"], generation, pid, "running",
+                       utc_now(), None, None, "cross-day delivery handoff"))
+    ledger.db.commit()
+    return {**next_round, "owner_generation": generation, "pid": pid, "handoff_state": "started"}
+
+
 def _start_locked(root: Path, args: argparse.Namespace) -> dict:
     ledger = ContinuationLedger(root)
     try:
@@ -572,6 +598,11 @@ def worker(root: Path, args: argparse.Namespace) -> dict:
             stored_outcome = research_outcome if 'research_outcome' in locals() else round_row.get("research_outcome")
             ledger.db.execute("UPDATE rounds SET state=?,research_outcome=?,stop_reason=?,updated_at=?,completed_at=? WHERE round_id=?",
                               (stop_state, stored_outcome, stop_reason, utc_now(), completed_at, args.round_id))
+            ledger.db.commit()
+            # Keep this worker durably running until the new worker row exists. A
+            # concurrent starter therefore observes an owner throughout the handoff.
+            next_round = (_handoff_cross_day_collection(root, args, ledger, round_row)
+                          if delivery_only else None)
             ledger.db.execute("UPDATE workers SET state='completed',completed_at=?,successor_pid=?,reason=? WHERE worker_id=?",
                               (utc_now(), successor_pid, stop_reason, worker_id))
             ledger.db.commit()
@@ -587,7 +618,7 @@ def worker(root: Path, args: argparse.Namespace) -> dict:
             return {"status": "success", "workflow": "earnings-continuation-worker",
                     "round_id": args.round_id, "generation": args.generation, "state": stop_state,
                     "reason": stop_reason, "successor_pid": successor_pid, "last_result": last_result,
-                    "round_usage_summary": cumulative}
+                    "round_usage_summary": cumulative, "next_round": next_round}
     finally:
         ledger.close()
 

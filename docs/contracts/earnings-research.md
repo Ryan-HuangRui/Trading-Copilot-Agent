@@ -126,6 +126,11 @@ per-execution-window soft quotas, not an all-day completion limit. A bounded bac
 handoff to another bounded generation while durable progress continues, so the scheduler timeout is
 not a research-completion deadline. It stops on completion or an explicit durable reason such as
 quota, capacity, terminal/manual blocker or repeated no progress; these states are not completion.
+Durable notification debt is independent of daily evidence collection. When an older frozen round
+is waiting only for final delivery, one bounded finalizer retry retains `retryable_failed` or
+`unknown` exactly as observed and then hands collection to at most one current-day round. Unknown
+delivery is never automatically resent. The old worker remains the durable owner until the new
+worker row exists, and repeated same-day starts reuse that round instead of creating empty revisions.
 
 Season windows are resource-policy defaults from configuration. Quarterly mature trigger requires >= 0.9 disclosed coverage of the frozen applicable core sample, key issuer disclosures, completed necessary research and explicit resolution/disclosure of critical supply-chain gaps. A quarter is mapped from actual operating periods, not only filing months. Foreign issuer obligations and Q4 annual reporting differ.
 
