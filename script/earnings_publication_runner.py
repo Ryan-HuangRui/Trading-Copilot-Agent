@@ -33,7 +33,7 @@ def prepare_input(root: Path, *, publication_type: str, scope_id: str, quarter_i
         fiscal_period = None
         if report.get("report_type") == "company":
             from earnings_period_review import resolve_report_period
-            fiscal_period = resolve_report_period(report)
+            fiscal_period = resolve_report_period(report, root=root)
         sources.append({"path": str(path.relative_to(root)), "sha256": sha256_file(path), "report_id": report.get("report_id"),
                         "report_type": report.get("report_type"), "cutoff": report.get("cutoff"),
                         "fiscal_period": fiscal_period})
@@ -46,6 +46,8 @@ def prepare_input(root: Path, *, publication_type: str, scope_id: str, quarter_i
              "financial_fact_catalog_sha256": sha256_bytes(canonical_json(fact_catalog)),
              "writer_profile": config["profiles"]["daily"], "checker_profile": config["profiles"]["review"],
              "required_sections": list(REQUIRED_SECTIONS[publication_type])}
+    if any((row.get("fiscal_period") or {}).get("period_proofs") for row in sources):
+        basis["fiscal_period_resolutions"] = [row.get("fiscal_period") for row in sources]
     publication_key = sha256_bytes(canonical_json(basis))
     run_id = f"publication-{publication_key[:16]}"; run_dir = root / "runtime/earnings/publications/runs" / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -79,6 +81,8 @@ def prepare_input(root: Path, *, publication_type: str, scope_id: str, quarter_i
 
 def _codex(root: Path, binary: Path, profile: dict[str, Any], prompt: str, output: Path,
            events: Path, stderr: Path, timeout: int) -> dict | None:
+    from earnings_quota_guard import require_quota
+    require_quota(root, str(binary))
     model, effort = profile["model"], profile["reasoning_effort"]
     if (model, effort) not in SUPPORTED: raise ValueError("unsupported publication profile; fallback forbidden")
     command = [str(binary), "exec", "--ignore-user-config", "--ephemeral", "--sandbox", "read-only", "-C", str(root),

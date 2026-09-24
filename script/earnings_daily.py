@@ -28,6 +28,22 @@ from earnings_role_runner import run_role
 from earnings_state import EarningsState
 
 
+def window_collection_complete(state: EarningsState, config: dict, symbol: str, cutoff: str) -> bool:
+    """Reuse only a complete scan of this release window through the frozen cutoff."""
+    if not config.get("disclosure_window"):
+        return False
+    checkpoint = state.source_watermark("sec_disclosure_window", symbol)
+    if not checkpoint or checkpoint.get("status") != "success":
+        return False
+    try:
+        coverage = json.loads(checkpoint.get("detail") or "{}")
+        return bool(coverage.get("policy") == "calendar-disclosure-window-v1"
+            and coverage.get("complete") is True and coverage.get("window") == config["disclosure_window"]
+            and parse_time(coverage.get("checked_through")) >= parse_time(cutoff))
+    except (TypeError, ValueError):
+        return False
+
+
 class DailyLedger:
     def __init__(self, root: Path):
         self.quota_scope: str | None = None
@@ -105,13 +121,14 @@ def industry_work(root: Path, state: EarningsState, universe: dict, ledger: Dail
     for industry in universe["industries"]:
         symbols = [row["symbol"] for row in industry["issuers"]]
         marks = ",".join("?" for _ in symbols)
-        rows = state.db.execute(f"""SELECT a.path,a.sha256,a.period_end FROM report_artifacts a
+        rows = state.db.execute(f"""SELECT a.path,a.sha256,a.period_end,a.subject_id FROM report_artifacts a
           JOIN earnings_events e ON a.subject_id=e.event_id JOIN issuers i ON e.issuer_id=i.issuer_id
           WHERE a.report_type='company' AND a.source_mode='live' AND i.symbol IN ({marks})
           ORDER BY a.period_end DESC,a.created_at DESC""", symbols).fetchall()
         if cutoff:
             rows = [row for row in rows if parse_time(read_json(root / row["path"]).get("cutoff"))
                     and parse_time(read_json(root / row["path"])["cutoff"]) <= parse_time(cutoff)]
+        rows = [row for row in rows if state.event_in_disclosure_window(row["subject_id"], cutoff)]
         if not rows or not rows[0]["period_end"]:
             continue
         # Daily cohort is explicitly based on period ends. Source reports preserve fiscal periods.
@@ -122,7 +139,7 @@ def industry_work(root: Path, state: EarningsState, universe: dict, ledger: Dail
         from datetime import timedelta
         finish = next_q - timedelta(days=1)
         versions = sorted((r["path"], r["sha256"]) for r in rows if r["period_end"] and start.isoformat() <= r["period_end"] <= finish.isoformat())
-        signature = hashlib.sha256(json.dumps(versions).encode()).hexdigest()
+        signature = hashlib.sha256(json.dumps([versions, state.disclosure_window] if state.disclosure_window else versions).encode()).hexdigest()
         scope = f"{industry['industry_id']}:{start}:{finish}"
         existing = ledger.db.execute("SELECT fingerprint FROM industry_inputs WHERE scope=?", (scope,)).fetchone()
         if not existing or existing[0] != signature:
@@ -173,6 +190,7 @@ def _latest_company_publication_heads(root: Path, state: EarningsState,
       WHERE t.source_mode='live' AND t.task_type='company' {legal}
       ORDER BY t.period_end DESC,t.rowid DESC""", params).fetchall()
     for row in rows:
+        if not state.event_in_disclosure_window(row["subject_id"], cutoff): continue
         publication_type = "ipo" if row["event_kind"] == "ipo" else "company"
         scope_id = row["symbol"] or row["issuer_id"]
         key = (publication_type, str(scope_id))
@@ -283,6 +301,21 @@ def unresolved_terminal_count(state: EarningsState, cutoff: str | None = None) -
         WHERE x.task_type='company' AND xe.issuer_id=te.issuer_id
         AND x.source_mode=t.source_mode AND x.state IN
           ('queued','running','completed','retryable_failed','terminal_failed') {max_cutoff}))"""
+    if state.disclosure_window:
+        rows = state.db.execute(sql.replace("SELECT COUNT(*) FROM research_tasks t", "SELECT t.* FROM research_tasks t", 1),
+                                (cutoff, cutoff) if cutoff else ()).fetchall()
+        count = 0
+        for row in rows:
+            if row["task_type"] == "company":
+                count += int(state.event_in_disclosure_window(row["subject_id"], cutoff))
+            else:
+                manifest = state.db.execute("SELECT path FROM task_attempt_manifests WHERE task_id=? ORDER BY attempt DESC LIMIT 1", (row["task_id"],)).fetchone()
+                if manifest:
+                    try:
+                        payload = read_json(state.path.resolve().parents[2] / manifest[0])
+                        count += int(payload.get("scope", {}).get("disclosure_window") == state.disclosure_window)
+                    except (OSError, ValueError): pass
+        return count
     return state.db.execute(sql, (cutoff, cutoff) if cutoff else ()).fetchone()[0]
 
 
@@ -291,6 +324,7 @@ def _latest_role_artifact(root: Path, state: EarningsState, subject: str, report
     rows = state.db.execute("""SELECT * FROM report_artifacts WHERE subject_id=? AND report_type=?
       AND period_start=? AND period_end=? ORDER BY rowid DESC""", (subject, report_type, period_start, period_end)).fetchall()
     for row in rows:
+        if not state.report_in_disclosure_window(root, row["path"]): continue
         report = read_json(root / row["path"])
         if report.get("research_mode") == "quarterly":
             return {**dict(row), "report": report}
@@ -320,6 +354,9 @@ def _quarterly_market_readiness(root: Path, state: EarningsState, qdb: sqlite3.C
                     WHERE scope_id=? AND stage='synthesis'""", (scope["scope_id"],)).fetchone()
                 if not stage or stage["state"] != "completed" or not stage["artifact_path"] or not stage["artifact_sha256"]:
                     reason = f"{scope['industry_id']}:synthesis-waiting"
+                    full_reasons.append(reason); sealed_reasons.append(reason); dependencies.append(dependency); continue
+                if not state.report_in_disclosure_window(root, stage["artifact_path"]):
+                    reason = f"{scope['industry_id']}:outside-disclosure-window"
                     full_reasons.append(reason); sealed_reasons.append(reason); dependencies.append(dependency); continue
                 source = root / stage["artifact_path"]
                 if not source.is_file() or sha256_file(source) != stage["artifact_sha256"]:
@@ -777,6 +814,8 @@ def _reconcile_registered_industry_publications(root: Path, state: EarningsState
     for raw in state.db.execute("""SELECT * FROM publication_jobs WHERE publication_type='industry'
       AND publication_manifest_path IS NOT NULL AND state NOT IN ('superseded','terminal_failed')""").fetchall():
         job = dict(raw)
+        if not state.report_in_disclosure_window(root, job["source_path"], cutoff):
+            continue
         if not _publication_job_within_cutoff(root, job, cutoff):
             continue
         result = reconcile_quarterly_publication(root, state, job, apply=True,
@@ -791,6 +830,7 @@ def run_publication_work(root: Path, config: dict, state: EarningsState, ledger:
                          config_path: str = "config/earnings_research.json",
                          cutoff: str | None = None) -> list[dict]:
     """Persist and drain publication work; cloud recovery is independent of discovery/writer budgets."""
+    state.disclosure_window = config.get("disclosure_window")
     outcomes: list[dict] = []
     outcomes.extend(_reconcile_registered_industry_publications(root, state, config, deployed, cutoff))
     writer_cap = int(config["budgets"].get("publication_writers_per_day", 0))
@@ -802,6 +842,7 @@ def run_publication_work(root: Path, config: dict, state: EarningsState, ledger:
     seen_series: set[str] = set()
     seen_subjects: set[tuple[str, str, str]] = set()
     for row in rows:
+        if not state.report_in_disclosure_window(root, row["path"], cutoff): continue
         try:
             report = read_json(root / row["path"]); scope = report.get("scope") or {}
         except Exception as exc:
@@ -824,7 +865,7 @@ def run_publication_work(root: Path, config: dict, state: EarningsState, ledger:
         if publication_type == "ipo" and (not scope.get("reporting_start") or not scope.get("reporting_end")):
             cutoff_day = date.fromisoformat(str(report["cutoff"])[:10]); quarter = f"IPO-{cutoff_day.year}-Q{(cutoff_day.month - 1)//3 + 1}"
         elif scope.get("reporting_end"):
-            try: quarter = resolve_report_period(report, form=scope.get("form"))["research_quarter"]
+            try: quarter = resolve_report_period(report, form=scope.get("form"), root=root)["research_quarter"]
             except ValueError as exc:
                 if report["report_type"] == "company":
                     state.db.execute("""INSERT OR REPLACE INTO publication_gaps
@@ -863,7 +904,8 @@ def run_publication_work(root: Path, config: dict, state: EarningsState, ledger:
     jobs = [dict(row) for row in state.db.execute("""SELECT * FROM publication_jobs
       WHERE state IN ('checker_pending','local_pending')
       OR (state='retryable_failed' AND publication_manifest_path IS NULL)""").fetchall()
-      if _publication_job_within_cutoff(root, dict(row), cutoff)]
+      if _publication_job_within_cutoff(root, dict(row), cutoff)
+      and state.report_in_disclosure_window(root, row["source_path"], cutoff)]
     publication_heads = _latest_company_publication_heads(root, state, cutoff=cutoff)
     jobs.sort(key=lambda job: _publication_job_sort_key(root, job, publication_heads))
     for job in jobs:
@@ -989,6 +1031,8 @@ def run_publication_work(root: Path, config: dict, state: EarningsState, ledger:
     for raw in cloud_jobs:
         if time.monotonic() >= deadline: break
         job = dict(raw)
+        if not state.report_in_disclosure_window(root, job["source_path"], cutoff):
+            continue
         if not _publication_job_within_cutoff(root, job, cutoff):
             continue
         if backfill_cap <= 0 and _publication_job_is_backfill(job, publication_heads):
@@ -1128,6 +1172,7 @@ def summarize_batch_usage(root: Path, day: str, reports: list[dict], publication
 def round_progress(root: Path, state: EarningsState, config: dict, cutoff: str | None = None,
                    ledger: DailyLedger | None = None) -> dict:
     """Return a stable, read-only checkpoint summary for the continuation scheduler."""
+    state.disclosure_window = config.get("disclosure_window")
     cutoff_clause = """AND EXISTS(SELECT 1 FROM documents cd WHERE cd.event_id=t.subject_id
       AND COALESCE(cd.accepted_at,cd.published_at) IS NOT NULL
       AND datetime(COALESCE(cd.accepted_at,cd.published_at))<=datetime(?))""" if cutoff else ""
@@ -1150,6 +1195,14 @@ def round_progress(root: Path, state: EarningsState, config: dict, cutoff: str |
         {cutoff_max_clause}
         AND x.state IN ('queued','running','completed','retryable_failed','terminal_failed'))"""
     current_pending = state.db.execute(current_sql, (cutoff, cutoff) if cutoff else ()).fetchone()[0]
+    if state.disclosure_window:
+        # Every event published in this window is current, independent of fiscal end.
+        current_pending = sum(state.event_in_disclosure_window(r["subject_id"], cutoff) for r in state.db.execute("""
+          SELECT t.subject_id FROM research_tasks t WHERE t.task_type='company' AND t.source_mode='live'
+          AND t.state IN ('queued','running','retryable_failed') AND NOT EXISTS(
+            SELECT 1 FROM research_tasks n WHERE n.rowid>t.rowid AND n.task_type=t.task_type
+            AND n.subject_id=t.subject_id AND n.period_start IS t.period_start AND n.period_end IS t.period_end
+            AND n.source_mode=t.source_mode AND n.state!='superseded')"""))
     excluded_company_inputs = state.db.execute("""SELECT COUNT(*) FROM dependency_exclusion_audit x
       JOIN research_tasks f ON f.task_id=x.failed_task_id WHERE f.task_type='company'
       AND NOT EXISTS(SELECT 1 FROM research_tasks n JOIN report_artifacts a ON a.task_id=n.task_id
@@ -1165,6 +1218,7 @@ def round_progress(root: Path, state: EarningsState, config: dict, cutoff: str |
     backfill_cap = int(config.get("budgets", {}).get("publication_backfill_limit", 0))
     publication_rows = [dict(row) for row in state.db.execute("SELECT * FROM publication_jobs")]
     for row in publication_rows:
+        if not state.report_in_disclosure_window(root, row["source_path"], cutoff): continue
         try:
             report_cutoff = parse_time(read_json(root / row["source_path"]).get("cutoff"))
         except (OSError, json.JSONDecodeError):
@@ -1190,6 +1244,9 @@ def round_progress(root: Path, state: EarningsState, config: dict, cutoff: str |
             "SELECT COUNT(*) FROM publication_gaps WHERE state='actionable'").fetchone()[0],
         "manual_cloud_resolution": manual_cloud_resolution,
     }
+    if state.disclosure_window:
+        blockers["publication_gaps"] = sum(state.report_in_disclosure_window(root, r[0], cutoff)
+            for r in state.db.execute("SELECT source_path FROM publication_gaps WHERE state='actionable'"))
     quarterly_pending = 0
     quarterly_waiting = 0
     quarterly_blocked = 0
@@ -1234,6 +1291,7 @@ def round_progress(root: Path, state: EarningsState, config: dict, cutoff: str |
             progress_error = 1
         finally:
             qdb.close()
+    universe = {"industries": []}
     own_ledger = ledger is None
     try:
         if ledger is None:
@@ -1261,9 +1319,16 @@ def round_progress(root: Path, state: EarningsState, config: dict, cutoff: str |
              "publications": [tuple(row) for row in state.db.execute(
                  "SELECT job_id,state,attempts,COALESCE(publication_manifest_path,'') FROM publication_jobs ORDER BY job_id")],
              "quarterly": quarterly_progress}
+    awaiting_disclosure = []
+    if state.disclosure_window:
+        for issuer in [i for group in universe["industries"] for i in group["issuers"]]:
+            events = state.db.execute("SELECT e.event_id FROM earnings_events e JOIN issuers i USING(issuer_id) WHERE i.symbol=?", (issuer["symbol"],))
+            if not any(state.event_in_disclosure_window(r[0], cutoff) for r in events):
+                awaiting_disclosure.append(issuer["symbol"])
+    pending["awaiting_window_disclosure"] = sorted(set(awaiting_disclosure))
     actionable = current_pending + daily_industry_pending + quarterly_pending + quarterly_market + publication_pending
     return {"pending": pending, "blockers": blockers,
-            "actionable_count": actionable, "waiting_count": quarterly_waiting + quarterly_market_waiting,
+            "actionable_count": actionable, "waiting_count": quarterly_waiting + quarterly_market_waiting + len(set(awaiting_disclosure)),
             "blocker_count": sum(blockers.values()),
             "fingerprint": hashlib.sha256(json.dumps(basis, sort_keys=True).encode()).hexdigest()}
 
@@ -1399,7 +1464,7 @@ def run(args: argparse.Namespace) -> dict:
     logs.mkdir(parents=True)
     with exclusive_lock(runtime_path(root, "runtime/earnings/daily.lock")):
         ledger = DailyLedger(root)
-        state = EarningsState(root / "runtime/earnings/state.sqlite")
+        state = EarningsState(root / "runtime/earnings/state.sqlite", disclosure_window=config.get("disclosure_window"))
         quota_scope = getattr(args, "execution_window_id", None) or day
         ledger.bind_quota_scope(quota_scope)
         ledger.register_window(quota_scope, round_id=getattr(args, "round_id", None), batch_day=day, cutoff=cutoff)
@@ -1446,16 +1511,23 @@ def run(args: argparse.Namespace) -> dict:
                         collection_complete = False
                         break
                     initialization = symbol in pending
+                    if window_collection_complete(state, config, symbol, cutoff):
+                        if initialization:
+                            ledger.db.execute("INSERT OR REPLACE INTO initialized VALUES(?,?)", (symbol, utc_now())); ledger.db.commit()
+                        continue
                     if initialization:
                         ledger.reserve(quota_scope, symbol, "initialization", int(config["budgets"]["initialization_company_limit"]))
                     try:
                         collected = command(root, "earnings_collect.py", [*common, "--mode", "live", "--symbol", symbol,
                             "--collection-kind", "initialization" if initialization else "incremental"], logs, min(600, max(1, int(early_deadline-time.monotonic()))))
                         failures = collected.get("summary", {}).get("failures", [])
+                        coverage_complete = collected.get("summary", {}).get("initialization_coverage", {}).get(symbol, {}).get("complete") is True
                         if failures:
                             errors.append(f"source:{symbol}:incomplete")
                             collection_complete = False
-                        elif initialization and collected.get("summary", {}).get("initialization_coverage", {}).get(symbol, {}).get("complete") is True:
+                        elif config.get("disclosure_window") and not coverage_complete:
+                            collection_complete = False
+                        elif initialization and coverage_complete:
                             ledger.db.execute("INSERT OR REPLACE INTO initialized VALUES(?,?)", (symbol, utc_now())); ledger.db.commit()
                         elif initialization:
                             collection_complete = False
@@ -1617,15 +1689,13 @@ def run(args: argparse.Namespace) -> dict:
             exhausted = unresolved_terminal_count(state, cutoff=cutoff)
             if exhausted:
                 errors.append(f"terminal_tasks:{exhausted} current research tasks require operator review")
-            publication_exhausted = state.db.execute("""SELECT COUNT(*) FROM publication_jobs p
-              WHERE p.state='terminal_failed' AND NOT EXISTS(SELECT 1 FROM publication_jobs n
-                WHERE n.series_key=p.series_key AND n.revision>p.revision)""").fetchone()[0]
-            if publication_exhausted:
-                errors.append(f"terminal_publications:{publication_exhausted} publication jobs require operator review")
-            publication_gaps = state.db.execute("SELECT COUNT(*) FROM publication_gaps WHERE state='actionable'").fetchone()[0]
-            if publication_gaps:
-                errors.append(f"publication_gaps:{publication_gaps} reports require fiscal-period review")
             progress = round_progress(root, state, config, cutoff=cutoff, ledger=ledger)
+            publication_exhausted = progress["blockers"]["terminal_publications"]
+            if publication_exhausted:
+                errors.append(f"terminal_publications:{publication_exhausted} current-window publication jobs require operator review")
+            publication_gaps = progress["blockers"]["publication_gaps"]
+            if publication_gaps:
+                errors.append(f"publication_gaps:{publication_gaps} current-window reports require fiscal-period review")
             delivery = ({"state": "deferred", "reason": "continuation window checkpoint; outer finalizer owns delivery"}
                         if getattr(args, "defer_finalize", False)
                         else finalize(root, deployed, deployed_path, day, reports, errors, state, send=args.send, cutoff=cutoff))

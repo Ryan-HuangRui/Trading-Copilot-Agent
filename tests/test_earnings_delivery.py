@@ -86,6 +86,16 @@ class EarningsDeliveryTests(unittest.TestCase):
             self.assertEqual(deliver(self.root, second, self.deployment_path, execute=True)['state'], 'deferred')
         self.assertEqual(run.call_count, 1)
 
+    def test_explicit_heartbeat_does_not_use_daily_delivery_slot(self):
+        heartbeat = prepare_notification(self.root, self.deployment, day='2026-09-15', body='16:00 heartbeat',
+            report_versions=[], kind='heartbeat', rationale='explicit user request', should_send=True)
+        daily = self.prepare('normal daily report')
+        with patch('earnings_delivery.subprocess.run', return_value=subprocess.CompletedProcess([], 0, b'ok', b'')) as run:
+            self.assertEqual(deliver(self.root, heartbeat, self.deployment_path, execute=True)['state'], 'sent')
+            self.assertEqual(deliver(self.root, heartbeat, self.deployment_path, execute=True)['status'], 'skipped')
+            self.assertEqual(deliver(self.root, daily, self.deployment_path, execute=True)['state'], 'sent')
+        self.assertEqual(run.call_count, 2)
+
     def test_missing_sender_fails_before_send_and_can_retry_delivery_only(self):
         path = self.prepare(); self.binary.unlink()
         self.assertEqual(deliver(self.root, path, self.deployment_path, execute=True)['state'], 'retryable_failed')

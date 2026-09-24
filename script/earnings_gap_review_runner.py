@@ -21,6 +21,8 @@ def run_gap_review(root: Path, input_path: Path, *, binary: str, profile: dict[s
                    timeout: int, attempt_dir: Path) -> dict[str, Any]:
     """Execute a read-only review profile and register only validator-accepted output."""
     root = root.resolve()
+    from earnings_quota_guard import require_quota
+    require_quota(root, binary)
     input_path = runtime_path(root, input_path)
     review_input = read_json(input_path)
     model, effort = profile["model"], profile["reasoning_effort"]

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "universe_id": "earnings-pilot-v1",
+  "universe_id": "earnings-expanded-v2",
   "created_at": "2026-09-14",
   "scope": "research_observation_only",
   "identity_policy": "resolve CIK and issuer from SEC before live use; no guessed identifiers",
@@ -210,6 +210,162 @@
           "identity_status": "pending_resolution"
         }
       ]
+    },
+    {
+      "industry_id": "banking-credit",
+      "label": "银行与信贷",
+      "metric_template": "banking-credit",
+      "key_symbols": [
+        "JPM",
+        "BAC"
+      ],
+      "issuers": [
+        {
+          "symbol": "JPM",
+          "issuer_id": null,
+          "identity_status": "pending_resolution"
+        },
+        {
+          "symbol": "BAC",
+          "issuer_id": null,
+          "identity_status": "pending_resolution"
+        },
+        {
+          "symbol": "WFC",
+          "issuer_id": null,
+          "identity_status": "pending_resolution"
+        },
+        {
+          "symbol": "C",
+          "issuer_id": null,
+          "identity_status": "pending_resolution"
+        }
+      ]
+    },
+    {
+      "industry_id": "energy",
+      "label": "能源：综合油气与上游",
+      "metric_template": "energy",
+      "key_symbols": [
+        "XOM",
+        "CVX"
+      ],
+      "issuers": [
+        {
+          "symbol": "XOM",
+          "issuer_id": null,
+          "identity_status": "pending_resolution"
+        },
+        {
+          "symbol": "CVX",
+          "issuer_id": null,
+          "identity_status": "pending_resolution"
+        },
+        {
+          "symbol": "COP",
+          "issuer_id": null,
+          "identity_status": "pending_resolution"
+        },
+        {
+          "symbol": "EOG",
+          "issuer_id": null,
+          "identity_status": "pending_resolution"
+        }
+      ]
+    },
+    {
+      "industry_id": "transport-logistics",
+      "label": "运输与物流",
+      "metric_template": "transport-logistics",
+      "key_symbols": [
+        "UNP",
+        "CSX"
+      ],
+      "issuers": [
+        {
+          "symbol": "UNP",
+          "issuer_id": null,
+          "identity_status": "pending_resolution"
+        },
+        {
+          "symbol": "CSX",
+          "issuer_id": null,
+          "identity_status": "pending_resolution"
+        },
+        {
+          "symbol": "UPS",
+          "issuer_id": null,
+          "identity_status": "pending_resolution"
+        },
+        {
+          "symbol": "FDX",
+          "issuer_id": null,
+          "identity_status": "pending_resolution"
+        }
+      ]
+    },
+    {
+      "industry_id": "homebuilding",
+      "label": "住宅建筑",
+      "metric_template": "homebuilding",
+      "key_symbols": [
+        "DHI",
+        "LEN"
+      ],
+      "issuers": [
+        {
+          "symbol": "DHI",
+          "issuer_id": null,
+          "identity_status": "pending_resolution"
+        },
+        {
+          "symbol": "LEN",
+          "issuer_id": null,
+          "identity_status": "pending_resolution"
+        },
+        {
+          "symbol": "PHM",
+          "issuer_id": null,
+          "identity_status": "pending_resolution"
+        },
+        {
+          "symbol": "NVR",
+          "issuer_id": null,
+          "identity_status": "pending_resolution"
+        }
+      ]
+    },
+    {
+      "industry_id": "pharmaceuticals",
+      "label": "成熟制药与生物制药",
+      "metric_template": "pharmaceuticals",
+      "key_symbols": [
+        "LLY",
+        "MRK"
+      ],
+      "issuers": [
+        {
+          "symbol": "LLY",
+          "issuer_id": null,
+          "identity_status": "pending_resolution"
+        },
+        {
+          "symbol": "MRK",
+          "issuer_id": null,
+          "identity_status": "pending_resolution"
+        },
+        {
+          "symbol": "ABBV",
+          "issuer_id": null,
+          "identity_status": "pending_resolution"
+        },
+        {
+          "symbol": "BMY",
+          "issuer_id": null,
+          "identity_status": "pending_resolution"
+        }
+      ]
     }
-  ]
+  ],
+  "updated_at": "2026-09-24"
 }

@@ -140,7 +140,8 @@ CREATE TABLE IF NOT EXISTS publication_gaps (
 
 
 class EarningsState:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, *, disclosure_window: dict | None = None):
+        self.disclosure_window = disclosure_window
         self.path = path
         path.parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(path, timeout=30, isolation_level=None)
@@ -158,6 +159,44 @@ class EarningsState:
           period_end=COALESCE(period_end,(SELECT period_end FROM research_tasks WHERE task_id=failed_task_id)),
           source_mode=COALESCE(source_mode,(SELECT source_mode FROM research_tasks WHERE task_id=failed_task_id)),
           input_hash=COALESCE(input_hash,(SELECT input_hash FROM research_tasks WHERE task_id=failed_task_id))""")
+
+    def event_in_disclosure_window(self, event_id: str, cutoff: str | None = None) -> bool:
+        """Select by first recorded public disclosure, never fiscal end or fetch time.
+
+        A later amendment/re-fetch cannot make an old earnings event current.
+        SEC availability is a proxy when an earlier issuer release is not registered.
+        """
+        window = self.disclosure_window
+        if not window:
+            return True
+        event = self.db.execute("SELECT event_kind,reporting_end FROM earnings_events WHERE event_id=?", (event_id,)).fetchone()
+        if not event or event["event_kind"] != "earnings" or not event["reporting_end"]:
+            return False  # Unresolved 8-K announcements are not verified earnings periods.
+        start, end = parse_time(window["start"]), parse_time(window["end_exclusive"])
+        if start is None or end is None or start >= end:
+            raise ValueError("invalid disclosure window")
+        public = self.db.execute("""SELECT MIN(datetime(COALESCE(published_at,accepted_at)))
+          FROM documents WHERE event_id=? AND COALESCE(form,'') NOT LIKE '%/A'""", (event_id,)).fetchone()[0]
+        when = parse_time(public)
+        available = self.db.execute("""SELECT MIN(datetime(COALESCE(accepted_at,published_at)))
+          FROM documents WHERE event_id=? AND COALESCE(form,'') NOT LIKE '%/A'""", (event_id,)).fetchone()[0]
+        return bool(when and available and start <= when < end
+                    and parse_time(available) <= parse_time(cutoff or utc_now()))
+
+    def report_in_disclosure_window(self, root: Path, path: str, cutoff: str | None = None) -> bool:
+        if not self.disclosure_window:
+            return True
+        row = self.db.execute("SELECT * FROM report_artifacts WHERE path=?", (path,)).fetchone()
+        if not row:
+            return False
+        if row["report_type"] == "company":
+            return self.event_in_disclosure_window(row["subject_id"], cutoff)
+        try:
+            report = read_json(root / path)
+        except (OSError, ValueError):
+            return False
+        # Industry/market outputs must have been built under this exact selector.
+        return report.get("scope", {}).get("disclosure_window") == self.disclosure_window
 
     def close(self) -> None:
         self.db.close()
@@ -570,7 +609,7 @@ class EarningsState:
               WHERE a.failed_task_id=xn.task_id AND a.reused_task_id=x.task_id))))"""
         if company_tier not in {None, "current", "history"}:
             raise ValueError("company_tier must be current or history")
-        if task_type == "company" and company_tier:
+        if task_type == "company" and company_tier and not self.disclosure_window:
             filters.append(current_expr if company_tier == "current" else f"NOT ({current_expr})")
             params.append(cutoff or now_text)
         priority = list(dict.fromkeys(str(symbol) for symbol in priority_symbols))
@@ -593,6 +632,9 @@ class EarningsState:
                 ORDER BY t.created_at,t.task_id""",
                 params,
             ).fetchall()
+            if task_type == "company" and self.disclosure_window:
+                rows = [row for row in rows if self.event_in_disclosure_window(row["subject_id"], cutoff)
+                        == (company_tier != "history")]
             def queue_key(row: sqlite3.Row) -> tuple[Any, ...]:
                 meta = db.execute("""SELECT e.issuer_id,i.symbol FROM earnings_events e
                   LEFT JOIN issuers i ON i.issuer_id=e.issuer_id WHERE e.event_id=?""",

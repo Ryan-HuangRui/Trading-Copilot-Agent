@@ -147,3 +147,7 @@ Notification state = pending/ready/sent/retryable_failed/unknown/suppressed. The
 ## P0 acceptance cases
 
 Use `config/earnings_acceptance_cases.json` as an offline methodology review set, never live evidence. It includes a clear operating improvement, contradictory accounting/demand signals, and an incomplete IPO disclosure. Expected constraints demonstrate distinctions rather than mandate exact prose or arbitrary model confidence scores.
+
+## Optional calendar disclosure selector
+
+`disclosure_window` in the active config accepts ISO dates `start` (inclusive) and `end_exclusive`. It selects earnings events by their earliest registered public release date, with actual acceptance/public availability additionally bounded by the round cutoff. It does not select by fiscal period end, collection date, or newest available issuer report. An old event's amendment does not renew its release date. A missing in-window release waits; it must not fall back to a historical event. The company queue, industry membership and reader publication work all honor the selector; industry/market output scope preserves it. Historical comparisons remain permissible without granting current coverage. When only SEC filing availability is registered, treat that timestamp as a proxy, not an independently verified issuer release date. The generic config defaults to null; live deployments must carry their explicitly selected calendar window.

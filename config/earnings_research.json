@@ -147,5 +147,6 @@
     "broker_writes": false,
     "watchlist_mutation": false,
     "rule_promotion": false
-  }
+  },
+  "disclosure_window": null
 }

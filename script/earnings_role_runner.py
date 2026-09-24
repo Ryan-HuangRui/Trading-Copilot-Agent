@@ -47,6 +47,8 @@ def render_report(report: dict[str, Any]) -> str:
 
 def run_role(root: Path, manifest_path: Path, *, binary: str, timeout: int) -> dict[str, Any]:
     root = root.resolve()
+    from earnings_quota_guard import require_quota
+    require_quota(root, binary)
     manifest_path = runtime_path(root, manifest_path)
     manifest = read_json(manifest_path)
     profile = manifest["profile"]

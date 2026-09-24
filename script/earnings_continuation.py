@@ -287,6 +287,11 @@ def _start_locked(root: Path, args: argparse.Namespace) -> dict:
     ledger = ContinuationLedger(root)
     try:
         deployed = destination(root, runtime_path(root, args.deployment))
+        from earnings_quota_guard import refresh
+        quota = refresh(root, deployed["codex_bin"])
+        if quota.get("pause_required"):
+            return {"status": "success", "workflow": "earnings-continuation-start",
+                    "state": "paused_quota", "reason": "user quota reserve guard", "quota": quota}
         _bootstrap_quarterly_schema(root)
         active_worker = ledger.db.execute(
             "SELECT * FROM workers WHERE state='running' ORDER BY started_at DESC LIMIT 1").fetchone()
@@ -315,7 +320,9 @@ def _start_locked(root: Path, args: argparse.Namespace) -> dict:
                 progress = round_progress(root, state, config, cutoff=round_row["cutoff"])
             finally:
                 state.close()
-            if int(progress.get("actionable_count", 0)) == 0 and int(progress.get("waiting_count", 0)):
+            last_window = ledger.db.execute("SELECT result_path FROM windows WHERE round_id=? AND result_path IS NOT NULL ORDER BY window_index DESC LIMIT 1", (round_row["round_id"],)).fetchone()
+            collected = bool(last_window and read_json(root / last_window[0]).get("collection_complete") is True)
+            if collected and not int(progress.get("blocker_count", 0)) and int(progress.get("actionable_count", 0)) == 0 and int(progress.get("waiting_count", 0)):
                 ledger.db.execute("""UPDATE rounds SET state='waiting',research_outcome='waiting',stop_reason=?,
                   updated_at=?,completed_at=? WHERE round_id=? AND state='yielded'""",
                   ("frozen cutoff has no executable evidence; next trigger may admit new disclosures",
@@ -457,6 +464,11 @@ def worker(root: Path, args: argparse.Namespace) -> dict:
             # A short tail cannot satisfy the daily runner's research/checker start
             # thresholds. Hand it off instead of counting empty windows as stalls.
             while stop_state is None and deadline - time.monotonic() >= final_reserve + window_seconds:
+                from earnings_quota_guard import refresh
+                quota = refresh(root, deployed["codex_bin"])
+                if quota.get("pause_required"):
+                    stop_state, stop_reason = "paused_quota", "user quota reserve guard: " + quota["reason"]
+                    break
                 index = ledger.db.execute("SELECT COALESCE(MAX(window_index),0)+1 FROM windows WHERE round_id=?",
                                           (args.round_id,)).fetchone()[0]
                 window_id = f"{args.round_id}-g{args.generation}-w{index}"
@@ -517,9 +529,6 @@ def worker(root: Path, args: argparse.Namespace) -> dict:
                 if stop_state:
                     break
                 if int(after.get("actionable_count", 0)) == 0:
-                    if int(after.get("waiting_count", 0)):
-                        stop_state, stop_reason = "waiting", "frozen cutoff has no executable evidence; next trigger may admit new disclosures"
-                        break
                     if not collection_complete:
                         if no_progress >= no_progress_limit:
                             stop_state, stop_reason = "yielded", "frozen-cutoff collection remains incomplete"
@@ -529,6 +538,8 @@ def worker(root: Path, args: argparse.Namespace) -> dict:
                         stop_state, stop_reason = "blocked", "only terminal/manual blockers remain"
                     elif result.get("errors"):
                         stop_state, stop_reason = "yielded", "window errors remain despite no runnable task"
+                    elif int(after.get("waiting_count", 0)):
+                        stop_state, stop_reason = "waiting", "frozen cutoff has no executable evidence; next trigger may admit new disclosures"
                     else:
                         stop_state, stop_reason = "complete", "frozen cutoff target completed"
                     break

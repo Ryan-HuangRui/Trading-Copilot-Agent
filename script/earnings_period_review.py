@@ -10,7 +10,7 @@ from pathlib import Path
 import sqlite3
 from typing import Any, Iterable
 
-from earnings_common import ROOT, atomic_write_json, canonical_json, ensure_inside, load_config, parse_time, read_json, sha256_bytes, sha256_file, stable_id, utc_now
+from earnings_common import ROOT, atomic_write_json, canonical_json, ensure_inside, explicit_three_month_period, load_config, parse_time, read_json, sha256_bytes, sha256_file, stable_id, utc_now
 from earnings_state import EarningsState
 
 
@@ -67,7 +67,7 @@ def map_fiscal_period(start_text: str | None, end_text: str | None, *, form: str
     }
 
 
-def resolve_report_period(report: dict[str, Any], *, form: str | None = None) -> dict[str, Any]:
+def resolve_report_period(report: dict[str, Any], *, form: str | None = None, root: Path | None = None) -> dict[str, Any]:
     """Resolve a unique standalone period from verified report evidence without mutating the report."""
     scope = report.get("scope") or {}
     if scope.get("reporting_start") and scope.get("reporting_end"):
@@ -88,6 +88,37 @@ def resolve_report_period(report: dict[str, Any], *, form: str | None = None) ->
             try: map_fiscal_period(start, end, form=form or scope.get("form"))
             except ValueError: continue
             candidates.setdefault((start, end), set()).add(str(evidence.get("evidence_id")))
+    if not candidates and root is not None and scope_end:
+        # An accepted report may retain a null start even though its exact frozen
+        # source says "three months ended <date>". Re-read only those hash-bound
+        # originals, never a new web version or an unrelated issuer document.
+        proofs = []
+        db_path = root / "runtime/earnings/state.sqlite"
+        if db_path.is_file():
+            db = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True); db.row_factory = sqlite3.Row
+            try:
+                seen = set()
+                for evidence in report.get("evidence", []):
+                    key = (evidence.get("document_id"), evidence.get("document_version"), evidence.get("document_hash"))
+                    if key in seen: continue
+                    seen.add(key)
+                    row = db.execute("SELECT * FROM documents WHERE document_id=? AND version=? AND content_sha256=?", key).fetchone()
+                    if not row or row["issuer_id"] != scope.get("issuer_id") or row["event_id"] != scope.get("event_id"):
+                        continue
+                    public = row["accepted_at"] or row["published_at"]
+                    if not public or not report.get("cutoff") or parse_time(public) > parse_time(report["cutoff"]): continue
+                    path = ensure_inside((root / row["original_path"]).resolve(), [root / "raw_data/earnings"])
+                    if not path.is_file() or sha256_file(path) != row["content_sha256"]: continue
+                    period = explicit_three_month_period(path.read_bytes(), scope_end)
+                    if not period: continue
+                    start, quote = period
+                    proofs.append({"document_id": key[0], "document_version": key[1], "document_hash": key[2],
+                        "source_url": row["source_url"], "quote": quote, "reporting_start": start, "reporting_end": scope_end})
+            finally:
+                db.close()
+        if proofs and len({p["reporting_start"] for p in proofs}) == 1:
+            mapped = map_fiscal_period(proofs[0]["reporting_start"], scope_end, form=form or scope.get("form"))
+            return {**mapped, "resolution": "frozen-original-three-calendar-months-v1", "evidence_ids": [], "period_proofs": proofs}
     if len(candidates) != 1:
         raise ValueError("standalone fiscal period requires one unique evidence-supported boundary")
     (start, end), evidence_ids = next(iter(candidates.items()))
@@ -544,7 +575,7 @@ def _period_member_audit(state: EarningsState, issuer_ids: list[str], quarter_id
     reasons: dict[str, list[str]] = {issuer_id: [] for issuer_id in issuer_ids}
     for issuer_id in issuer_ids:
         events = state.db.execute("SELECT * FROM earnings_events WHERE issuer_id=? AND event_kind='earnings'", (issuer_id,)).fetchall()
-        event_ids = [row["event_id"] for row in events]
+        event_ids = [row["event_id"] for row in events if state.event_in_disclosure_window(row["event_id"], public_cutoff)]
         if not event_ids:
             reasons[issuer_id].append("no earnings event metadata")
             continue
@@ -563,7 +594,7 @@ def _period_member_audit(state: EarningsState, issuer_ids: list[str], quarter_id
             if not report_path.is_file() or sha256_file(report_path) != row["sha256"]:
                 continue
             report = read_json(report_path)
-            try: resolved_period = resolve_report_period(report)
+            try: resolved_period = resolve_report_period(report, root=root)
             except ValueError:
                 continue
             if resolved_period["research_quarter"] != quarter_id: continue
@@ -600,6 +631,7 @@ def _period_member_audit(state: EarningsState, issuer_ids: list[str], quarter_id
             AND version=(SELECT MAX(x.version) FROM documents x WHERE x.document_id=d.document_id)""", (issuer_id,)).fetchall()
         for raw in documents:
             row = dict(raw); public = row.get("accepted_at") or row.get("published_at")
+            if state.disclosure_window and row.get("event_id") not in event_ids: continue
             mapped_quarter = None
             if row.get("reporting_start") and row.get("reporting_end"):
                 try: mapped_quarter = map_fiscal_period(row["reporting_start"], row["reporting_end"], form=row.get("form"))["research_quarter"]
@@ -639,12 +671,13 @@ def _scope_input_snapshot(state: EarningsState, root: Path, scope: sqlite3.Row,
         for row in state.db.execute("""SELECT a.* FROM report_artifacts a JOIN research_tasks t ON t.task_id=a.task_id
             WHERE a.report_type='company' AND a.source_mode='live' AND t.state='completed' AND a.subject_id IN
             (SELECT event_id FROM earnings_events WHERE issuer_id=?) ORDER BY a.rowid DESC""", (issuer_id,)).fetchall():
+            if not state.event_in_disclosure_window(row["subject_id"], cutoff): continue
             path = root / row["path"]
             if not path.is_file() or sha256_file(path) != row["sha256"]: continue
             report = read_json(path)
             evidence_legal, _ = validate_report_public_evidence(state, root, report, cutoff)
             if not evidence_legal: continue
-            try: period = resolve_report_period(report)
+            try: period = resolve_report_period(report, root=root)
             except ValueError: continue
             if period["research_quarter"] == scope["quarter_id"]:
                 exclusion = state.task_blocked_by_exclusion(row["task_id"])
@@ -662,8 +695,10 @@ def _scope_input_snapshot(state: EarningsState, root: Path, scope: sqlite3.Row,
         exclusions.extend(issuer_exclusions.values())
     accepted.sort(key=lambda row: (row["issuer_id"], row["report_id"]))
     exclusions.sort(key=lambda row: (row["issuer_id"], row["failed_task_id"]))
-    return sha256_bytes(canonical_json({"membership": scope["frozen_universe_hash"],
-        "reports": versions, "exclusions": exclusions})), accepted, exclusions
+    basis = {"membership": scope["frozen_universe_hash"], "reports": versions, "exclusions": exclusions}
+    if state.disclosure_window:
+        basis["disclosure_window"] = state.disclosure_window
+    return sha256_bytes(canonical_json(basis)), accepted, exclusions
 
 
 def _quarter_payload(quarter_id: str, *, as_of: str) -> dict[str, Any]:
@@ -684,6 +719,7 @@ def _available_mapped_quarters(state: EarningsState, cutoff: str) -> set[str]:
         SELECT MAX(x.version) FROM documents x WHERE x.document_id=d.document_id)""").fetchall()
     for raw in rows:
         row = dict(raw); public = row.get("accepted_at") or row.get("published_at")
+        if not state.event_in_disclosure_window(row.get("event_id"), cutoff): continue
         if not public or parse_time(public) > cutoff_dt:
             continue
         try:
@@ -699,11 +735,12 @@ def _available_mapped_quarters(state: EarningsState, cutoff: str) -> set[str]:
       WHERE a.report_type='company' AND a.source_mode='live' AND t.state='completed' ORDER BY a.rowid DESC""").fetchall()
     for raw in reports:
         row = dict(raw); path = root / row["path"]
+        if not state.event_in_disclosure_window(row["subject_id"], cutoff): continue
         if not path.is_file() or sha256_file(path) != row["sha256"]: continue
         report = read_json(path)
         legal, _ = validate_report_public_evidence(state, root, report, cutoff)
         if not legal: continue
-        try: quarters.add(resolve_report_period(report)["research_quarter"])
+        try: quarters.add(resolve_report_period(report, root=root)["research_quarter"])
         except ValueError: continue
     return quarters
 
@@ -719,7 +756,7 @@ def inspect_due(root: Path, *, day: str, cutoff: str, config_path: str, universe
         selected = {"quarter_id": manual_quarter, "period_start": q_start.isoformat(), "period_end": q_end.isoformat(),
                     "tail_window": True, "deadline_reached": True, "as_of": day, "manual": True}
     ledger = QuarterlyReviewLedger(root / "runtime/earnings/quarterly.sqlite")
-    state = EarningsState(root / config["paths"]["state"])
+    state = EarningsState(root / config["paths"]["state"], disclosure_window=config.get("disclosure_window"))
     try:
         existing_scope_count = ledger.db.execute("SELECT COUNT(*) FROM quarterly_scopes WHERE edition!='monitor'").fetchone()[0]
         selected["initialization_backfill"] = bool(not manual_quarter and not existing_scope_count
@@ -733,12 +770,13 @@ def inspect_due(root: Path, *, day: str, cutoff: str, config_path: str, universe
             candidate_quarters[selected["quarter_id"]] = selected
         if current_id in mapped_quarters:
             candidate_quarters[current_id] = _quarter_payload(current_id, as_of=day)
+        if state.disclosure_window:
+            candidate_quarters = {q: _quarter_payload(q, as_of=day) for q in mapped_quarters}
         for quarter_id, quarter in sorted(candidate_quarters.items()):
-            exists = ledger.db.execute("SELECT 1 FROM quarterly_scopes WHERE quarter_id=? LIMIT 1",
-                                       (quarter_id,)).fetchone()
-            if not exists:
-                for industry in universe["industries"]:
-                    ledger.freeze(quarter, industry, cutoff, edition="stage")
+            # Freeze is idempotent per industry; a pre-existing quarter must not
+            # prevent newly added industries from obtaining their own scope.
+            for industry in universe["industries"]:
+                ledger.freeze(quarter, industry, cutoff, edition="stage")
         # Terminal publication repair closes the old research DAG without erasing
         # its failure. This prevents later accepted evidence from being trapped as
         # a permanent pending revision.
@@ -755,6 +793,8 @@ def inspect_due(root: Path, *, day: str, cutoff: str, config_path: str, universe
                         ledger.set_stage(matched["scope_id"], stage, "blocked", error=failed["error"])
         for registered in ledger.db.execute("SELECT * FROM quarterly_scopes ORDER BY period_end,industry_id").fetchall():
             fingerprint, accepted, exclusions = _scope_input_snapshot(state, root, registered, cutoff)
+            if state.disclosure_window and not accepted:
+                continue  # Preserve historical scopes; never reopen them with empty inputs.
             ledger.begin_revision(registered["scope_id"], fingerprint, cutoff,
                                   round_id=round_id, accepted_reports=accepted, excluded_inputs=exclusions)
         # Incomplete scopes remain due after their nominal window and across quarter rollovers.
@@ -766,6 +806,8 @@ def inspect_due(root: Path, *, day: str, cutoff: str, config_path: str, universe
         gap_artifacts = []
         for raw_scope in due:
             scope = dict(raw_scope)
+            if state.disclosure_window and not _scope_input_snapshot(state, root, raw_scope, cutoff)[1]:
+                continue
             frozen_industry = json.loads(scope["frozen_universe_json"])
             symbol_to_id = {row["symbol"]: row["issuer_id"] for row in state.db.execute("SELECT symbol,issuer_id FROM issuers")}
             expected = [symbol_to_id.get(row["symbol"], f"unresolved:{row['symbol']}") for row in frozen_industry["issuers"]]
@@ -794,7 +836,7 @@ def inspect_due(root: Path, *, day: str, cutoff: str, config_path: str, universe
                     evidence_legal, _ = validate_report_public_evidence(
                         state, root, report, scope.get("public_cutoff") or scope["cutoff"])
                     if not evidence_legal: continue
-                    try: mapped = resolve_report_period(report)
+                    try: mapped = resolve_report_period(report, root=root)
                     except ValueError: continue
                     if mapped["research_quarter"] != scope["quarter_id"]: continue
                     report_summaries.append({"issuer_id": issuer_id, "report_id": row["report_id"], "path": row["path"],

@@ -45,7 +45,7 @@ def prepare_notification(root: Path, deployment: dict[str, Any], *, day: str, bo
                          report_versions: list[dict[str, str]], kind: str, rationale: str,
                          should_send: bool) -> Path:
     root = root.resolve()
-    if kind not in {"daily", "failure", "acceptance"}:
+    if kind not in {"daily", "failure", "acceptance", "heartbeat"}:
         raise ValueError("invalid notification kind")
     if not body.strip() or len(body) > 15000:
         raise ValueError("notification must be self-contained and bounded")

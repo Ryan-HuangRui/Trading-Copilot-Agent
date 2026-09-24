@@ -219,7 +219,7 @@ class EarningsContinuationTests(unittest.TestCase):
             self.assertEqual((waiting["actionable_count"], waiting["waiting_count"],
                               waiting["pending"]["quarterly_waiting"]), (0, 1, 1))
             daily = {"status": "success", "errors": [], "progress": waiting,
-                     "collection_complete": False, "usage_summary": {"actual_model_calls": 0, "calls": []}}
+                     "collection_complete": True, "usage_summary": {"actual_model_calls": 0, "calls": []}}
             final = {"status": "success", "errors": [], "progress": waiting,
                      "delivery": {"delivery": {"state": "suppressed"}},
                      "usage_summary": {"actual_model_calls": 0, "calls": []}}
@@ -239,6 +239,12 @@ class EarningsContinuationTests(unittest.TestCase):
             ledger.db.execute("UPDATE rounds SET state='yielded',stop_reason='no durable progress across bounded windows' WHERE round_id=?",
                               (round_row['round_id'],))
             ledger.db.execute("UPDATE workers SET state='completed'"); ledger.db.commit(); ledger.close()
+            checkpoint = root / "runtime/earnings/complete-collection.json"
+            checkpoint.write_text(json.dumps({"collection_complete": True}))
+            ledger = ContinuationLedger(root)
+            ledger.db.execute("INSERT INTO windows(window_id,round_id,generation,window_index,state,started_at,result_path) VALUES(?,?,?,?,?,?,?)",
+                ("collected", round_row['round_id'], 1, 1, "completed", round_row['cutoff'], str(checkpoint.relative_to(root))))
+            ledger.db.commit(); ledger.close()
             waiting = {'fingerprint': 'below-trigger', 'actionable_count': 0, 'waiting_count': 1,
                        'blocker_count': 0, 'pending': {'quarterly_scopes': 0, 'quarterly_waiting': 1},
                        'blockers': {}}
@@ -305,12 +311,12 @@ class EarningsContinuationTests(unittest.TestCase):
                 if kwargs.get("finalize_only"):
                     return final
                 raise RuntimeError("outer daily disappeared")
-            with patch("earnings_continuation.round_progress", side_effect=[before, after]), \
+            with patch("earnings_continuation.round_progress", side_effect=[before, after, after, after, after, after]), \
                  patch("earnings_continuation._run_daily", side_effect=daily):
                 result = worker(root, args)
             checkpoint = next((root / "runtime/earnings/continuation" / round_row["round_id"]).glob("*-w1.json"))
             payload = json.loads(checkpoint.read_text())
-            self.assertEqual(result["state"], "waiting")
+            self.assertEqual(result["state"], "yielded")
             self.assertEqual(payload["progress"]["fingerprint"], "after")
             self.assertEqual(payload["usage_summary"]["actual_model_calls"], 0)
             self.assertFalse(payload["usage_summary"]["model_call_count_known"])

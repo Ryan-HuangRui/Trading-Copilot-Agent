@@ -199,7 +199,7 @@ def _manifest_for_task(root: Path, state: EarningsState, task: dict[str, Any], c
         "source_mode": task["source_mode"],
         "cutoff": cutoff.isoformat(),
         "created_at": utc_now(),
-        "scope": {"issuer_id": event["issuer_id"], "symbol": issuer["symbol"], "event_id": event["event_id"],
+        "scope": {"disclosure_window": config.get("disclosure_window"), "issuer_id": event["issuer_id"], "symbol": issuer["symbol"], "event_id": event["event_id"],
                   "reporting_start": event["reporting_start"], "reporting_end": event["reporting_end"],
                   "universe_version": sha256_file(universe_path)},
         "profile": {"name": task["profile"], "model": task["model"], "effort": task["effort"], "usage": None},
@@ -260,7 +260,7 @@ def main() -> None:
     owner = args.owner or f"manual:{os.getpid()}:{run_id}"
     limit = args.limit or int(config["budgets"].get("companies_per_batch", 5))
     lease = args.lease_seconds or int(config["budgets"].get("task_timeout_seconds", 1800))
-    state = EarningsState(confined_path(root, args.state, "runtime/earnings"))
+    state = EarningsState(confined_path(root, args.state, "runtime/earnings"), disclosure_window=config.get("disclosure_window"))
     manifests: list[str] = []
     failures: list[dict[str, Any]] = []
     try:

@@ -359,6 +359,11 @@ def _claims(markdown: str) -> list[dict[str, Any]]:
             if re.fullmatch(_NUMBER_PATTERN, cell):
                 heading = header[column] if column < len(header) else ""
                 found = _table_heading_unit(heading)
+                row_unit = _table_heading_unit(cells[0]) if column > 0 else None
+                if row_unit:
+                    # Explicit row units disambiguate a mixed-unit value column.
+                    # Contradictory explicit column/row units remain invalid.
+                    found = row_unit if found is None or _quantity_unit(found) == _quantity_unit(row_unit) else None
                 value = cell.replace(",", "")
                 cell_start = line.find(cell)
                 period = _explicit_period(line, cell_start, cell_start + len(cell))

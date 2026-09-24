@@ -40,7 +40,7 @@ def build_context(root: Path, *, source_paths: list[Path], period_start: str, pe
     if not frozen_scopes: raise ValueError("market context requires frozen quarterly scope registry")
     if any(sha256_bytes(canonical_json(row["industry"])) != row.get("frozen_universe_hash") for row in frozen_scopes):
         raise ValueError("frozen quarterly scope hash mismatch")
-    state = EarningsState(root / config["paths"]["state"])
+    state = EarningsState(root / config["paths"]["state"], disclosure_window=config.get("disclosure_window"))
     try:
         if any(row["period_start"] != period_start or row["period_end"] != period_end for row in frozen_scopes):
             raise ValueError("frozen market scopes do not match requested period")
@@ -49,6 +49,8 @@ def build_context(root: Path, *, source_paths: list[Path], period_start: str, pe
         seen_industries = set()
         for source in source_paths:
             path = ensure_inside(source.resolve(), [root / "report/earnings"]); digest = sha256_file(path); report = read_json(path)
+            if not state.report_in_disclosure_window(root, str(path.relative_to(root)), cutoff):
+                raise ValueError("industry synthesis outside configured disclosure window")
             scope = report.get("scope") or {}; industry_id = scope.get("industry_id")
             if report.get("report_type") != "synthesis" or report.get("research_mode") != "quarterly":
                 raise ValueError("market input must be a quarterly industry synthesis")
@@ -167,7 +169,7 @@ def build_context(root: Path, *, source_paths: list[Path], period_start: str, pe
             "assigned_role": "synthesis", "research_mode": "quarterly", "source_mode": "live", "cutoff": cutoff,
             "created_at": utc_now(), "method_version": "cross-industry-v1", "configuration_hash": config_hash, "input_hash": input_hash,
             "profile": {"name": "quarterly", "model": profile["model"], "effort": profile["reasoning_effort"], "usage": None},
-            "scope": {"industry_id": "cross-industry", "market_label": "美股重点行业季度研究", "reporting_start": period_start,
+            "scope": {"disclosure_window": config.get("disclosure_window"), "industry_id": "cross-industry", "market_label": "美股重点行业季度研究", "reporting_start": period_start,
                       "reporting_end": period_end, "universe_version": sha256_file(root / universe_path), "expected_issuer_ids": expected_issuer_ids,
                       "expected_industry_ids": expected_industries, "industry_cutoffs": dict(input_basis["industry_cutoffs"]),
                       "edition": edition, "industry_finalization": input_basis["industry_finalization"]},

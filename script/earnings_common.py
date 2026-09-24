@@ -72,6 +72,27 @@ def canonical_json(payload: Any) -> bytes:
     return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
+def explicit_three_month_period(content: bytes, reporting_end: str) -> tuple[str, str] | None:
+    """Resolve a calendar-month duration only from an explicit dated source phrase."""
+    import calendar
+    import html
+    end = date.fromisoformat(reporting_end)
+    if end.day != calendar.monthrange(end.year, end.month)[1]:
+        return None
+    text = content.decode("utf-8", errors="replace")
+    text = re.sub(r"<(script|style)\b[^>]*>.*?</\1>", " ", text, flags=re.I | re.S)
+    text = " ".join(html.unescape(re.sub(r"<[^>]+>", " ", text)).split())
+    # A week-based accounting calendar cannot be converted to calendar months.
+    if re.search(r"\b(?:13|14|thirteen|fourteen)[ -]weeks?\b|\b(?:52|53)[ -]weeks?\b", text, re.I):
+        return None
+    pattern = rf"\bthree months ended\s+{end.strftime('%B')}\s+{end.day},?\s+{end.year}\b"
+    match = re.search(pattern, text, re.I)
+    if not match:
+        return None
+    year, month = divmod(end.year * 12 + end.month - 3, 12)
+    return date(year, month + 1, 1).isoformat(), match.group(0)
+
+
 def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -189,6 +210,13 @@ def load_config(root: Path, config_path: str = "config/earnings_research.json") 
     data = read_json(path)
     if not isinstance(data, dict) or data.get("schema_version") != 1:
         raise ValueError(f"unsupported earnings config: {path}")
+    window = data.get("disclosure_window")
+    if window is not None:
+        if not isinstance(window, dict) or set(window) != {"start", "end_exclusive"}:
+            raise ValueError("disclosure_window requires start and end_exclusive")
+        start, end = date.fromisoformat(window["start"]), date.fromisoformat(window["end_exclusive"])
+        if start >= end:
+            raise ValueError("disclosure_window start must precede end_exclusive")
     return data, sha256_file(path)
 
 

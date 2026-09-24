@@ -10,7 +10,7 @@ from pathlib import Path
 import re
 from typing import Any
 
-from earnings_common import (ROOT, atomic_write_json, canonical_json, company_research_configuration_basis, company_research_configuration_hash, confined_path, configuration_path, emit, envelope, ensure_inside, legacy_company_configuration_status, load_config, parse_time,
+from earnings_common import (ROOT, atomic_write_json, canonical_json, company_research_configuration_basis, company_research_configuration_hash, confined_path, configuration_path, emit, envelope, ensure_inside, explicit_three_month_period, legacy_company_configuration_status, load_config, parse_time,
                              read_json, relative_to_root, resolve_path, safe_segment, sha256_bytes, shanghai_date, stable_id, utc_now)
 from earnings_sources import IssuerIRClient, SecClient, SharedRateLimiter, SourceError, sec_recent_filings
 from earnings_state import EarningsState
@@ -107,6 +107,37 @@ def _event_identity(issuer_id: str, filing: dict[str, Any]) -> tuple[str, str, s
             return stable_id("event", issuer_id, "earnings", period_end), "earnings", period_end
     # An 8-K/6-K reportDate is the event date, not a verified fiscal period.
     return stable_id("event", issuer_id, "unresolved-filing", accession), "unresolved_earnings", None
+
+
+def _release_period(content: bytes, filing: dict[str, Any], primary_content: bytes) -> tuple[str | None, str | None]:
+    """Resolve only explicit completed-quarter dates from a results exhibit.
+
+    Never use an 8-K event date as a fiscal date. Ambiguous/table-only releases
+    stay unresolved and can use a separately verified issuer-IR manifest.
+    """
+    import html
+    def plain(value: bytes) -> str:
+        text = value.decode("utf-8", errors="replace")
+        text = re.sub(r"<(script|style)\b[^>]*>.*?</\1>", " ", text, flags=re.I | re.S)
+        return " ".join(html.unescape(re.sub(r"<[^>]+>", " ", text)).split())
+    if filing.get("form") != "8-K" or not re.search(r"Item\s+2\.02\b", plain(primary_content), re.I):
+        return None, None
+    text = plain(content)
+    if not re.search(r"(?:reports?|announces?)\b.{0,100}\b(?:quarter|quarterly)\b.{0,100}\b(?:results|earnings)\b", text[:5000], re.I):
+        return None, None
+    dates = []
+    for match in re.finditer(r"(?:three months|quarter)\s+ended\s+([A-Za-z]+\s+\d{1,2},?\s+20\d{2})", text, re.I):
+        try:
+            end = datetime.strptime(match.group(1).replace(',', ''), "%B %d %Y").date()
+        except ValueError:
+            continue
+        public = _filing_date(filing)
+        if public and 0 <= (public - end).days <= 120:
+            dates.append((end, match.group(0)))
+    if not dates:
+        return None, None
+    end, evidence = max(dates)
+    return end.isoformat(), evidence
 
 
 def _qualifying_exhibits(index_payload: dict[str, Any], primary_document: str) -> list[dict[str, Any]]:
@@ -293,7 +324,30 @@ def collect_live(root: Path, state: EarningsState, config: dict[str, Any], confi
             discovery_failures = False
             selected_periods: list[str] = []
             window_start, reconcile_due, previous_watermark = _incremental_window(state, config, symbol, cutoff)
-            if collection_kind == "initialization":
+            disclosure_window = config.get("disclosure_window")
+            if disclosure_window:
+                # Inspect the complete release window, including earnings 8-Ks
+                # that predate an incremental checkpoint. Do not demand eight
+                # historic periods from a new/reorganized SEC registrant.
+                release_start = parse_time(disclosure_window["start"])
+                window_start = release_start
+                release_end = min(cutoff, parse_time(disclosure_window["end_exclusive"]))
+                oldest_recent = min((_filing_date(row) for row in filings if _filing_date(row)), default=cutoff.date())
+                for bounds, file_meta in [(bounds, row) for row in history_files if (bounds := _history_range(row))
+                        and bounds[1] >= release_start.date() and bounds[0] <= release_end.date()
+                        and bounds[0] < oldest_recent]:
+                    try:
+                        historical, _ = client.submissions_file(str(file_meta["name"]))
+                        filings.extend(sec_recent_filings(historical, FORMS))
+                        state.resolve_failures("sec", symbol, str(file_meta["name"]))
+                    except (KeyError, SourceError, json.JSONDecodeError) as exc:
+                        discovery_failures = True
+                        failures.append({"source": "sec", "scope": symbol, "item": str(file_meta.get("name")),
+                                         "error": str(exc), "retryable": getattr(exc, "retryable", False)})
+                filings = [row for row in filings if _filing_date(row)
+                    and release_start.date() <= _filing_date(row) < parse_time(disclosure_window["end_exclusive"]).date()
+                    and _eligible_before_cutoff(row, cutoff)]
+            elif collection_kind == "initialization":
                 target = int(config["budgets"].get("initialization_lookback_quarters", 8))
                 selected_periods = _select_initial_periods(
                     _period_forms([row for row in filings if _eligible_before_cutoff(row, cutoff)]), target)
@@ -346,6 +400,10 @@ def collect_live(root: Path, state: EarningsState, config: dict[str, Any], confi
             eligible_pending: list[dict[str, Any]] = []
             for pending_item in pending:
                 filing = pending_item["payload"]
+                if disclosure_window and (not _filing_date(filing) or not
+                        parse_time(disclosure_window["start"]).date() <= _filing_date(filing)
+                        < parse_time(disclosure_window["end_exclusive"]).date()):
+                    continue
                 accepted = _sec_acceptance(filing.get("acceptanceDateTime"))
                 filing_date = parse_time(filing.get("filingDate")) if filing.get("filingDate") else None
                 # Date-only values on the cutoff day cannot establish intraday availability.
@@ -364,26 +422,47 @@ def collect_live(root: Path, state: EarningsState, config: dict[str, Any], confi
                 accepted = _sec_acceptance(filing.get("acceptanceDateTime"))
                 try:
                     event_id, event_kind, period_end = _event_identity(issuer["issuer_id"], filing)
+                    period_start = None
                     document_specs = [{"name": str(filing["primaryDocument"]), "selection_method": "primary_document", "limitations": []}]
                     if filing.get("form") in RELEASE_FORMS:
                         index_payload, _ = client.filing_index(cik=cik, accession=accession)
                         document_specs.extend(_qualifying_exhibits(index_payload, str(filing["primaryDocument"])))
                     item_digest_parts: list[str] = []
-                    for position, document_spec in enumerate(document_specs):
+                    fetched_specs = []
+                    for document_spec in document_specs:
+                        content, fetch_meta, url = client.filing(cik=cik, accession=accession, primary_document=document_spec["name"])
+                        fetched_specs.append((document_spec, content, fetch_meta, url))
+                    period_proofs = []
+                    if event_kind == "unresolved_earnings":
+                        for spec, content, meta, url in fetched_specs[1:]:
+                            resolved_end, quote = _release_period(content, filing, fetched_specs[0][1])
+                            if resolved_end:
+                                period_proofs.append({"reporting_end": resolved_end, "source_url": url, "quote": quote})
+                                duration = explicit_three_month_period(content, resolved_end)
+                                if duration:
+                                    period_proofs[-1].update(reporting_start=duration[0], duration_quote=duration[1])
+                        if len({p["reporting_end"] for p in period_proofs}) == 1:
+                            period_end = period_proofs[0]["reporting_end"]
+                            event_kind = "earnings"
+                            event_id = stable_id("event", issuer["issuer_id"], "earnings", period_end)
+                            starts = {p["reporting_start"] for p in period_proofs if p.get("reporting_start")}
+                            if len(starts) == 1:
+                                period_start = starts.pop()
+                    for position, (document_spec, content, fetch_meta, url) in enumerate(fetched_specs):
                         document_name = document_spec["name"]
-                        content, fetch_meta, url = client.filing(cik=cik, accession=accession, primary_document=document_name)
                         path, digest = _store_original(root, issuer["issuer_id"], f"{accession}-{document_name}", content, Path(document_name).suffix or ".html")
                         record = _document_record(
                             issuer_id=issuer["issuer_id"], event_id=event_id, document_id=f"sec:{accession}:{document_name}",
                             source_type="sec_filing" if position == 0 else "sec_earnings_exhibit", source_url=url,
-                            provider="sec", backend="sec-edgar-http", form=filing["form"], period_start=None, period_end=period_end,
+                            provider="sec", backend="sec-edgar-http", form=filing["form"], period_start=period_start, period_end=period_end,
                             published_at=filing.get("filingDate") or None, accepted_at=accepted.isoformat() if accepted else None,
                             fetched_at=fetch_meta["fetched_at"], original_path=relative_to_root(root, path), digest=digest, source_mode="live",
                             metadata={"accession": accession, "primary_document": filing["primaryDocument"],
                                       "document_name": document_name, "is_exhibit": position > 0,
                                       "selection_method": document_spec["selection_method"],
                                       "selection_limitations": document_spec["limitations"],
-                                      "fiscal_period_verified": period_end is not None and filing.get("form") in PERIODIC_FORMS},
+                                      "fiscal_period_verified": period_end is not None and (filing.get("form") in PERIODIC_FORMS or bool(period_proofs)),
+                                      "period_resolution_evidence": period_proofs},
                         )
                         version, changed = state.register_document(record)
                         registered += int(changed); duplicate += int(not changed); revised += int(changed and version > 1)
@@ -391,7 +470,7 @@ def collect_live(root: Path, state: EarningsState, config: dict[str, Any], confi
                     state.finish_source_item("sec_filing", symbol, accession, digest=sha256_bytes("".join(item_digest_parts).encode()))
                     state.resolve_failures("sec", symbol, accession)
                     issuer_events[event_id] = {"event_id": event_id, "issuer_id": issuer["issuer_id"], "event_kind": event_kind,
-                                               "reporting_start": None, "reporting_end": period_end}
+                                               "reporting_start": period_start, "reporting_end": period_end}
                 except (SourceError, json.JSONDecodeError) as exc:
                     retryable = getattr(exc, "retryable", True)
                     failures.append({"source": "sec", "scope": symbol, "item": accession, "error": str(exc), "retryable": retryable})
@@ -441,7 +520,21 @@ def collect_live(root: Path, state: EarningsState, config: dict[str, Any], confi
                                 f"registered={registered};explicit_failures={sum(f['scope'] == symbol for f in failures)}")
             if not discovery_failures and (reconcile_due or state.reconciliation_time("sec", symbol) is None):
                 state.mark_reconciled("sec", symbol, cutoff.isoformat())
-            if collection_kind == "initialization":
+            if disclosure_window:
+                window_items = [dict(row) for row in state.db.execute(
+                    "SELECT item_key,status FROM source_items WHERE source='sec_filing' AND scope=?", (symbol,))
+                    if row["item_key"] in unique_filings]
+                missing_items = [row for row in window_items if row["status"] != "fetched"]
+                initialization_coverage[symbol] = {"policy": "calendar-disclosure-window-v1",
+                    "window": disclosure_window, "checked_through": cutoff.isoformat(),
+                    "discovered_filings": len(unique_filings), "fetched_filings": len(window_items)-len(missing_items),
+                    "pending_filings": missing_items, "historical_depth_required": False,
+                    "complete": not discovery_failures and not missing_items
+                        and not any(f["scope"] == symbol for f in failures)}
+                state.set_watermark("sec_disclosure_window", symbol, cutoff.isoformat(),
+                    "success" if initialization_coverage[symbol]["complete"] else "partial",
+                    json.dumps(initialization_coverage[symbol], sort_keys=True))
+            elif collection_kind == "initialization":
                 period_forms = _period_forms([row for row in unique_filings.values() if _eligible_before_cutoff(row, cutoff)])
                 target = int(config["budgets"].get("initialization_lookback_quarters", 8))
                 periods = _select_initial_periods(period_forms, target)

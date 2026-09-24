@@ -56,6 +56,7 @@ def _company_inputs(state: EarningsState, root: Path, issuer_ids: list[str], per
         if rows:
             eligible = []
             for candidate in rows:
+                if not state.event_in_disclosure_window(candidate["subject_id"], cutoff): continue
                 if state.task_blocked_by_exclusion(candidate["task_id"]):
                     continue
                 if accepted_reports is not None and not any(
@@ -69,7 +70,7 @@ def _company_inputs(state: EarningsState, root: Path, issuer_ids: list[str], per
                 if not evidence_legal: continue
                 if research_quarter:
                     from earnings_period_review import resolve_report_period
-                    try: mapped = resolve_report_period(candidate_report)
+                    try: mapped = resolve_report_period(candidate_report, root=root)
                     except ValueError: continue
                     if mapped["research_quarter"] != research_quarter: continue
                 eligible.append((candidate, candidate_path, candidate_report))
@@ -122,6 +123,7 @@ def _source_documents(state: EarningsState, root: Path, issuer_ids: list[str], c
         latest: dict[str, dict[str, Any]] = {}
         for raw in rows:
             row = dict(raw)
+            if not state.event_in_disclosure_window(row["event_id"], cutoff): continue
             if research_quarter:
                 from earnings_period_review import map_fiscal_period
                 mapped_quarter = None
@@ -195,7 +197,7 @@ def main() -> None:
         raise ValueError("cutoff required")
     if date.fromisoformat(args.period_start) > date.fromisoformat(args.period_end):
         raise ValueError("period-start after period-end")
-    state = EarningsState(confined_path(root, args.state, "runtime/earnings"))
+    state = EarningsState(confined_path(root, args.state, "runtime/earnings"), disclosure_window=config.get("disclosure_window"))
     try:
         expected_symbols = [row["symbol"] for row in industry["issuers"]]
         issuer_by_symbol = {row["symbol"]: row["issuer_id"] for row in state.db.execute("SELECT symbol,issuer_id FROM issuers")}
@@ -218,6 +220,8 @@ def main() -> None:
         predecessor_rows: list[dict[str, Any]] = []
         for path in args.predecessor_report:
             report, row = _registered_report(state, root, path)
+            if not state.report_in_disclosure_window(root, row["path"], cutoff.isoformat()):
+                raise ValueError("predecessor outside configured disclosure window")
             scope = report.get("scope") or {}
             if scope.get("industry_id") != args.industry or scope.get("reporting_start") != args.period_start or scope.get("reporting_end") != args.period_end:
                 raise ValueError("predecessor scope does not match requested industry period")
@@ -342,7 +346,7 @@ def main() -> None:
             "assigned_role": args.role, "research_mode": args.mode, "source_mode": source_mode, "cutoff": cutoff.isoformat(),
             "created_at": utc_now(), "method_version": task["method_version"], "configuration_hash": config_hash,
             "input_hash": input_hash, "profile": {"name": profile_name, "model": model, "effort": effort, "usage": None},
-            "scope": {"industry_id": args.industry, "reporting_start": args.period_start, "reporting_end": args.period_end,
+            "scope": {"disclosure_window": config.get("disclosure_window"), "industry_id": args.industry, "reporting_start": args.period_start, "reporting_end": args.period_end,
                       "universe_version": frozen_scope["frozen_universe_hash"] if frozen_scope else sha256_file(universe_path), "expected_issuer_ids": expected_ids},
             "coverage_audit": {"expected_symbols": expected_symbols, "resolved_issuer_ids": issuer_ids, "researched_issuer_ids": researched_ids,
                                "missing_issuer_ids": missing_ids, "unresolved_symbols": unresolved_symbols,
