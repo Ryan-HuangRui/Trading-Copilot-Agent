@@ -111,10 +111,11 @@ class EarningsStateTests(unittest.TestCase):
         same, _ = self.state.enqueue_task(input_hash="same", **common)
         self.state.freeze_task_input(same, {"mode": "quarterly", "industry_id": "homebuilding",
             "universe_hash": "same-universe"}, "same")
+        self.state.db.execute("UPDATE research_tasks SET state='terminal_failed',attempts=max_attempts WHERE task_id=?", (same,))
         self.assertFalse(self.state.task_claimability(old)["eligible"])
+        self.assertEqual(self.state.task_version_blocker(old)["task_id"], same)
         unknown, _ = self.state.enqueue_task(input_hash="unknown", **common)
-        self.assertFalse(self.state.task_claimability(same)["eligible"])
-        self.assertEqual(self.state.task_claimability(same)["reason"], "newer_semantic_version")
+        self.assertEqual(self.state.task_version_blocker(same)["task_id"], unknown)
 
     def test_failed_dependency_reuse_requires_exact_frozen_semantics_and_is_audited(self):
         old, _ = self.state.enqueue_task(task_type="company", subject_id="amat", period_start="2026-04-01",

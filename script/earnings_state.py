@@ -587,7 +587,8 @@ class EarningsState:
         return old_lineage is None or new_lineage is None or old_lineage == new_lineage
 
     @classmethod
-    def _newer_blocker(cls, db: sqlite3.Connection, task: sqlite3.Row) -> sqlite3.Row | None:
+    def _newer_blocker(cls, db: sqlite3.Connection, task: sqlite3.Row,
+                       exclude_task_ids: Sequence[str] = ()) -> sqlite3.Row | None:
         newer = db.execute("""SELECT rowid AS db_rowid,* FROM research_tasks n WHERE n.rowid>?
           AND n.task_type=? AND n.subject_id=? AND n.period_start IS ? AND n.period_end IS ?
           AND n.source_mode=? AND NOT (n.state='superseded' AND EXISTS(
@@ -595,7 +596,20 @@ class EarningsState:
             WHERE a.failed_task_id=n.task_id AND a.reused_task_id=?)) ORDER BY n.rowid""",
           (task["db_rowid"], task["task_type"], task["subject_id"], task["period_start"],
            task["period_end"], task["source_mode"], task["task_id"])).fetchall()
+        excluded = set(exclude_task_ids)
+        newer = [row for row in newer if row["task_id"] not in excluded]
         return next((row for row in newer if cls._semantic_successor_blocks(db, task, row)), None)
+
+    def task_version_blocker(self, task_id: str, *, db: sqlite3.Connection | None = None,
+                             exclude_task_ids: Sequence[str] = ()) -> dict[str, Any] | None:
+        """Return the evidence-proven newer semantic version that makes a task stale."""
+        connection = db or self.db
+        task = connection.execute("SELECT rowid AS db_rowid,* FROM research_tasks WHERE task_id=?",
+                                  (task_id,)).fetchone()
+        if not task:
+            raise ValueError(f"unknown task_id: {task_id}")
+        blocker = self._newer_blocker(connection, task, exclude_task_ids)
+        return dict(blocker) if blocker is not None else None
 
     @classmethod
     def _claimability(cls, db: sqlite3.Connection, task: sqlite3.Row, now_text: str) -> dict[str, Any]:

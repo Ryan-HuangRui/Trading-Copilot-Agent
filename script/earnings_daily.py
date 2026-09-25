@@ -694,7 +694,8 @@ def _registered_quarterly_scope_readiness(state: EarningsState, scope: dict, con
             "deadline_stage_allowed": deadline_allowed}
 
 
-def _quarterly_scope_task_blocker(state: EarningsState, scope: dict, stages: list[sqlite3.Row]) -> dict | None:
+def _quarterly_scope_task_blocker(state: EarningsState, scope: dict, stages: list[sqlite3.Row],
+                                  config: dict | None = None) -> dict | None:
     """Explain a pre-model blocker for the exact frozen quarterly stage, if one exists."""
     stage_states = {row["stage"]: row["state"] for row in stages}
     role = next((name for name in ("industry", "challenge", "synthesis")
@@ -704,8 +705,31 @@ def _quarterly_scope_task_blocker(state: EarningsState, scope: dict, stages: lis
     candidates = state.db.execute("""SELECT rowid AS db_rowid,* FROM research_tasks
       WHERE task_type=? AND subject_id=? AND period_start IS ? AND period_end IS ? AND source_mode='live'
       ORDER BY rowid DESC""", (role, scope["industry_id"], scope["period_start"], scope["period_end"])).fetchall()
-    matching = [row for row in candidates if state._semantic_lineage(state.db, row) == (
-        "quarterly", scope["industry_id"], scope["frozen_universe_hash"])]
+    stage_by_name = {row["stage"]: row for row in stages}
+    predecessor_roles = () if role == "industry" else (("industry",) if role == "challenge" else ("industry", "challenge"))
+    def stage_artifact_sha(name: str) -> str | None:
+        row = stage_by_name.get(name)
+        if row is None:
+            return None
+        keys = row.keys() if hasattr(row, "keys") else row
+        return row["artifact_sha256"] if "artifact_sha256" in keys else None
+    predecessor_sha256s = sorted(value for name in predecessor_roles if (value := stage_artifact_sha(name)))
+    expected_binding = {"scope_id": scope["scope_id"], "revision": scope.get("revision"),
+        "input_fingerprint": scope.get("input_fingerprint"), "predecessor_sha256s": predecessor_sha256s}
+    if config is not None:
+        expected_binding["configuration_basis_hash"] = hashlib.sha256(
+            json.dumps(config, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    matching = []
+    for row in candidates:
+        if state._semantic_lineage(state.db, row) != ("quarterly", scope["industry_id"], scope["frozen_universe_hash"]):
+            continue
+        try:
+            frozen = state.task_input(row["task_id"])
+        except ValueError:
+            continue
+        binding = frozen.get("quarterly_scope")
+        if isinstance(binding, dict) and all(binding.get(key) == value for key, value in expected_binding.items()):
+            matching.append(row)
     if not matching:
         return None  # The normal execution step may create the exact frozen task.
     task = matching[0]
@@ -1285,7 +1309,7 @@ def round_progress(root: Path, state: EarningsState, config: dict, cutoff: str |
         try:
             for raw_scope in qdb.execute("SELECT * FROM quarterly_scopes WHERE edition!='monitor'"):
                 scope = dict(raw_scope)
-                stages = qdb.execute("""SELECT stage,state,attempts FROM quarterly_stages WHERE scope_id=?
+                stages = qdb.execute("""SELECT stage,state,attempts,artifact_sha256 FROM quarterly_stages WHERE scope_id=?
                     AND stage IN ('coverage','gap_review','industry','challenge','synthesis')""", (scope["scope_id"],)).fetchall()
                 incomplete = [row for row in stages if row[1] != "completed"]
                 if not incomplete:
@@ -1300,7 +1324,7 @@ def round_progress(root: Path, state: EarningsState, config: dict, cutoff: str |
                     readiness = _registered_quarterly_scope_readiness(
                         state, scope, config, day=datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat())
                     if _quarterly_scope_model_eligible(readiness):
-                        if _quarterly_scope_task_blocker(state, scope, stages):
+                        if _quarterly_scope_task_blocker(state, scope, stages, config):
                             quarterly_blocked += 1
                         else:
                             quarterly_pending += 1

@@ -43,7 +43,7 @@ class HeartbeatTests(unittest.TestCase):
         with TemporaryDirectory() as temp:
             root=Path(temp);runtime=root/'runtime/earnings';runtime.mkdir(parents=True)
             binary=runtime/'sender';binary.write_text('#!/bin/sh\nexit 0\n');binary.chmod(0o700)
-            deployment=runtime/'deployment.json';deployment.write_text(json.dumps({'schema_version':1,'verified_repo':str(root),
+            deployment=runtime/'deployment.json';deployment.write_text(json.dumps({'schema_version':1,'verified_repo':str(root.resolve()),
                 'project':'test','session':'session','cc_connect_bin':str(binary),'verified_at':'now','verified_from_cron_id':'test','delivery_enabled':True}))
             args=['heartbeat','--repo-root',str(root),'--config','config.json','--deployment',str(deployment),'--industry','homebuilding','--execute']
             with patch('sys.argv',args),patch('earnings_heartbeat.load_config',return_value=({},'hash')), \

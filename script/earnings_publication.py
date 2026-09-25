@@ -44,9 +44,9 @@ _UNIT = {
     "CNY billion": ("CNY", Decimal("1000000000")), "CNY billions": ("CNY", Decimal("1000000000")),
     "百万元": ("CNY", Decimal("1000000")), "亿元": ("CNY", Decimal("100000000")),
     "homes": ("count_home", Decimal("1")), "home": ("count_home", Decimal("1")),
-    "homes_per_community": ("count_home", Decimal("1")), "套": ("count_home", Decimal("1")),
+    "homes_per_community": ("count_home_per_community", Decimal("1")), "套": ("count_home", Decimal("1")),
     "times": ("count_turn", Decimal("1")), "time": ("count_turn", Decimal("1")),
-    "次": ("count_turn", Decimal("1")), "USD_per_home": ("USD", Decimal("1")),
+    "次": ("count_turn", Decimal("1")), "USD_per_home": ("USD_per_home", Decimal("1")),
     "year": ("duration_year", Decimal("1")), "years": ("duration_year", Decimal("1")),
     "年": ("duration_year", Decimal("1")),
 }
@@ -106,9 +106,12 @@ def _display_candidates(value: str, unit: str, *, rounded: bool = False) -> list
     if not source:
         return [] if unit.strip().lower() in {"million", "billion"} else [{"value": value, "unit": unit}]
     targets = {"USD": ("USD", "美元", "USD million", "USD billion", "亿美元"),
+               "USD_per_home": ("USD_per_home", "美元"),
                "CNY": ("CNY", "百万元", "亿元"),
                "ratio": (unit,), "duration_year": ("年", "year", "years"),
-               "count_home": ("套", "homes"), "count_turn": ("次", "times")}[source[0]]
+               "count_home": ("套", "homes"),
+               "count_home_per_community": ("套", "homes_per_community"),
+               "count_turn": ("次", "times")}[source[0]]
     base = Decimal(value) * source[1]
     rows: list[dict[str, str]] = []
     for target in targets:
@@ -189,7 +192,9 @@ def financial_fact_catalog(reports: list[dict[str, Any]]) -> dict[str, Any]:
                 normalized["source_evidence_ids"] = list(dict.fromkeys(
                     fact.get("source_evidence_ids") or [evidence.get("evidence_id")]))
                 normalized_unit = _unit(str(normalized.get("unit") or ""))
-                normalized["currency"] = normalized.get("currency") or (normalized_unit[0] if normalized_unit else None)
+                unit_dimension = normalized_unit[0] if normalized_unit else None
+                normalized["currency"] = normalized.get("currency") or (
+                    "USD" if unit_dimension == "USD_per_home" else unit_dimension)
                 identity = [normalized["issuer_id"], report.get("report_id") or report_index,
                     evidence.get("evidence_id"), fact_index,
                     normalized.get("metric"), normalized["value"], normalized.get("unit"),
@@ -347,7 +352,12 @@ def _claims(markdown: str) -> list[dict[str, Any]]:
         if (match.group(2) in directional_units and not value.startswith(("-", "+"))
                 and re.search(r"(?:下降|下滑)\s*$", direction)):
             value = "-" + value
-        rows.append({"value": value, "unit": match.group(2), "display": match.group(0).strip(),
+        visible_unit = match.group(2)
+        local_prefix = clean[max(0, match.start() - 12):match.start()]
+        semantic_unit = ("homes_per_community" if visible_unit == "套" and re.search(r"每社区[^，,。；;\n]{0,12}$", local_prefix)
+                         else "USD_per_home" if visible_unit == "美元" and re.search(r"每套\s*$", local_prefix)
+                         else visible_unit)
+        rows.append({"value": value, "unit": semantic_unit, "display": match.group(0).strip(),
                      "decimals": len(value.split(".", 1)[1]) if "." in value else 0,
                      "accounting_basis": basis, "period": _explicit_period(clean, match.start(), match.end()),
                      "occurrence": {"start": match.start(), "end": match.end()}})

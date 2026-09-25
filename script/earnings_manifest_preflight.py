@@ -10,20 +10,6 @@ from earnings_common import ensure_inside, parse_time, read_json, relative_to_ro
 from earnings_state import EarningsState
 
 
-def _newer_active(db: Any, task: Any, *, exclude_task_id: str | None = None) -> bool:
-    params: list[Any] = [task["task_revision"], task["task_type"], task["subject_id"],
-                         task["period_start"], task["period_end"], task["source_mode"]]
-    exclude = ""
-    if exclude_task_id:
-        exclude = " AND n.task_id!=?"
-        params.append(exclude_task_id)
-    return bool(db.execute(
-        """SELECT 1 FROM research_tasks n WHERE n.rowid>? AND n.task_type=? AND n.subject_id=?
-        AND n.period_start IS ? AND n.period_end IS ? AND n.source_mode=?
-        AND n.state IN ('queued','running','completed','retryable_failed')""" + exclude + " LIMIT 1", params,
-    ).fetchone())
-
-
 def validate_manifest(root: Path, state: EarningsState, manifest_path: Path) -> tuple[dict[str, Any], list[str]]:
     """Validate the exact lease, frozen input and every artifact immediately before a model call."""
     manifest_path = ensure_inside(manifest_path.resolve(), [root / "runtime" / "earnings" / "runs"])
@@ -41,7 +27,7 @@ def validate_manifest(root: Path, state: EarningsState, manifest_path: Path) -> 
             errors.append("task lease expired")
         if task["input_hash"] != manifest.get("input_hash"):
             errors.append("task input changed")
-        if _newer_active(state.db, task):
+        if state.task_version_blocker(task["task_id"]):
             errors.append("task input superseded")
         registered = state.db.execute(
             "SELECT path,sha256 FROM task_attempt_manifests WHERE task_id=? AND attempt=?",
@@ -62,7 +48,7 @@ def validate_manifest(root: Path, state: EarningsState, manifest_path: Path) -> 
             path = resolve_path(root, item["path"])
             if not path.exists() or sha256_file(path) != item["sha256"]:
                 errors.append(f"{label} artifact file changed: {item.get('task_id')}")
-            if _newer_active(state.db, source, exclude_task_id=manifest.get("task_id")):
+            if state.task_version_blocker(source["task_id"], exclude_task_ids=[manifest.get("task_id")]):
                 errors.append(f"{label} artifact superseded: {item.get('task_id')}")
     return manifest, errors
 

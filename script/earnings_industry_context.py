@@ -205,6 +205,7 @@ def main() -> None:
         unresolved_symbols = [symbol for symbol in expected_symbols if symbol not in issuer_by_symbol]
         end = date.fromisoformat(args.period_end); research_quarter = f"{end.year}-Q{(end.month - 1)//3 + 1}" if args.mode == "quarterly" else None
         accepted_reports = None
+        accepted_payload: dict[str, Any] = {}
         excluded_issuer_ids: set[str] = set()
         if args.accepted_company_input:
             accepted_path = ensure_inside(resolve_path(root, args.accepted_company_input),
@@ -298,6 +299,14 @@ def main() -> None:
                     "fetched_issuers": min(fetched_count, disclosed_count), "researched_issuers": min(researched_count, fetched_count, disclosed_count),
                     "key_missing_issuers": key_missing}
         dependency_ids = sorted({row["task_id"] for row in predecessor_rows} | {row["task_id"] for row in company_artifacts})
+        quarterly_scope_binding = None
+        if args.mode == "quarterly" and frozen_scope is not None and accepted_payload:
+            quarterly_scope_binding = {
+                "scope_id": frozen_scope.get("scope_id"), "revision": frozen_scope.get("revision"),
+                "input_fingerprint": accepted_payload.get("input_fingerprint"),
+                "configuration_basis_hash": sha256_bytes(canonical_json(config)),
+                "predecessor_sha256s": sorted(row["sha256"] for row in predecessor_rows),
+            }
         input_basis = {
             "role": args.role, "mode": args.mode, "industry_id": args.industry, "period_start": args.period_start,
             "period_end": args.period_end, "cutoff": cutoff.isoformat(),
@@ -308,6 +317,7 @@ def main() -> None:
             "configuration_hash": config_hash, "source_mode": source_mode, "coverage": coverage,
             "critical_gap_status": args.critical_gap_status,
             "excluded_inputs": accepted_payload.get("exclusions", []) if args.accepted_company_input else [],
+            "quarterly_scope": quarterly_scope_binding,
         }
         frozen_task_input = {**input_basis, "company_artifacts": company_artifacts,
                              "previous_artifacts": [{"report_id": row["report_id"], "task_id": row["task_id"], "path": row["path"],

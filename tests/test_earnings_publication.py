@@ -246,7 +246,7 @@ class EarningsPublicationTests(unittest.TestCase):
                    body[row["occurrence"]["start"]:row["occurrence"]["end"]]) for row in claims]
         self.assertEqual(values, [
             ("20879", "套", "20879套"), ("16857", "套", "16857套"),
-            ("1.8", "套", "1.8套"), ("2.4", "次", "2.4次"),
+            ("1.8", "homes_per_community", "1.8套"), ("2.4", "次", "2.4次"),
             ("19500", "套", "19500套"), ("20500", "套", "20500套"),
             ("22000", "套", "22000套"), ("23000", "套", "23000套"),
             ("80000", "套", "80000套"), ("81000", "套", "81000套"),
@@ -270,6 +270,35 @@ class EarningsPublicationTests(unittest.TestCase):
         failed = validate_reader_markdown(markdown().replace(
             "经营期间：2026-04-01 至 2026-06-30", "经营期间：2026-06-01 至 2026-08-31"), [report])
         self.assertIn("unmapped period/date: 2026-06-01", failed["errors"])
+
+    def test_contextual_home_and_price_units_reject_wrong_semantic_dimension(self):
+        report = json.loads(json.dumps(SOURCE))
+        report["evidence"][0]["numeric_facts"] = [
+            {"metric": "total_homes", "value": "1.8", "unit": "homes", "period": None},
+            {"metric": "homes_per_community", "value": "1.8", "unit": "homes_per_community", "period": None},
+            {"metric": "revenue", "value": "372000", "unit": "USD", "period": None},
+            {"metric": "price_per_home", "value": "372000", "unit": "USD_per_home", "period": None},
+        ]
+        catalog = {row["metric"]: row for row in financial_fact_catalog([report])["facts"]}
+        body = markdown().replace("收入为 100 百万美元，但市场预期差未知。", "每社区库存为1.8套，但市场预期差未知。").replace(
+            "收入为 100 百万美元，增长也可能来自并购。", "平均售价为每套372000美元，增长也可能来自并购。")
+        claims = claim_occurrence_inventory(body)["claims"]
+        bindings = []
+        for claim in claims:
+            metric = "homes_per_community" if claim["value"] == "1.8" else "price_per_home"
+            fact = catalog[metric]
+            bindings.append({"display": claim["display"], "occurrence": claim["occurrence"],
+                "fact_id": fact["fact_id"], "metric": fact["metric"], "period": fact["period"],
+                "accounting_basis": fact["accounting_basis"]})
+        self.assertEqual(validate_reader_markdown(body, [report], explicit_fact_bindings=bindings)["status"], "passed")
+        wrong = json.loads(json.dumps(bindings))
+        for row in wrong:
+            metric = "total_homes" if row["display"] == "1.8套" else "revenue"
+            fact = catalog[metric]
+            row.update(fact_id=fact["fact_id"], metric=fact["metric"], period=fact["period"],
+                       accounting_basis=fact["accounting_basis"])
+        failed = validate_reader_markdown(body, [report], explicit_fact_bindings=wrong)
+        self.assertTrue(any("catalog fact does not match displayed quantity" in error for error in failed["errors"]))
 
     def test_days_quantity_binds_without_changing_frozen_catalog_or_accepting_wrong_values(self):
         source = json.loads(json.dumps(SOURCE))

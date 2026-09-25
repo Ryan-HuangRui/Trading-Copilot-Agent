@@ -76,31 +76,22 @@ def main() -> None:
                                           (task["task_id"], task["attempts"])).fetchone()
             if not attempt_manifest or attempt_manifest["path"] != relative_to_root(root, manifest_path) or attempt_manifest["sha256"] != sha256_file(manifest_path):
                 raise ValueError("current attempt manifest is missing or changed")
-            blocked = db.execute(
-                """SELECT COUNT(*) count FROM task_dependencies d JOIN research_tasks p ON p.task_id=d.dependency_task_id
-                WHERE d.task_id=? AND p.state!='completed'""", (task["task_id"],)).fetchone()["count"]
-            if blocked:
-                raise ValueError("task dependency is no longer complete")
-            newer = db.execute(
-                """SELECT COUNT(*) count FROM research_tasks WHERE task_type=? AND subject_id=? AND period_start IS ? AND period_end IS ?
-                AND method_version=? AND input_hash!=? AND rowid>? AND state IN ('queued','running','completed','retryable_failed')""",
-                (task["task_type"], task["subject_id"], task["period_start"], task["period_end"], task["method_version"], task["input_hash"], task["task_revision"]),
-            ).fetchone()["count"]
-            if newer:
-                raise ValueError("task input was superseded by a newer active input")
+            for dependency in db.execute("""SELECT p.* FROM task_dependencies d JOIN research_tasks p
+              ON p.task_id=d.dependency_task_id WHERE d.task_id=?""", (task["task_id"],)):
+                if dependency["state"] != "completed":
+                    raise ValueError("task dependency is no longer complete")
+                if state.task_version_blocker(dependency["task_id"], db=db, exclude_task_ids=[task["task_id"]]):
+                    raise ValueError("task dependency was superseded by newer evidence")
+            if state.task_version_blocker(task["task_id"], db=db):
+                raise ValueError("task input was superseded by a newer semantic version")
             for predecessor in manifest.get("previous_artifacts") or []:
                 row = db.execute("SELECT path,sha256 FROM report_artifacts WHERE report_id=? AND task_id=?",
                                  (predecessor.get("report_id"), predecessor.get("task_id"))).fetchone()
                 if not row or row["path"] != predecessor.get("path") or row["sha256"] != predecessor.get("sha256"):
                     raise ValueError("frozen predecessor is stale")
-                predecessor_task = db.execute("SELECT rowid AS task_revision,* FROM research_tasks WHERE task_id=?", (predecessor.get("task_id"),)).fetchone()
-                newer_predecessor = db.execute(
-                    """SELECT COUNT(*) count FROM research_tasks WHERE task_type=? AND subject_id=? AND period_start IS ? AND period_end IS ?
-                    AND input_hash!=? AND rowid>? AND task_id!=? AND state IN ('queued','running','completed','retryable_failed')""",
-                    (predecessor_task["task_type"], predecessor_task["subject_id"], predecessor_task["period_start"],
-                     predecessor_task["period_end"], predecessor_task["input_hash"], predecessor_task["task_revision"], task["task_id"]),
-                ).fetchone()["count"] if predecessor_task else 1
-                if newer_predecessor:
+                predecessor_task = db.execute("SELECT * FROM research_tasks WHERE task_id=?", (predecessor.get("task_id"),)).fetchone()
+                if (not predecessor_task or state.task_version_blocker(predecessor_task["task_id"], db=db,
+                        exclude_task_ids=[task["task_id"]])):
                     raise ValueError("predecessor dependency was superseded by newer evidence")
             for company in manifest.get("company_artifacts") or []:
                 company_task = db.execute("SELECT rowid AS task_revision,* FROM research_tasks WHERE task_id=?", (company.get("task_id"),)).fetchone()
@@ -108,12 +99,7 @@ def main() -> None:
                                       (company.get("report_id"), company.get("task_id"))).fetchone()
                 if not company_task or not artifact or artifact["path"] != company.get("path") or artifact["sha256"] != company.get("sha256"):
                     raise ValueError("frozen company dependency is stale")
-                newer_company = db.execute(
-                    """SELECT COUNT(*) count FROM research_tasks WHERE task_type='company' AND subject_id=?
-                    AND input_hash!=? AND rowid>? AND task_id!=? AND state IN ('queued','running','completed','retryable_failed')""",
-                    (company_task["subject_id"], company_task["input_hash"], company_task["task_revision"], task["task_id"]),
-                ).fetchone()["count"]
-                if newer_company:
+                if state.task_version_blocker(company_task["task_id"], db=db, exclude_task_ids=[task["task_id"]]):
                     raise ValueError("company dependency was superseded by newer evidence")
             if not existing:
                 scope = report.get("scope") or {}

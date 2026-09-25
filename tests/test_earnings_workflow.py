@@ -10,6 +10,10 @@ from tempfile import TemporaryDirectory
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "script"))
+
+from earnings_manifest_preflight import validate_manifest
+from earnings_state import EarningsState
 
 
 class EarningsWorkflowTests(unittest.TestCase):
@@ -156,6 +160,20 @@ class EarningsWorkflowTests(unittest.TestCase):
             challenge_manifest_path = root / challenge["artifacts"][0]
             challenge_report = self.write_role_report(root, challenge_manifest_path, role="challenge", claim_id="challenge-claim",
                                                        disputed_claim_id="industry-claim", material_finding_id="finding-1")
+            # A newer daily industry task for the same subject/period is a distinct
+            # semantic lineage and must not invalidate the frozen quarterly predecessor
+            # during the real record step.
+            _, daily = self.run_cli(root, "earnings-industry-context", "--config", str(config), "--universe", str(universe),
+                "--industry", "test-industry", "--role", "industry", "--mode", "daily",
+                "--period-start", "2026-04-01", "--period-end", "2026-06-30",
+                "--cutoff", "2026-09-14T02:00:00Z", "--run-id", "newer-daily")
+            self.assertTrue(daily["model_execution_required"])
+            preflight_state = EarningsState(root / "runtime/earnings/state.sqlite")
+            try:
+                _, preflight_errors = validate_manifest(root.resolve(), preflight_state, challenge_manifest_path.resolve())
+            finally:
+                preflight_state.close()
+            self.assertEqual(preflight_errors, [])
             self.run_cli(root, "earnings-record", "--report", str(challenge_report), "--manifest", str(challenge_manifest_path))
             _, synthesis = self.run_cli(root, "earnings-industry-context", "--config", str(config), "--universe", str(universe),
                 "--industry", "test-industry", "--role", "synthesis", "--mode", "quarterly", "--period-start", "2026-04-01",
@@ -213,7 +231,10 @@ class EarningsWorkflowTests(unittest.TestCase):
             self.run_cli(root, "earnings-collect", "--config", str(config), "--mode", "offline", "--input", str(fixture),
                          "--cutoff", "2026-09-14T02:00:00Z")
             db = sqlite3.connect(root / "runtime/earnings/state.sqlite")
-            db.execute("UPDATE research_tasks SET created_at='2026-09-14T02:00:00+00:00'"); db.commit(); db.close()
+            db.execute("UPDATE research_tasks SET created_at='2026-09-14T02:00:00+00:00'")
+            db.execute("""UPDATE research_tasks SET state='terminal_failed',attempts=max_attempts
+              WHERE rowid=(SELECT MAX(rowid) FROM research_tasks)""")
+            db.commit(); db.close()
             proc, result = self.run_cli(root, "earnings-record", "--report", str(old_report), "--manifest", str(old_manifest_path), success=False)
             self.assertNotEqual(proc.returncode, 0)
             self.assertIn("superseded", result["reason"])

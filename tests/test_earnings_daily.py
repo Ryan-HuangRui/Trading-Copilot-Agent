@@ -186,7 +186,9 @@ class EarningsDailyTests(unittest.TestCase):
                 method_version='v1', source_mode='live', profile='quarterly', model='gpt-6-astra',
                 effort='high', dependencies=[dependency])
             state.freeze_task_input(challenge, {'mode': 'quarterly', 'industry_id': 'homebuilding',
-                'universe_hash': scope['frozen_universe_hash']}, 'challenge')
+                'universe_hash': scope['frozen_universe_hash'], 'quarterly_scope': {
+                    'scope_id': scope['scope_id'], 'revision': scope['revision'],
+                    'input_fingerprint': scope.get('input_fingerprint'), 'predecessor_sha256s': []}}, 'challenge')
             stages = [{'stage': 'coverage', 'state': 'completed'}, {'stage': 'gap_review', 'state': 'completed'},
                       {'stage': 'industry', 'state': 'completed'}, {'stage': 'challenge', 'state': 'pending'},
                       {'stage': 'synthesis', 'state': 'pending'}]
@@ -195,6 +197,57 @@ class EarningsDailyTests(unittest.TestCase):
             self.assertEqual(blocker['blocker_task_id'], dependency)
             self.assertFalse(state.task_claimability(challenge)['eligible'])
             qledger.close(); state.close()
+
+    def test_new_quarterly_revision_ignores_old_terminal_task_and_executes_context(self):
+        from earnings_daily import run_quarterly_step
+        import time
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); state = EarningsState(root / 'runtime/earnings/state.sqlite')
+            daily = DailyLedger(root); qledger = QuarterlyReviewLedger(root / 'runtime/earnings/quarterly.sqlite')
+            scope = qledger.freeze({'quarter_id': '2026-Q3', 'period_start': '2026-06-01', 'period_end': '2026-08-31'},
+                {'industry_id': 'homebuilding', 'issuers': [], 'key_symbols': []},
+                '2026-09-24T00:00:00Z', edition='stage')
+            old, _ = state.enqueue_task(task_type='industry', subject_id='homebuilding', period_start='2026-06-01',
+                period_end='2026-08-31', input_hash='old-industry', method_version='v1', source_mode='live',
+                profile='quarterly', model='gpt-6-astra', effort='high')
+            state.freeze_task_input(old, {'mode': 'quarterly', 'industry_id': 'homebuilding',
+                'universe_hash': scope['frozen_universe_hash'], 'quarterly_scope': {
+                    'scope_id': scope['scope_id'], 'revision': 1, 'input_fingerprint': 'old-input'}}, 'old-industry')
+            state.db.execute("UPDATE research_tasks SET state='terminal_failed',attempts=max_attempts WHERE task_id=?", (old,))
+            accepted = [{'report_id': 'len-new', 'sha256': 'new-company-sha'}]
+            qledger.db.execute("""UPDATE quarterly_scopes SET revision=2,input_fingerprint='new-input',
+              accepted_reports_json=?,active_input_path='runtime/earnings/new-input.json' WHERE scope_id=?""",
+              (json.dumps(accepted), scope['scope_id']))
+            qledger.db.commit()
+            current = dict(qledger.db.execute("SELECT * FROM quarterly_scopes WHERE scope_id=?", (scope['scope_id'],)).fetchone())
+            stages = qledger.db.execute("SELECT stage,state,attempts FROM quarterly_stages WHERE scope_id=?", (scope['scope_id'],)).fetchall()
+            self.assertIsNone(_quarterly_scope_task_blocker(state, current, stages))
+            run_scope = {**current, 'frozen_scope_path': 'runtime/earnings/frozen-v2.json',
+                'accepted_company_input_path': 'runtime/earnings/new-input.json',
+                'frozen_industry': {'industry_id': 'homebuilding', 'issuers': [], 'key_symbols': []},
+                'eligible_stage': True, 'deadline_stage_allowed': False,
+                'maturity': {'counts': {'researched_issuers': 1}, 'critical_gap_status': 'resolved'}}
+            context = {'status': 'skipped', 'model_execution_required': False}
+            config = json.loads((ROOT / 'config/earnings_research.json').read_text())
+            config['quarterly']['automatic_trigger_enabled'] = True
+            atomic_write_json(root / config['paths']['universe'], {'industries': []})
+            ready = {'maturity': {'counts': {'researched_issuers': 1}}, 'eligible_stage': True,
+                     'deadline_stage_allowed': False}
+            with patch('earnings_daily._registered_quarterly_scope_readiness', return_value=ready), \
+                 patch('earnings_daily.industry_work', return_value=[]):
+                progress = round_progress(root, state, config, cutoff='2026-09-24T00:00:00Z', ledger=daily)
+            self.assertEqual(progress['pending']['quarterly_scopes'], 1)
+            self.assertGreaterEqual(progress['actionable_count'], 1)
+            with patch('earnings_daily.inspect_due', return_value={'scopes': [run_scope], 'quarter': '2026-Q3'}), \
+                 patch('earnings_daily.command', return_value=context) as command, \
+                 patch('earnings_daily._quarterly_market_readiness', return_value={'actionable': [], 'waiting': []}):
+                run_quarterly_step(root, config, {}, state,
+                    daily, {}, '2026-09-25', '2026-09-24T00:00:00Z', 'revision-2',
+                    root / 'runtime/earnings/logs', time.monotonic() + 1800)
+            command.assert_called_once()
+            self.assertEqual(command.call_args.args[1], 'earnings_industry_context.py')
+            self.assertIn('--accepted-company-input', command.call_args.args[2])
+            qledger.close(); state.close(); daily.db.close()
 
     def test_cross_day_finalizer_uses_current_notification_day_and_frozen_evidence(self):
         from datetime import datetime, timezone
