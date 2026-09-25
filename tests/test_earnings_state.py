@@ -76,6 +76,46 @@ class EarningsStateTests(unittest.TestCase):
         self.assertNotIn(child, [row["task_id"] for row in claimed])
         self.assertIsNone(self.state.claim_task(child, owner="x", lease_seconds=60))
 
+    def test_daily_role_success_does_not_supersede_quarterly_dependency(self):
+        common = dict(task_type="industry", subject_id="homebuilding", period_start="2026-06-01",
+                      period_end="2026-08-31", method_version="v1", source_mode="live",
+                      model="gpt-6-astra", effort="high")
+        quarterly, _ = self.state.enqueue_task(input_hash="quarterly-industry", profile="quarterly", **common)
+        self.state.freeze_task_input(quarterly, {"mode": "quarterly", "industry_id": "homebuilding",
+            "universe_hash": "quarterly-universe"}, "quarterly-industry")
+        self.state.db.execute("UPDATE research_tasks SET state='completed',output_manifest='quarterly.json' WHERE task_id=?",
+                              (quarterly,))
+        daily, _ = self.state.enqueue_task(input_hash="daily-industry", profile="daily", **common)
+        self.state.freeze_task_input(daily, {"mode": "daily", "industry_id": "homebuilding",
+            "universe_hash": "daily-universe"}, "daily-industry")
+        self.state.db.execute("UPDATE research_tasks SET state='completed',output_manifest='daily.json' WHERE task_id=?",
+                              (daily,))
+        challenge, _ = self.state.enqueue_task(task_type="challenge", subject_id="homebuilding",
+            period_start="2026-06-01", period_end="2026-08-31", input_hash="quarterly-challenge",
+            method_version="v1", source_mode="live", profile="quarterly", model="gpt-6-astra",
+            effort="high", dependencies=[quarterly])
+        self.state.freeze_task_input(challenge, {"mode": "quarterly", "industry_id": "homebuilding",
+            "universe_hash": "quarterly-universe"}, "quarterly-challenge")
+
+        preview = self.state.task_claimability(challenge)
+        self.assertTrue(preview["eligible"], preview)
+        self.assertEqual(self.state.claim_task(challenge, owner="quarterly", lease_seconds=60)["task_id"], challenge)
+
+    def test_same_lineage_and_unproven_newer_role_versions_remain_blocking(self):
+        common = dict(task_type="industry", subject_id="homebuilding", period_start="2026-06-01",
+                      period_end="2026-08-31", method_version="v1", source_mode="live",
+                      profile="quarterly", model="gpt-6-astra", effort="high")
+        old, _ = self.state.enqueue_task(input_hash="old", **common)
+        self.state.freeze_task_input(old, {"mode": "quarterly", "industry_id": "homebuilding",
+            "universe_hash": "same-universe"}, "old")
+        same, _ = self.state.enqueue_task(input_hash="same", **common)
+        self.state.freeze_task_input(same, {"mode": "quarterly", "industry_id": "homebuilding",
+            "universe_hash": "same-universe"}, "same")
+        self.assertFalse(self.state.task_claimability(old)["eligible"])
+        unknown, _ = self.state.enqueue_task(input_hash="unknown", **common)
+        self.assertFalse(self.state.task_claimability(same)["eligible"])
+        self.assertEqual(self.state.task_claimability(same)["reason"], "newer_semantic_version")
+
     def test_failed_dependency_reuse_requires_exact_frozen_semantics_and_is_audited(self):
         old, _ = self.state.enqueue_task(task_type="company", subject_id="amat", period_start="2026-04-01",
             period_end="2026-06-30", input_hash="same", method_version="v1", source_mode="live",

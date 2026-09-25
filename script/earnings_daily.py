@@ -694,6 +694,30 @@ def _registered_quarterly_scope_readiness(state: EarningsState, scope: dict, con
             "deadline_stage_allowed": deadline_allowed}
 
 
+def _quarterly_scope_task_blocker(state: EarningsState, scope: dict, stages: list[sqlite3.Row]) -> dict | None:
+    """Explain a pre-model blocker for the exact frozen quarterly stage, if one exists."""
+    stage_states = {row["stage"]: row["state"] for row in stages}
+    role = next((name for name in ("industry", "challenge", "synthesis")
+                 if stage_states.get(name) != "completed"), None)
+    if role is None:
+        return None
+    candidates = state.db.execute("""SELECT rowid AS db_rowid,* FROM research_tasks
+      WHERE task_type=? AND subject_id=? AND period_start IS ? AND period_end IS ? AND source_mode='live'
+      ORDER BY rowid DESC""", (role, scope["industry_id"], scope["period_start"], scope["period_end"])).fetchall()
+    matching = [row for row in candidates if state._semantic_lineage(state.db, row) == (
+        "quarterly", scope["industry_id"], scope["frozen_universe_hash"])]
+    if not matching:
+        return None  # The normal execution step may create the exact frozen task.
+    task = matching[0]
+    if task["state"] in {"terminal_failed", "excluded", "superseded"}:
+        return {"task_id": task["task_id"], "reason": f"stage_task_{task['state']}"}
+    if task["state"] in {"queued", "retryable_failed"}:
+        claimability = state.task_claimability(task["task_id"])
+        if not claimability["eligible"]:
+            return claimability
+    return None
+
+
 def reconcile_quarterly_publication(root: Path, state: EarningsState, job: dict, *, apply: bool,
                                     local_archive_allowed: bool, expected_route_key: str | None) -> dict:
     """Bind a registered publication to its exact current quarterly synthesis and delivery."""
@@ -1276,7 +1300,10 @@ def round_progress(root: Path, state: EarningsState, config: dict, cutoff: str |
                     readiness = _registered_quarterly_scope_readiness(
                         state, scope, config, day=datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat())
                     if _quarterly_scope_model_eligible(readiness):
-                        quarterly_pending += 1
+                        if _quarterly_scope_task_blocker(state, scope, stages):
+                            quarterly_blocked += 1
+                        else:
+                            quarterly_pending += 1
                     else:
                         quarterly_waiting += 1
             quarterly_progress = [tuple(row) for row in qdb.execute("""SELECT scope_id,stage,state,

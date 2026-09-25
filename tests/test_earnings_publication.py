@@ -237,6 +237,40 @@ class EarningsPublicationTests(unittest.TestCase):
         self.assertEqual([(row["display"], row["occurrence"]) for row in table],
                          [("962.21", {"line": 4, "column": 2}), ("962.21", {"line": 5, "column": 2})])
 
+    def test_homebuilding_quantity_inventory_covers_units_and_both_range_endpoints(self):
+        body = ("新订单20879套，积压16857套；每社区1.8套，库存周转2.4次。"
+                "指引为19500套至20500套、22000套至23000套，全年80000套至81000套，"
+                "此前82000套至83000套。")
+        claims = claim_occurrence_inventory(body)["claims"]
+        values = [(row["value"], row["unit"],
+                   body[row["occurrence"]["start"]:row["occurrence"]["end"]]) for row in claims]
+        self.assertEqual(values, [
+            ("20879", "套", "20879套"), ("16857", "套", "16857套"),
+            ("1.8", "套", "1.8套"), ("2.4", "次", "2.4次"),
+            ("19500", "套", "19500套"), ("20500", "套", "20500套"),
+            ("22000", "套", "22000套"), ("23000", "套", "23000套"),
+            ("80000", "套", "80000套"), ("81000", "套", "81000套"),
+            ("82000", "套", "82000套"), ("83000", "套", "83000套")])
+
+    def test_homebuilding_catalog_aliases_preserve_strict_date_validation(self):
+        report = json.loads(json.dumps(SOURCE))
+        report["scope"]["reporting_start"] = None
+        report["scope"]["reporting_end"] = "2026-08-31"
+        report["evidence"][0]["numeric_facts"] = [
+            {"metric": "orders", "value": "20879", "unit": "homes", "period": None},
+            {"metric": "inventory_per_community", "value": "1.8", "unit": "homes_per_community", "period": None},
+            {"metric": "turn", "value": "2.4", "unit": "times", "period": None},
+            {"metric": "asp", "value": "372000", "unit": "USD_per_home", "period": None},
+        ]
+        catalog = {row["metric"]: row for row in financial_fact_catalog([report])["facts"]}
+        self.assertIn({"value": "20879", "unit": "套"}, catalog["orders"]["display_candidates"])
+        self.assertIn({"value": "1.8", "unit": "套"}, catalog["inventory_per_community"]["display_candidates"])
+        self.assertIn({"value": "2.4", "unit": "次"}, catalog["turn"]["display_candidates"])
+        self.assertIn({"value": "372000", "unit": "美元"}, catalog["asp"]["display_candidates"])
+        failed = validate_reader_markdown(markdown().replace(
+            "经营期间：2026-04-01 至 2026-06-30", "经营期间：2026-06-01 至 2026-08-31"), [report])
+        self.assertIn("unmapped period/date: 2026-06-01", failed["errors"])
+
     def test_days_quantity_binds_without_changing_frozen_catalog_or_accepting_wrong_values(self):
         source = json.loads(json.dumps(SOURCE))
         source['evidence'][0]['numeric_facts'].append({'metric': 'days_sales_outstanding', 'value': '77',

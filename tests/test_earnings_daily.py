@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'script'))
 from earnings_common import atomic_write_json, sha256_file
 from earnings_daily import (DailyLedger, _latest_company_publication_heads, _publication_matches_current_head,
-    _quarterly_market_readiness, fail_owned_attempt, finalize, notification_material, render_publication_entries, run, run_gap_review_step,
+    _quarterly_market_readiness, _quarterly_scope_task_blocker, fail_owned_attempt, finalize, notification_material, render_publication_entries, run, run_gap_review_step,
     reconcile_quarterly_publication, run_publication_work, round_progress, season_limit, unresolved_terminal_count)
 from earnings_period_review import QuarterlyReviewLedger
 from earnings_lark import publication_delivery_route_key
@@ -170,6 +170,32 @@ class EarningsDailyTests(unittest.TestCase):
             self.assertEqual(progress['pending']['quarterly_waiting'], 1)
             self.assertEqual(progress['actionable_count'], 0)
             state.close(); ledger.db.close()
+
+    def test_quarterly_progress_uses_the_same_dependency_gate_as_claim(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp).resolve(); state = EarningsState(root / 'runtime/earnings/state.sqlite')
+            qledger = QuarterlyReviewLedger(root / 'runtime/earnings/quarterly.sqlite')
+            scope = qledger.freeze({'quarter_id': '2026-Q3', 'period_start': '2026-06-01', 'period_end': '2026-08-31'},
+                {'industry_id': 'homebuilding', 'issuers': [], 'key_symbols': []},
+                '2026-09-24T00:00:00Z', edition='stage')
+            dependency, _ = state.enqueue_task(task_type='company', subject_id='len', period_start=None,
+                period_end='2026-08-31', input_hash='len', method_version='v1', source_mode='live',
+                profile='daily', model='gpt-5.6-sol', effort='medium')
+            challenge, _ = state.enqueue_task(task_type='challenge', subject_id='homebuilding',
+                period_start='2026-06-01', period_end='2026-08-31', input_hash='challenge',
+                method_version='v1', source_mode='live', profile='quarterly', model='gpt-6-astra',
+                effort='high', dependencies=[dependency])
+            state.freeze_task_input(challenge, {'mode': 'quarterly', 'industry_id': 'homebuilding',
+                'universe_hash': scope['frozen_universe_hash']}, 'challenge')
+            stages = [{'stage': 'coverage', 'state': 'completed'}, {'stage': 'gap_review', 'state': 'completed'},
+                      {'stage': 'industry', 'state': 'completed'}, {'stage': 'challenge', 'state': 'pending'},
+                      {'stage': 'synthesis', 'state': 'pending'}]
+            blocker = _quarterly_scope_task_blocker(state, scope, stages)
+            self.assertEqual(blocker['reason'], 'dependency_incomplete')
+            self.assertEqual(blocker['blocker_task_id'], dependency)
+            self.assertFalse(state.task_claimability(challenge)['eligible'])
+            qledger.close(); state.close()
+
     def test_cross_day_finalizer_uses_current_notification_day_and_frozen_evidence(self):
         from datetime import datetime, timezone
         with TemporaryDirectory() as temp:

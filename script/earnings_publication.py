@@ -43,13 +43,17 @@ _UNIT = {
     "CNY million": ("CNY", Decimal("1000000")), "CNY millions": ("CNY", Decimal("1000000")),
     "CNY billion": ("CNY", Decimal("1000000000")), "CNY billions": ("CNY", Decimal("1000000000")),
     "百万元": ("CNY", Decimal("1000000")), "亿元": ("CNY", Decimal("100000000")),
+    "homes": ("count_home", Decimal("1")), "home": ("count_home", Decimal("1")),
+    "homes_per_community": ("count_home", Decimal("1")), "套": ("count_home", Decimal("1")),
+    "times": ("count_turn", Decimal("1")), "time": ("count_turn", Decimal("1")),
+    "次": ("count_turn", Decimal("1")), "USD_per_home": ("USD", Decimal("1")),
     "year": ("duration_year", Decimal("1")), "years": ("duration_year", Decimal("1")),
     "年": ("duration_year", Decimal("1")),
 }
 
 _NUMBER_PATTERN = r"[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?"
 _FINANCIAL_UNIT_PATTERN = (r"USD\s+(?:millions?|billions?)|CNY\s+(?:millions?|billions?)|millions?\s+USD|billions?\s+USD|"
-                           r"percentage\s+points|百万美元|亿美元|百万元|亿元|个百分点|个基点|美元|元|%|％|bps|years?|年|days?|天")
+                           r"percentage\s+points|百万美元|亿美元|百万元|亿元|个百分点|个基点|美元|元|%|％|bps|years?|年|days?|天|套|次")
 
 
 def _unit(value: str) -> tuple[str, Decimal] | None:
@@ -101,9 +105,10 @@ def _display_candidates(value: str, unit: str, *, rounded: bool = False) -> list
     source = _unit(unit)
     if not source:
         return [] if unit.strip().lower() in {"million", "billion"} else [{"value": value, "unit": unit}]
-    targets = {"USD": ("USD", "USD million", "USD billion", "亿美元"),
+    targets = {"USD": ("USD", "美元", "USD million", "USD billion", "亿美元"),
                "CNY": ("CNY", "百万元", "亿元"),
-               "ratio": (unit,), "duration_year": ("年", "year", "years")}[source[0]]
+               "ratio": (unit,), "duration_year": ("年", "year", "years"),
+               "count_home": ("套", "homes"), "count_turn": ("次", "times")}[source[0]]
     base = Decimal(value) * source[1]
     rows: list[dict[str, str]] = []
     for target in targets:
@@ -346,6 +351,20 @@ def _claims(markdown: str) -> list[dict[str, Any]]:
                      "decimals": len(value.split(".", 1)[1]) if "." in value else 0,
                      "accounting_basis": basis, "period": _explicit_period(clean, match.start(), match.end()),
                      "occurrence": {"start": match.start(), "end": match.end()}})
+    # In a compact range only the upper endpoint carries the written unit.  Record
+    # the lower endpoint with that explicit shared unit while keeping its exact raw
+    # coordinate; the checker/model must still bind both endpoints independently.
+    range_pattern = re.compile(
+        rf"(?<![0-9.])({_NUMBER_PATTERN})\s*(?:至|—|–|~|～)\s*({_NUMBER_PATTERN})\s*({_FINANCIAL_UNIT_PATTERN})", re.I)
+    for match in range_pattern.finditer(clean):
+        value = match.group(1).replace(",", "")
+        rows.append({"value": value, "unit": match.group(3), "display": match.group(1),
+                     "decimals": len(value.split(".", 1)[1]) if "." in value else 0,
+                     "accounting_basis": None, "period": _explicit_period(clean, match.start(1), match.end(1)),
+                     "occurrence": {"start": match.start(1), "end": match.end(1)}})
+    rows.sort(key=lambda row: (row.get("occurrence", {}).get("start", len(clean)),
+                               row.get("occurrence", {}).get("line", len(clean)),
+                               row.get("occurrence", {}).get("column", 0)))
     lines = clean.splitlines()
     header: list[str] = []
     for index, line in enumerate(lines):

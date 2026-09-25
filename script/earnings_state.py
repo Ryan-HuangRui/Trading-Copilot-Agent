@@ -271,12 +271,18 @@ class EarningsState:
         task_id = stable_id("task", task_key)
         now = utc_now()
         with self.immediate() as db:
-            db.execute(
-                """UPDATE research_tasks SET state='terminal_failed',error='superseded by changed input',updated_at=?
-                WHERE task_type=? AND subject_id=? AND period_start IS ? AND period_end IS ? AND method_version=?
-                AND input_hash!=? AND state IN ('queued','retryable_failed')""",
-                (now, task_type, subject_id, period_start, period_end, method_version, input_hash),
-            )
+            # Role inputs are frozen immediately after enqueue and carry the only
+            # authoritative daily/quarterly semantic lineage.  Do not irreversibly
+            # fail an older role before the new row has that proof; claim-time
+            # versioning below blocks only a proven same-lineage successor and is
+            # conservative when either frozen input is missing.
+            if task_type not in {"industry", "challenge", "synthesis", "market"}:
+                db.execute(
+                    """UPDATE research_tasks SET state='terminal_failed',error='superseded by changed input',updated_at=?
+                    WHERE task_type=? AND subject_id=? AND period_start IS ? AND period_end IS ? AND method_version=?
+                    AND input_hash!=? AND state IN ('queued','retryable_failed')""",
+                    (now, task_type, subject_id, period_start, period_end, method_version, input_hash),
+                )
             cursor = db.execute(
                 """INSERT OR IGNORE INTO research_tasks(
                 task_id,task_key,task_type,subject_id,period_start,period_end,input_hash,method_version,
@@ -548,14 +554,91 @@ class EarningsState:
         self.db.execute("UPDATE source_items SET status=?,attempts=?,error=?,next_attempt_at=?,updated_at=? WHERE source=? AND scope=? AND item_key=?",
                         (status, attempts, error, next_attempt, utc_now(), source, scope, item_key))
 
+    _SEMANTIC_ROLE_TYPES = frozenset({"industry", "challenge", "synthesis", "market"})
+
+    @classmethod
+    def _semantic_lineage(cls, db: sqlite3.Connection, task: sqlite3.Row) -> tuple[str, str, str] | None:
+        """Return a proven immutable role lineage, never a mutable profile guess."""
+        if task["task_type"] not in cls._SEMANTIC_ROLE_TYPES:
+            return None
+        frozen = db.execute("SELECT input_json FROM task_inputs WHERE task_id=?", (task["task_id"],)).fetchone()
+        if not frozen:
+            return None
+        try:
+            payload = json.loads(frozen["input_json"])
+        except (TypeError, json.JSONDecodeError):
+            return None
+        mode = payload.get("mode")
+        industry_id = payload.get("industry_id")
+        universe_hash = payload.get("universe_hash")
+        if (mode not in {"daily", "quarterly"} or industry_id != task["subject_id"]
+                or not isinstance(universe_hash, str) or not universe_hash):
+            return None
+        return mode, industry_id, universe_hash
+
+    @classmethod
+    def _semantic_successor_blocks(cls, db: sqlite3.Connection, older: sqlite3.Row,
+                                   newer: sqlite3.Row) -> bool:
+        if older["task_type"] not in cls._SEMANTIC_ROLE_TYPES:
+            return True
+        old_lineage = cls._semantic_lineage(db, older)
+        new_lineage = cls._semantic_lineage(db, newer)
+        # Missing proof can never establish that two versions are independent.
+        return old_lineage is None or new_lineage is None or old_lineage == new_lineage
+
+    @classmethod
+    def _newer_blocker(cls, db: sqlite3.Connection, task: sqlite3.Row) -> sqlite3.Row | None:
+        newer = db.execute("""SELECT rowid AS db_rowid,* FROM research_tasks n WHERE n.rowid>?
+          AND n.task_type=? AND n.subject_id=? AND n.period_start IS ? AND n.period_end IS ?
+          AND n.source_mode=? AND NOT (n.state='superseded' AND EXISTS(
+            SELECT 1 FROM dependency_reuse_audit a
+            WHERE a.failed_task_id=n.task_id AND a.reused_task_id=?)) ORDER BY n.rowid""",
+          (task["db_rowid"], task["task_type"], task["subject_id"], task["period_start"],
+           task["period_end"], task["source_mode"], task["task_id"])).fetchall()
+        return next((row for row in newer if cls._semantic_successor_blocks(db, task, row)), None)
+
+    @classmethod
+    def _claimability(cls, db: sqlite3.Connection, task: sqlite3.Row, now_text: str) -> dict[str, Any]:
+        eligible_state = task["state"] == "queued" or (
+            task["state"] == "retryable_failed" and
+            (not task["next_attempt_at"] or task["next_attempt_at"] <= now_text)
+        ) or (task["state"] == "running" and task["lease_expires_at"] and task["lease_expires_at"] < now_text)
+        if not eligible_state:
+            return {"eligible": False, "reason": "state_or_retry_time", "blocker_task_id": None}
+        if int(task["attempts"]) >= int(task["max_attempts"]):
+            return {"eligible": False, "reason": "attempt_limit", "blocker_task_id": None}
+        for dependency in db.execute("""SELECT p.rowid AS db_rowid,p.* FROM task_dependencies d
+          JOIN research_tasks p ON p.task_id=d.dependency_task_id WHERE d.task_id=? ORDER BY p.task_id""",
+          (task["task_id"],)):
+            if dependency["state"] != "completed":
+                return {"eligible": False, "reason": "dependency_incomplete",
+                        "blocker_task_id": dependency["task_id"]}
+            blocker = cls._newer_blocker(db, dependency)
+            if blocker is not None:
+                return {"eligible": False, "reason": "dependency_has_newer_semantic_version",
+                        "blocker_task_id": blocker["task_id"]}
+        blocker = cls._newer_blocker(db, task)
+        if blocker is not None:
+            return {"eligible": False, "reason": "newer_semantic_version",
+                    "blocker_task_id": blocker["task_id"]}
+        return {"eligible": True, "reason": None, "blocker_task_id": None}
+
+    def task_claimability(self, task_id: str, *, now: str | None = None) -> dict[str, Any]:
+        """Read-only explanation of the same gate used by single and bulk claims."""
+        row = self.db.execute("SELECT rowid AS db_rowid,* FROM research_tasks WHERE task_id=?", (task_id,)).fetchone()
+        if not row:
+            raise ValueError(f"unknown task_id: {task_id}")
+        return {"task_id": task_id, **self._claimability(self.db, row, now or utc_now())}
+
     def reap_expired_tasks(self) -> int:
         now = utc_now()
-        superseded = self.db.execute(
-            """UPDATE research_tasks AS t SET state='terminal_failed',error='superseded while lease was active',
-            lease_owner=NULL,lease_expires_at=NULL,updated_at=? WHERE state='running' AND lease_expires_at<? AND EXISTS(
-              SELECT 1 FROM research_tasks n WHERE n.rowid>t.rowid AND n.task_type=t.task_type
-              AND n.subject_id=t.subject_id AND n.period_start IS t.period_start AND n.period_end IS t.period_end
-              AND n.source_mode=t.source_mode)""", (now, now)).rowcount
+        superseded = 0
+        for task in self.db.execute("""SELECT rowid AS db_rowid,* FROM research_tasks
+          WHERE state='running' AND lease_expires_at<?""", (now,)).fetchall():
+            if self._newer_blocker(self.db, task) is not None:
+                superseded += self.db.execute("""UPDATE research_tasks SET state='terminal_failed',
+                  error='superseded while lease was active',lease_owner=NULL,lease_expires_at=NULL,updated_at=?
+                  WHERE task_id=? AND state='running'""", (now, task["task_id"])).rowcount
         terminal = self.db.execute(
             """UPDATE research_tasks SET state='terminal_failed',error='lease expired at maximum attempts',
             lease_owner=NULL,lease_expires_at=NULL,updated_at=? WHERE state='running' AND lease_expires_at<? AND attempts>=max_attempts""",
@@ -615,23 +698,11 @@ class EarningsState:
         priority = list(dict.fromkeys(str(symbol) for symbol in priority_symbols))
         with self.immediate() as db:
             rows = db.execute(
-                f"""SELECT t.* FROM research_tasks t WHERE {' AND '.join(filters)} AND NOT EXISTS(
-                SELECT 1 FROM task_dependencies d JOIN research_tasks p ON p.task_id=d.dependency_task_id
-                WHERE d.task_id=t.task_id AND (p.state!='completed' OR EXISTS(
-                  SELECT 1 FROM research_tasks pn WHERE pn.rowid>p.rowid AND pn.task_type=p.task_type
-                  AND pn.subject_id=p.subject_id AND pn.period_start IS p.period_start
-                  AND pn.period_end IS p.period_end AND pn.source_mode=p.source_mode
-                  AND NOT (pn.state='superseded' AND EXISTS(SELECT 1 FROM dependency_reuse_audit a
-                    WHERE a.failed_task_id=pn.task_id AND a.reused_task_id=p.task_id)))))
-                AND NOT EXISTS(SELECT 1 FROM research_tasks n WHERE n.rowid>t.rowid
-                  AND n.task_type=t.task_type AND n.subject_id=t.subject_id
-                  AND n.period_start IS t.period_start AND n.period_end IS t.period_end
-                  AND n.source_mode=t.source_mode
-                  AND NOT (n.state='superseded' AND EXISTS(SELECT 1 FROM dependency_reuse_audit a
-                    WHERE a.failed_task_id=n.task_id AND a.reused_task_id=t.task_id)))
-                ORDER BY t.created_at,t.task_id""",
+                f"""SELECT t.rowid AS db_rowid,t.* FROM research_tasks t
+                WHERE {' AND '.join(filters)} ORDER BY t.created_at,t.task_id""",
                 params,
             ).fetchall()
+            rows = [row for row in rows if self._claimability(db, row, now_text)["eligible"]]
             if task_type == "company" and self.disclosure_window:
                 rows = [row for row in rows if self.event_in_disclosure_window(row["subject_id"], cutoff)
                         == (company_tier != "history")]
@@ -676,25 +747,7 @@ class EarningsState:
             row = db.execute("SELECT rowid AS db_rowid,* FROM research_tasks WHERE task_id=?", (task_id,)).fetchone()
             if not row:
                 raise ValueError(f"unknown task_id: {task_id}")
-            eligible_state = row["state"] == "queued" or (
-                row["state"] == "retryable_failed" and (not row["next_attempt_at"] or row["next_attempt_at"] <= now_text)
-            ) or (row["state"] == "running" and row["lease_expires_at"] and row["lease_expires_at"] < now_text)
-            blocked = db.execute(
-                """SELECT COUNT(*) count FROM task_dependencies d JOIN research_tasks p ON p.task_id=d.dependency_task_id
-                WHERE d.task_id=? AND (p.state!='completed' OR EXISTS(
-                  SELECT 1 FROM research_tasks pn WHERE pn.rowid>p.rowid AND pn.task_type=p.task_type
-                  AND pn.subject_id=p.subject_id AND pn.period_start IS p.period_start
-                  AND pn.period_end IS p.period_end AND pn.source_mode=p.source_mode
-                  AND NOT (pn.state='superseded' AND EXISTS(SELECT 1 FROM dependency_reuse_audit a
-                    WHERE a.failed_task_id=pn.task_id AND a.reused_task_id=p.task_id))))""", (task_id,),
-            ).fetchone()["count"]
-            superseded = db.execute("""SELECT 1 FROM research_tasks n WHERE n.rowid>? AND n.task_type=?
-              AND n.subject_id=? AND n.period_start IS ? AND n.period_end IS ? AND n.source_mode=?
-              AND NOT (n.state='superseded' AND EXISTS(SELECT 1 FROM dependency_reuse_audit a
-                WHERE a.failed_task_id=n.task_id AND a.reused_task_id=?))""",
-              (row["db_rowid"], row["task_type"], row["subject_id"],
-               row["period_start"], row["period_end"], row["source_mode"], task_id)).fetchone()
-            if not eligible_state or blocked or superseded or row["attempts"] >= row["max_attempts"]:
+            if not self._claimability(db, row, now_text)["eligible"]:
                 return None
             db.execute("UPDATE research_tasks SET state='running',lease_owner=?,lease_expires_at=?,attempts=attempts+1,updated_at=? WHERE task_id=?",
                        (owner, expires, now_text, task_id))
